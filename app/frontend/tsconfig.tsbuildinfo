@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/header.tsx","./src/components/pipelinetracker.tsx","./src/components/uploadform.tsx","./src/components/verdictcard.tsx","./src/lib/api.ts","./src/lib/utils.ts","./src/types/index.ts"],"version":"5.7.3"}

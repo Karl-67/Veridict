@@ -1,17 +1,1 @@
-# Data
 /data
-
-# macOS
-.DS_Store
-
-# Python
-__pycache__/
-*.pyc
-venv/
-
-# Node
-node_modules/
-dist/
-
-# Environment
-.env

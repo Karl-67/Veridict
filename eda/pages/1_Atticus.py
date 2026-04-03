@@ -88,11 +88,21 @@ if raw_df is not None and "question" in raw_df.columns:
     # Count how many non-empty answers per clause category
     def count_answers(row):
         answers = row.get("answers", {})
-        if isinstance(answers, dict):
-            texts = answers.get("text", [])
-            return sum(1 for t in texts if t.strip()) if texts else 0
-        return 0
 
+        if not isinstance(answers, dict):
+            return 0
+
+        texts = answers.get("text", [])
+
+        if texts is None:
+            return 0
+
+        # Ensure iterable
+        try:
+            return sum(1 for t in texts if isinstance(t, str) and t.strip())
+        except TypeError:
+            return 0
+    
     raw_df["_answer_count"] = raw_df.apply(count_answers, axis=1)
     has_answer = raw_df[raw_df["_answer_count"] > 0]
 
