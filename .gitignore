@@ -1,3 +1,23 @@
+# Data
 /data
-.venv
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Streamlit / app folders
 /eda/__pycache__
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# Node (if ever used)
+node_modules/
+dist/
