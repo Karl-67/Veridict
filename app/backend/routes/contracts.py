@@ -1,63 +1,62 @@
-import pdfplumber
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from io import BytesIO
+from __future__ import annotations
 
-from agents.reviewer import review_contract
-from models.schemas import PipelineStage, PipelineStatus, UploadResponse
+from fastapi import APIRouter, File, Form, UploadFile, status
+from sse_starlette.sse import EventSourceResponse
 
-router = APIRouter(prefix="/api")
+from app.backend.core.config import SettingsDep
+from app.backend.db.session import DbSession, get_session_factory
+from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail
+from app.backend.services.event_stream import list_run_events, stream_run_events
+from app.backend.services.run_service import create_run, get_run_detail, submit_human_review
+
+router = APIRouter(prefix="/api", tags=["runs"])
 
 
 @router.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/upload", response_model=UploadResponse)
-async def upload_contract(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
-
-    contents = await file.read()
-
-    # Extract text from PDF
-    text = ""
-    try:
-        with pdfplumber.open(BytesIO(contents)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text + "\n"
-    except Exception:
-        raise HTTPException(status_code=400, detail="Failed to parse PDF file")
-
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="No text could be extracted from the PDF")
-
-    # Truncate to ~30k chars to stay within token limits
-    text = text[:30000]
-
-    stages = [
-        PipelineStage(name="Harvey", status="done"),
-        PipelineStage(name="Kira", status="done"),
-        PipelineStage(name="Reviewer 1", status="done"),
-        PipelineStage(name="Reviewer 2", status="done"),
-        PipelineStage(name="Reviewer 3", status="done"),
-        PipelineStage(name="Validators", status="done"),
-        PipelineStage(name="Verdict", status="done"),
-    ]
-
-    try:
-        result = await review_contract(text)
-    except Exception as e:
-        return UploadResponse(
-            success=False,
-            pipeline=PipelineStatus(stages=stages, current_stage=6),
-            error=str(e),
-        )
-
-    return UploadResponse(
-        success=True,
-        pipeline=PipelineStatus(stages=stages, current_stage=7),
-        result=result,
+@router.post("/runs", response_model=RunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+async def post_run(
+    db: DbSession,
+    settings: SettingsDep,
+    file: UploadFile = File(...),
+    tenant_id: str = Form(...),
+    policy_family_id: str = Form(...),
+    policy_version: int = Form(...),
+    jurisdiction: str = Form(...),
+    regime: str = Form(...),
+    effective_date: str | None = Form(None),
+) -> RunCreateResponse:
+    return await create_run(
+        db,
+        settings,
+        file=file,
+        tenant_id=tenant_id,
+        policy_family_id=policy_family_id,
+        policy_version=policy_version,
+        jurisdiction=jurisdiction,
+        regime=regime,
+        effective_date=effective_date,
     )
+
+
+@router.get("/runs/{run_id}", response_model=RunDetail)
+async def get_run(run_id: str, db: DbSession) -> RunDetail:
+    return await get_run_detail(db, run_id)
+
+
+@router.get("/runs/{run_id}/events")
+async def get_run_events(run_id: str, after: int = 0) -> EventSourceResponse:
+    return EventSourceResponse(stream_run_events(get_session_factory(), run_id, after_sequence=after))
+
+
+@router.get("/runs/{run_id}/events/list")
+async def get_run_events_list(run_id: str, after: int = 0):
+    return await list_run_events(get_session_factory(), run_id, after_sequence=after)
+
+
+@router.post("/runs/{run_id}/human-review", response_model=HumanReviewResult)
+async def post_human_review(run_id: str, payload: HumanReviewPayload, db: DbSession) -> HumanReviewResult:
+    return await submit_human_review(db, run_id, payload)
