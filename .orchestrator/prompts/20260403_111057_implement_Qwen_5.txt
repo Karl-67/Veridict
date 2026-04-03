@@ -1,0 +1,40 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/backend/requirements.txt
+SPEC: - Add the runtime dependencies for `gemini-provider-boundary`, `docling-canonical-parser`, `postgres-stage-queue`, and `sse-run-events`.
+- Include packages for Postgres access, migrations, settings management, Docling/OCR parsing, and SSE streaming.
+- Remove reliance on `pdfplumber` as the primary p
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+Done. Here's what was added and why:
+
+| Boundary | Packages added |
+|---|---|
+| `gemini-provider-boundary` | `google-genai>=1.5.0` (already present, now pinned) |
+| `docling-canonical-parser` | `docling>=2.21.0`, `pytesseract>=0.3.10`, `Pillow>=10.3.0`; `pdfplumber` demoted to fallback-only |
+| `postgres-stage-queue` | `sqlalchemy>=2.0.30`, `alembic>=1.13.1`, `psycopg2-binary>=2.9.9`, `asyncpg>=0.29.0` |
+| `sse-run-events` | `sse-starlette>=2.1.0` |
+| Settings management | `pydantic-settings>=2.2.0` (needed by `core/config.py` `Settings` class) |
+
+Regarding your architecture plan — the image shows the **Harvey → Kira → Admin** multi-reviewer pipeline clearly. The current codebase only has a single `reviewer.py` making one Gemini call. The sibling contracts being built in parallel will wire
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

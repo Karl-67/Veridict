@@ -1,0 +1,42 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/backend/db/session.py
+SPEC: - Create database engine/session wiring for Postgres.
+- Add `get_engine()`, `get_session_factory()`, and `get_db_session()` helpers for API handlers and worker processes.
+- Add transaction and session-scoping rules to support idempotent stage execution and human-review writes.
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+`app/backend/db/session.py` is created. Here's a summary of what it provides:
+
+**Async (API handlers / SSE)**
+- `get_engine()` — cached `AsyncEngine` using asyncpg
+- `get_session_factory()` — cached `async_sessionmaker`
+- `get_db_session()` — FastAPI dependency; auto-commits on success, rolls back on exception. Use as `db: DbSession` in handler signatures
+
+**Sync (worker / Alembic)**
+- `get_sync_engine()` — cached `Engine` using psycopg2
+- `get_sync_session_factory()` — cached `sessionmaker`
+- `get_sync_db_session()` — context manager; worker must `session.commit()` explicitly after each atomic state transition (stage lease, stage completion, human-review write) so leases are immediately visible to other workers
+
+**DSN handling**: automatically rewrites whatever `POSTGRES_DSN` you have in 
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

@@ -1,0 +1,37 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: orchestrator.md
+SPEC: - Create the missing authoritative architecture document required by `AGENTS.md`.
+- Lock the exact phase-1 stage graph: `create_run -> ingest_pdf -> parse_ocr_normalize -> clause_index -> harvey_context_load + kira_context_load -> harvey_reviewers_1_2_3 -> harvey_validator -> kira_reviewers_1_2_3 ->
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+`orchestrator.md` is created. Here's a summary of where the project stands and what the document locks in:
+
+**Current state:** The codebase is a single-agent prototype — one Gemini API call returns a flat JSON review. No pipeline, no validators, no Postgres, no human gate.
+
+**What `orchestrator.md` now defines:**
+
+1. **Stage graph** — 15-stage pipeline: `create_run → ingest_pdf → parse_ocr_normalize → clause_index → harvey_context_load + kira_context_load → harvey_reviewers_1_2_3 → harvey_validator → kira_reviewers_1_2_3 → kira_validator → admin_merge → final_reviewers_1_2_3 → agreement_check → awaiting_human_review → finalized`
+
+2. **Disagreement policy** — max 2 final-review rounds; round-1 disagreement triggers admin delta instructions + disputed-only re-review; round-2 disagreement tri
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

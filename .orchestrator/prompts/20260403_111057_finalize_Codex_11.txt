@@ -1,0 +1,100 @@
+<task>
+Write a git commit message for these changes based on this task:
+[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, and check what is still required to finalize this architecture, the current schema should be calling a google api, we can continue with that for now however, i would like to make it later be a local agent that does all of this that we should be fine tuning none of this is current there but its the plan for the final product. if you have any questions for clarification ask them. i want this to be super clear for you so you can apply what i want exactly.
+
+━━━ BACKGROUND RESEARCH (context only) ━━━
+I don't have permission to view the image yet. However, I can work from the three detailed analyses already provided. Let me aggregate those findings into your briefing:
+
+---
+
+## Existing Solutions & Libraries
+
+**Document processing:**
+- Docling for structured conversion with OCR support; Unstructured for partitioning; Marker for PDF→markdown/JSON.
+- `pdfplumber` is insufficient for serious legal workflows (scanned PDFs, tables, multi-column layouts fail silently).
+
+**Orchestration & state:**
+- LangGraph for graph-based stateful workflows with branching; Temporal for resumable long-running jobs + human review steps; PydanticAI for typed outputs.
+- FastAPI background tasks adequate for light work only; move to proper job queue for production.
+
+**Model serving (future local path):**
+- vLLM or Ollama for inference; TRL/Axolotl/LLaMA-Factory for fine-tuning; Outlines for schema-constrained decoding.
+
+**Storage & retrieval:**
+- Postgres + SQLAlchemy for contracts, outputs, audit data.
+- Vector store (pgvector, Qdrant) only if precedent/policy retrieval is semantic, not version lookup.
+
+---
+
+## Technical Approaches & Trade-offs
+
+**Immediate fixes for Google API path:**
+- Use Google's structured output (JSON schema) instead of parsing free-form text.
+- Add provider abstraction layer now to decouple Gemini from business logic.
+- Replace single giant contract prompt with clause extraction + targeted review passes.
+- Add OCR fallback for scanned PDFs; current text truncation silently drops content.
+
+**Phased migration to local agents:**
+- Phase 1: Keep Gemini, add real orchestration + strict schemas + evidence spans.
+- Phase 2: Add policy store, precedent retrieval, disagreement logic, admin merge.
+- Phase 3: Log corrections to build fine-tuning dataset.
+- Phase 4: Fine-tune narrow subtasks first (clause classification, risk labeling, disagreement arbitration), not whole architecture.
+- Phase 5: Swap Gemini reviewers one-by-one behind same interface.
+
+**Hybrid approach preferred:** Local model for reasoning + deterministic rules for policy checks + retrieval for lookup + optional external fallback.
+
+---
+
+## Architectural Patterns
+
+**Current gap:** Single Gemini call returns one JSON; frontend simulates pipeline with timers; backend hard-codes stage names regardless of actual execution.
+
+**Required structure:**
+- Explicit execution graph: `ingest → normalize/chunk → Harvey branch → Kira branch → 3 reviewers per branch → validators → admin adjudicator → verdict`.
+- Separate agent roles: `harvey_conflict_detector`, `kira_internal_policy_checker`, `reviewer`, `validator`, `admin` with distinct prompts/schemas.
+- Shared typed state object across stages tracking: document ID, policy ID, clauses, evidence spans, findings, branch verdicts, consensus score, disagreements.
+- Per-branch output schemas (Harvey ≠ Kira).
+- Evidence grounding: every finding includes source span, page, confidence, rationale.
+- Job/run IDs with `202 Accepted` responses; persist state; stream SSE/WebSocket progress to UI.
+- Retry/idempotency per stage; handle parse errors, rate limits, partial outputs.
+
+---
+
+## Known Pitfalls & Challenges
+
+**Definition gaps:**
+- "Previous policy conflict" undefined: direct contradiction vs. scope mismatch vs. version regression vs. exception mismatch vs. approval workflow mismatch.
+- "Harvey branch" scope unclear: check only prior versions of same policy, or all organizational policies, or curated subset?
+- "Kira branch" scope unclear: internal policy only, or broader compliance/risk engine?
+
+**Multi-reviewer design risk:** Three reviewers seeing the same draft context can self-reinforce hallucinations. Better: independent first-pass, blinded validator, admin sees only structured diffs + evidence.
+
+**Document handling:** Tables, appendices, cross-references, defined terms require clause-level extraction that preserves section numbers. Long documents need clause indexing; naive context-window usage will fail.
+
+**Retrieval risks:** Embeddings can return wrong-tenant policies unless tenant filters enforced before vector search. Consensus is not accuracy.
+
+**PDF text extraction:** Scanned PDFs and complex layouts break standard extraction.
+
+---
+
+## Critical Unknowns Blocking Full Architecture
+
+- Are the 3 reviewers intended as independent parallel passes with different prompts, or sequential critique/revision?
+- Final local product: one fine-tuned model for all roles, or multiple role-specific models?
+- Should final output include clause-level redlines + fallback language, or issue spotting + recommendations only?
+</task>
+
+<plan>────────────────────────
+## Shared Dependencies
+`phase-1-architecture-spec`: authoritative phase-1 architecture using Gemini now and provider-swappable local agents later; locks stage graph, review-loop rules, human approval gate, and system boundaries (used by: orchestrator.md, .orchestrator/decisions.md, .orchestrator/key_facts.md, .orchestrator/issues.md, app/README.md)
+
+`run-state-contract`: canonical typed contract for runs, stages, findings, evidence anchors, human-review actions, events, and final verdict payloads (used by: app/backend/models/schemas.py, app/backend/routes/contracts.py, app/backend/agents/reviewer.py, app/backend/agents/validator.py, app/backend/agents/admin.py, app/backend/services/run_service.py, app/backend/services/event_stream.py, app/backend/orchestration/state_machine.py, app/frontend/src/types/index.ts, app/frontend/src/lib/api.ts, app/frontend/src/App.tsx, app/frontend/src/components/PipelineTracker.tsx, app/frontend/src/components/VerdictCard.tsx, app/</plan>
+
+<rules>
+- One line, max 72 characters
+- No quotes, no prefix
+- Just describe what was done
+</rules>

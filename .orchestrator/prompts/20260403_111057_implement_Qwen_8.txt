@@ -1,0 +1,44 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/backend/db/models.py
+SPEC: - Create the persistence models that back `run-state-contract`, `policy-lineage-and-corpora`, and `postgres-stage-queue`.
+- Add ORM models for `RunRecord`, `StageExecutionRecord`, `FindingRecord`, `EvidenceRecord`, `ParsedClauseRecord`, `PolicyVersionRecord`, `ComplianceCorpusRecord`, `RunEventRecor
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+`app/backend/db/models.py` is created with all 9 ORM models.
+
+---
+
+Here's a quick summary of the current architecture gap vs. what you described (local fine-tuned agents later, Google API now):
+
+**What exists today (simple MVP):**
+- Single `POST /api/upload` endpoint → pdfplumber extracts text → one Gemini call → returns `ReviewResult`
+- Pipeline stages are fake (all marked `done` immediately)
+
+**What the full architecture requires (from the sibling contracts):**
+- `core/config.py` — settings/env
+- `db/session.py` — Postgres connection (now created: `db/models.py`)
+- `providers/base.py` + `providers/google_provider.py` — swappable LLM transport layer (Gemini now, local later)
+- `agents/reviewer.py` (refactor), `agents/validator.py`, `agents/admin.py` — multi-agent review pipeline
+- `servic
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

@@ -1,0 +1,426 @@
+<role>You are Codex, a senior technical lead (admin).
+You are collaborating with Claude (another admin) on this task.
+A separate developer will implement whatever you two agree on.
+You do NOT write code, create files, or delegate tasks. You may read the repo. You only discuss.</role>
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, and check what is still required to finalize this architecture, the current schema should be calling a google api, we can continue with that for now however, i would like to make it later be a local agent that does all of this that we should be fine tuning none of this is current there but its the plan for the final product. if you have any questions for clarification ask them. i want this to be super clear for you so you can apply what i want exactly.
+
+━━━ BACKGROUND RESEARCH (context only) ━━━
+I don't have permission to view the image yet. However, I can work from the three detailed analyses already provided. Let me aggregate those findings into your briefing:
+
+---
+
+## Existing Solutions & Libraries
+
+**Document processing:**
+- Docling for structured conversion with OCR support; Unstructured for partitioning; Marker for PDF→markdown/JSON.
+- `pdfplumber` is insufficient for serious legal workflows (scanned PDFs, tables, multi-column layouts fail silently).
+
+**Orchestration & state:**
+- LangGraph for graph-based stateful workflows with branching; Temporal for resumable long-running jobs + human review steps; PydanticAI for typed outputs.
+- FastAPI background tasks adequate for light work only; move to proper job queue for production.
+
+**Model serving (future local path):**
+- vLLM or Ollama for inference; TRL/Axolotl/LLaMA-Factory for fine-tuning; Outlines for schema-constrained decoding.
+
+**Storage & retrieval:**
+- Postgres + SQLAlchemy for contracts, outputs, audit data.
+- Vector store (pgvector, Qdrant) only if precedent/policy retrieval is semantic, not version lookup.
+
+---
+
+## Technical Approaches & Trade-offs
+
+**Immediate fixes for Google API path:**
+- Use Google's structured output (JSON schema) instead of parsing free-form text.
+- Add provider abstraction layer now to decouple Gemini from business logic.
+- Replace single giant contract prompt with clause extraction + targeted review passes.
+- Add OCR fallback for scanned PDFs; current text truncation silently drops content.
+
+**Phased migration to local agents:**
+- Phase 1: Keep Gemini, add real orchestration + strict schemas + evidence spans.
+- Phase 2: Add policy store, precedent retrieval, disagreement logic, admin merge.
+- Phase 3: Log corrections to build fine-tuning dataset.
+- Phase 4: Fine-tune narrow subtasks first (clause classification, risk labeling, disagreement arbitration), not whole architecture.
+- Phase 5: Swap Gemini reviewers one-by-one behind same interface.
+
+**Hybrid approach preferred:** Local model for reasoning + deterministic rules for policy checks + retrieval for lookup + optional external fallback.
+
+---
+
+## Architectural Patterns
+
+**Current gap:** Single Gemini call returns one JSON; frontend simulates pipeline with timers; backend hard-codes stage names regardless of actual execution.
+
+**Required structure:**
+- Explicit execution graph: `ingest → normalize/chunk → Harvey branch → Kira branch → 3 reviewers per branch → validators → admin adjudicator → verdict`.
+- Separate agent roles: `harvey_conflict_detector`, `kira_internal_policy_checker`, `reviewer`, `validator`, `admin` with distinct prompts/schemas.
+- Shared typed state object across stages tracking: document ID, policy ID, clauses, evidence spans, findings, branch verdicts, consensus score, disagreements.
+- Per-branch output schemas (Harvey ≠ Kira).
+- Evidence grounding: every finding includes source span, page, confidence, rationale.
+- Job/run IDs with `202 Accepted` responses; persist state; stream SSE/WebSocket progress to UI.
+- Retry/idempotency per stage; handle parse errors, rate limits, partial outputs.
+
+---
+
+## Known Pitfalls & Challenges
+
+**Definition gaps:**
+- "Previous policy conflict" undefined: direct contradiction vs. scope mismatch vs. version regression vs. exception mismatch vs. approval workflow mismatch.
+- "Harvey branch" scope unclear: check only prior versions of same policy, or all organizational policies, or curated subset?
+- "Kira branch" scope unclear: internal policy only, or broader compliance/risk engine?
+
+**Multi-reviewer design risk:** Three reviewers seeing the same draft context can self-reinforce hallucinations. Better: independent first-pass, blinded validator, admin sees only structured diffs + evidence.
+
+**Document handling:** Tables, appendices, cross-references, defined terms require clause-level extraction that preserves section numbers. Long documents need clause indexing; naive context-window usage will fail.
+
+**Retrieval risks:** Embeddings can return wrong-tenant policies unless tenant filters enforced before vector search. Consensus is not accuracy.
+
+**PDF text extraction:** Scanned PDFs and complex layouts break standard extraction.
+
+---
+
+## Critical Unknowns Blocking Full Architecture
+
+- Are the 3 reviewers intended as independent parallel passes with different prompts, or sequential critique/revision?
+- Final local product: one fine-tuned model for all roles, or multiple role-specific models?
+- Should final output include clause-level redlines + fallback language, or issue spotting + recommendations only?</task>
+
+<codebase>
+PROJECT STRUCTURE:
+  .gitignore
+  AGENTS.md
+  CLAUDE.md
+  app/
+    README.md
+    backend/
+      agents/
+        reviewer.py
+    imports: google, json, models, os
+      main.py
+    imports: dotenv, fastapi, routes
+      models/
+        schemas.py
+    imports: pydantic, typing
+    class ClauseFlag(BaseModel):
+    class ReviewResult(BaseModel):
+    class PipelineStage(BaseModel):
+    class PipelineStatus(BaseModel):
+    class UploadResponse(BaseModel):
+      requirements.txt
+      routes/
+        contracts.py
+    imports: agents, fastapi, io, models, pdfplumber
+    frontend/
+      index.html
+      package.json
+      src/
+        App.tsx
+    imports: @/components/Header, @/components/PipelineTracker, @/components/UploadForm, @/components/VerdictCard, @/lib/api, @/types, framer-motion, react
+    export App
+        components/
+          Header.tsx
+    imports: lucide-react
+    export Header
+          PipelineTracker.tsx
+    imports: @/lib/utils, framer-motion, react
+    export PipelineTracker
+          UploadForm.tsx
+    imports: @/lib/utils, framer-motion, lucide-react, react
+    export UploadForm
+          VerdictCard.tsx
+    imports: @/lib/utils, @/types, framer-motion, react
+    export VerdictCard
+        index.css
+        lib/
+          api.ts
+    imports: @/types
+          utils.ts
+    imports: clsx, tailwind-merge
+    export cn
+        main.tsx
+    imports: @/App, @tanstack/react-query, react, react-dom/client, react-router-dom
+        types/
+          index.ts
+    export ClauseFlag
+    export ReviewResult
+    export PipelineStage
+    export PipelineStatus
+    export UploadResponse
+      tsconfig.json
+      tsconfig.tsbuildinfo
+      vite.config.ts
+    imports: @tailwindcss/vite, @vitejs/plugin-react, path, vite
+  data/
+    atticus/
+      CUAD_v1.json
+      CUAD_v1/
+        CUAD_v1.json
+      cuad.parquet
+      cuad_clauses.parquet
+    legal_clauses/
+      ledgar.parquet
+  eda/
+    app.py
+    imports: streamlit
+    pages/
+      1_Atticus.py
+    imports: pandas, pathlib, plotly, streamlit
+    def load_data()
+      2_Legal_Clauses.py
+    imports: pandas, pathlib, plotly, streamlit
+    def load_data()
+      3_Combined.py
+    imports: pandas, pathlib, plotly, streamlit
+    def load_combined()
+  requirements.txt
+  scripts/
+    download_datasets.py
+    imports: datasets, huggingface_hub, json, os, pandas, pathlib, sys
+
+</codebase>
+
+Your goal: reach agreement on the best implementation approach.
+IMPORTANT: You have a MAXIMUM of 3 rounds. Once you are satisfied with the agreed approach, end your message with: AGREED
+
+<discussion>
+EARLIER DISCUSSION (summary):
+  [Codex]: **Current Gap** - Backend is not the architecture in the diagram. It is one Gemini call in [reviewer.py](C:/Users/PinkPanther/PycharmProjects/Verdict/...
+  [Claude]: I've read the codebase. Codex's analysis is accurate — here's my take.  ## Current State (confirmed)  - **One Gemini call** in `reviewer.py` doing all...
+  [Codex]: - `Critical`: The plan is not sign-off ready because the repository has no architecture source document even though [`AGENTS.md`](C:/Users/PinkPanther...
+
+RECENT DISCUSSION:
+[Codex]: - The diagram is authoritative on one point: the `Admin -> Reviewer 1/2/3 -> Agreement / Disagreement Repeat` layer stays. Claude’s simplification should be rejected.
+
+- The architecture to lock for phase 1 is:
+
+  `upload -> create_run -> ingest_pdf -> parse_ocr_normalize -> clause_index -> harvey_context_load + kira_context_load -> harvey reviewers(3 parallel) -> harvey_validator -> kira reviewers(3 parallel) -> kira_validator -> admin_merge -> final reviewers(3 parallel) -> final_agreement -> verdict`
+
+- The repeat rule must be explicit:
+  - Max `2` review rounds after `admin_merge`.
+  - If final reviewers agree above threshold, emit verdict.
+  - If they disagree in round 1, `admin` issues a delta instruction and only disputed findings are re-reviewed.
+  - If they still disagree in round 2, `admin` tie-breaks and marks findings as `unresolved_by_consensus`.
+
+- Persistence is not optional. Lock this now:
+  - `Postgres` as system of record for runs, stage state, findings, audit trail, policy metadata, version graph, and human corrections.
+  - Raw PDFs and parsed artifacts stored by reference; for dev this can be local disk, later object storage.
+  - One dedicated worker process executes stages from persisted run state. Do not use the current synchronous FastAPI request path as the executor.
+
+- Provider boundary should be:
+  - `provider` owns transport, model invocation, schema binding, retries/backoff, and raw response capture.
+  - `role agents` own prompt assembly, input shaping, and output interpretation for Harvey/Kira/reviewer/validator/admin roles.
+  - This is the swap point for future local models.
+
+- Canonical parsed document contract must be locked before implementation:
+  - `document_id, parser_version, document_hash, page_index, clause_id, section_path, normalized_text, char_start, char_end, source_bbox/source_page_ref`
+  - Evidence must point to this canonical representation, not only free-text spans.
+  - Pick one parser path now: `Docling` with OCR fallback. Do not leave this as “Docling or Marker”.
+
+- Reviewer independence must be real:
+  - Same clause index is fine.
+  - Different reviewer prompts/objectives are required.
+  - Reviewers do not see each other’s outputs.
+  - Validators see only reviewer outputs plus evidence, not the original drafting prompt chain.
+
+- Frontend contract must change completely:
+  - `POST /runs` returns `202` with `run_id`
+  - `GET /runs/{id}`
+  - `GET /runs/{id}/events` via SSE
+  - optional `POST /runs/{id}/review` for human correction/approval
+  - Event types must be fixed now: `run_created`, `stage_started`, `stage_completed`, `stage_failed`, `stage_retrying`, `awaiting_human_review`, `run_completed`.
+
+- Human review is a first-class state, not a later add-on:
+  - statuses: `pending`, `running`, `completed`, `failed`, `needs_review`, `approved`, `edited`
+  - every human edit must record original finding, edited finding, editor, timestamp, reason
+
+- What is still required before this is “finalized”:
+  - Authoritative architecture doc: [AGENTS.md](C:/Users/PinkPanther/PycharmProjects/Verdict/AGENTS.md) requires `orchestrator.md`, and it is missing.
+  - Real policy repository/version graph design.
+  - Harvey/Kira data contracts and allowed retrieval sources.
+  - Exact final verdict schema.
+  - Acceptance tests/evals per stage.
+
+- Files the developer should plan to replace or split:
+  - [reviewer.py](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py)
+  - [contracts.py](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/routes/contracts.py)
+  - [schemas.py](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/models/schemas.py)
+  - [main.py](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/main.py)
+  - [PipelineTracker.tsx](C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/components/PipelineTracker.tsx)
+  - [App.tsx](C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/App.tsx)
+  - [api.ts](C:/Users/PycharmProjects/Verdict/app/frontend/src/lib/api.ts)
+  - [README.md](C:/Users/PinkPanther/PycharmProjects/Verdict/app/README.md)
+
+@User answer these before the developer implements branch logic:
+- Harvey scope: prior versions of the same policy only, or all organizational policies/contracts?
+- Kira scope: internal playbook only, or internal playbook plus external compliance/regulatory rules?
+- Final output: issues/recommendations only, or issues plus clause-level fallback/redline text?
+- Is human approval mandatory before a verdict is considered final?
+
+AGREED
+[User]: harvey prior version of the same policy, kira internal playbook and external compliance, final output issues plus recomendations. and yes human approval at the end is mandatory. in issues we mean something that could open us to problems with firms or open clauses or anything,
+[Claude]: I can't view the image directly, but I have the full diagram description from Codex's analysis. The user's answers resolve all blocking questions. Here's my final position:
+
+---
+
+## User Answers Locked
+
+| Question | Answer |
+|----------|--------|
+| **Harvey scope** | Prior versions of the same policy only |
+| **Kira scope** | Internal playbook + external compliance/regulatory |
+| **Final output** | Issues + recommendations (not redlines) |
+| **Human approval** | Mandatory before verdict is final |
+| **"Issues" means** | Exposure to firm liability, open/ambiguous clauses, anything exploitable |
+
+## I Accept Codex's Architecture With These Clarifications
+
+**Post-admin review loop** — Codex is right, the diagram is authoritative. Keep it. Max 2 rounds, admin tie-breaks on round 2 with `unresolved_by_consensus` tag. That's clear enough to implement.
+
+**Full locked pipeline:**
+```
+upload → create_run → ingest_pdf → parse_ocr(Docling) → clause_index 
+  → [Harvey branch: load prior versions | Kira branch: load playbook + compliance rules] (parallel)
+  → 3 Harvey reviewers (parallel, blinded) → harvey_validator
+  → 3 Kira reviewers (parallel, blinded) → kira_validator
+  → admin_merge → 3 final reviewers (parallel) → agreement check
+    → agree: → awaiting_human_approval → verdict
+    → disagree round 1: → admin delta → re-review disputed only
+    → disagree round 2: → admin tie-break (unresolved_by_consensus) → awaiting_human_approval → verdict
+```
+
+**Everything else Codex specified — I agree:**
+- Postgres for run state, findings, audit, policy metadata, corrections
+- Docling (not "Docling or Marker") with OCR fallback
+- Provider boundary: provider = transport/schema/retries; role agents = prompts/interpretation
+- Reviewer independence via different objectives/prompts, blinded from each other
+- SSE events: `run_created`, `stage_started`, `stage_completed`, `stage_failed`, `stage_retrying`, `awaiting_human_review`, `human_approved`, `run_completed`
+- Human correction records: original finding, edited finding, editor, timestamp, reason
+- `202 + run_id` async pattern with worker process
+
+**Harvey data contract specifically:**
+- Retrieval: query policy repository for prior versions of the same policy (by policy ID / title match)
+- Compare: uploaded document vs. retrieved prior version(s)
+- Flag: removed protections, weakened terms, new exposure, contradictions with prior agreed language
+
+**Kira data contract specifically:**
+- Retrieval: internal playbook rules + external compliance/regulatory rule set
+- Check: each clause against applicable rules
+- Flag: non-compliant terms, missing required clauses, ambiguous language that creates liability, open-ended obligations
+
+**Output schema (no redlines, issues + recommendations):**
+```
+finding_id, branch, round, reviewer_id, clause_id, page, source_span, 
+severity(critical/high/medium/low), issue_type(liability_exposure/open_clause/
+non_compliant/weakened_term/missing_clause/ambiguous), rationale, 
+recommendation, confidence, consensus_status(agreed/disputed/unresolved)
+```
+
+**Files to replace/split** — same as Codex's list. All current backend files are effectively throwaway scaffolding.
+
+**Before developer starts:** `orchestrator.md` must be created with this locked architecture. The `.orchestrator/` memory files need populating. That's the developer's first task.
+
+AGREED
+[Codex]: - `Critical`: The plan is still not sign-off ready because the repository has no authoritative architecture document. [`AGENTS.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/AGENTS.md) explicitly requires `orchestrator.md`, and `Test-Path orchestrator.md` returns false. Until that document exists, every “locked” decision is still conversational, not architectural.
+
+- `Critical`: Claude’s “full locked pipeline” still skips a mandatory persisted stage boundary between `awaiting_human_approval` and final verdict. The user said human approval is mandatory before a verdict is final. That means `verdict` cannot be emitted before approval. The state machine needs at least `awaiting_human_review -> approved|rejected|edited -> finalized`. Claude collapses that into prose and leaves the actual terminal states ambiguous.
+
+- `Critical`: The event model is incomplete for the workflow Claude accepted. `run_created`, `stage_started`, `stage_completed`, `stage_failed`, `stage_retrying`, `awaiting_human_review`, `human_approved`, `run_completed` is not enough. You are missing `human_rejected`, `human_edited`, and a machine-readable event for `consensus_unresolved` after the round-2 admin tie-break. Without those, the frontend cannot represent the mandatory review gate or preserve correction provenance.
+
+- `Critical`: “Postgres for run state” is still underspecified to the point of failure. There is no selected execution mechanism for the worker. “One dedicated worker process” is not a design. Polling DB rows, queue table, job broker, or orchestration library all have different failure semantics. The current app in [`app/backend/main.py`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/main.py) and [`app/backend/routes/contracts.py`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/routes/contracts.py) has no persistence or worker lifecycle at all. You need to lock the job dispatch model, not just the database.
+
+- `Critical`: Harvey retrieval is still dangerously vague. Claude says “by policy ID / title match.” Title match is not an architecture, it is a bug source. If the policy lineage key is not explicitly defined, the branch will compare against the wrong prior document or none at all. You need the authoritative identifier strategy and version lineage rules before anyone writes retrieval code.
+
+- `Critical`: Kira scope is still too loose for implementation. “Internal playbook + external compliance/regulatory” does not specify jurisdiction set, update cadence, source of truth, rule versioning, tenant overrides, or applicability logic. That is not a small omission. It determines the compliance corpus, retrieval filters, and auditability of every Kira finding.
+
+- `Critical`: The canonical parsed-document contract is still incomplete for evidence durability. `document_id, parser_version, document_hash, page_index, clause_id, section_path, normalized_text, char_start, char_end, source_bbox/source_page_ref` is better than nothing, but it still does not define clause lineage through reparses, split/merged clauses, or cross-reference resolution. If clause IDs are regenerated on each parse, stored findings become unstable and human edits cannot be replayed safely.
+
+- `High`: The diagram shows only one validator per branch and then a post-admin reviewer layer. Claude accepts that, but the final agreement logic is still underdefined. What exactly constitutes agreement: identical issue set, thresholded overlap, matching severity, matching recommendation, or admin-normalized finding IDs? “Agree above threshold” is too vague to implement consistently.
+
+- `High`: The final output schema Claude proposed is not sufficient for the user’s stated need. The user said “issues” means exposure to firm liability, open clauses, or anything exploitable. That requires structured categorization for exploitability and business impact, not just `issue_type` and `severity`. As written, the schema is still too shallow for downstream approval, audit, and evals.
+
+- `High`: The plan says “issues + recommendations, not redlines,” but the recommendation field is unstructured. That leaves implementation ambiguity between high-level advice and clause-targeted remediation. If you do not want redlines, you still need to specify whether recommendations must be clause-local, policy-level, mandatory/optional, and whether they must cite the triggering rule or prior-version delta.
+
+- `High`: Reviewer independence is only partially solved. Different prompts and blinded outputs are necessary, but not sufficient. If all reviewers consume the same parsed clauses and same retrieved evidence pack, you still get correlated error. The plan does not define what must vary across reviewers: objective, retrieval slice, severity calibration, or challenge role. That matters if you actually want disagreement to be informative rather than random.
+
+- `High`: Claude accepted “Docling with OCR fallback,” but there is still no failure policy for parser confidence. What happens when OCR quality is poor, tables are malformed, or section hierarchy extraction fails? There is no `parse_low_confidence` or `evidence_unreliable` state in the run model. That means the system will continue to produce precise-looking findings from weak source text.
+
+- `High`: Human review logging is still one-sided. Recording `original finding, edited finding, editor, timestamp, reason` is necessary, but you also need to capture approval scope. Did the reviewer approve the entire run, individual findings, or a partially edited subset? Without scoped approval, “mandatory human approval” is not auditable.
+
+- `High`: The frontend contract is still under-specified for the actual UI rewrite. The current frontend in [`app/frontend/src/App.tsx`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/App.tsx), [`app/frontend/src/components/PipelineTracker.tsx`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/components/PipelineTracker.tsx), and [`app/frontend/src/lib/api.ts`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/lib/api.ts) assumes a single blocking request and fake timer-driven completion. Claude lists new endpoints, but not the response schemas, polling/SSE reconnect behavior, or how historical runs are fetched after reload. That is still a contract hole.
+
+- `High`: The proposal still has no migration path from the current flat schema in [`app/backend/models/schemas.py`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/models/schemas.py) to stored multi-role, multi-round findings. Once you persist runs, schema versioning stops being optional. Claude says nothing about migration, compatibility, or how old runs remain readable after schema changes.
+
+- `Medium`: The repository baseline remains incompatible with the proposed architecture. [`app/backend/requirements.txt`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/requirements.txt) contains only FastAPI, `pdfplumber`, Gemini, and basic plumbing; the repo root [`requirements.txt`](C:/Users/PinkPanther/PycharmProjects/Verdict/requirements.txt) is unrelated EDA tooling. There is still no defined implementation baseline for parser, database, migrations, or worker stack.
+
+- `Medium`: Documentation is still contradictory. [`app/README.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/README.md) says Anthropic while runtime code in [`app/backend/agents/reviewer.py`](C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py) uses Gemini. That inconsistency matters because the whole plan depends on a clean provider boundary, and the repo does not currently demonstrate any discipline there.
+
+- `Medium`: The `.orchestrator` memory exists but is functionally empty. [` .orchestrator/decisions.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/.orchestrator/decisions.md), [`.orchestrator/key_facts.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/.orchestrator/key_facts.md), [`.orchestrator/bugs.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/.orchestrator/bugs.md), and [`.orchestrator/issues.md`](C:/Users/PinkPanther/PycharmProjects/Verdict/.orchestrator/issues.md) are placeholders. Claude says “developer’s first task” is to create/populate them, which is fine, but that means the architecture is not finalized now.
+
+- `Bottom line`: The user answers resolved branch scope and output scope, but Claude still signed off on a plan with unresolved workflow states, undefined job execution semantics, incomplete event contracts, vague corpus/version rules, and no authoritative architecture file. This is still not implementation-safe.
+
+- `Required before sign-off`: create `orchestrator.md`; define the run state machine including human rejection/edit paths; choose the actual worker dispatch model; define policy lineage keys for Harvey; define compliance corpus/versioning/jurisdiction rules for Kira; lock agreement semantics; lock persisted schemas and versioning; lock frontend event payloads and reconnect behavior.
+
+- DECLINED
+</discussion>
+
+<skills>
+### claw-multi-agent
+---
+name: claw-multi-agent
+description: "Multi-agent parallel orchestration for OpenClaw. Spawn AI agents as a team — parallel research, multi-model comparison, code pipelines. Proven 50-65% time savings. Trigger words: multi-agent, parallel agents, swarm, spawn multiple agents, parallel research, compare models, deep research, comprehensive research, detailed investigation, thorough analysis, research multiple topics, 多智能体, 多个Agent, 并行调研, 并行搜索, 同时搜索, 同时调研, 深度调研, 详细调研, 全面调研, 深度研究, 详细检索, 多角度分析, 全面分析, 多个模型, 让多个AI, 分别搜索, 同时搜索, 组建团队, Agent小队, 多Agent."
+---
+
+# claw-multi-agent 🐝
+
+> **Replace one AI with a team of AIs. Turn serial into parallel. Turn hours into minutes.**
+
+---
+
+## What can it do?
+
+| Scenario | Example | Speedup |
+|----------|---------|---------|
+| **Parallel research** | Search 5 frameworks simultaneously, each writes a report | ~65% ⚡ |
+| **Multi-model compare** | Ask Claude, Gemini, Kimi the same question at the same time | ~50% ⚡ |
+| **Code pipeline** | Plan → Code → Review, auto hand-off in sequence | Quality ↑ |
+| **Batch processing** | Translate / analyze / summarize multiple docs in parallel | Scales linearly |
+
+---
+
+## ⚡ Get started in 30 seconds
+
+Just say something like:
+
+- "Research LangChain, CrewAI, and AutoGen in parallel"
+- "Have multiple agents search these topics and write a combined report"
+- "Compare how Claude and Gemini answer this question"
+- "Use multi-agent mode to do this research"
+
+---
+
+## 🎭 Interaction Style — How to Talk to the User
+
+This is the recommended pattern. Every multi-agent run must follow this interaction pattern.
+
+### Step 0 — Announce skill activation FIRST
+
+**⚠️ Iron rule: The activation announcement must be your FIRST reply after receiving the task — before reading any files, before investigating, before spawning.**
+
+**Why this matters**: Reading files, researching background, and spawning all take time. If you do those first, users see long silence. Worse: context compression can happen during that time, and the a
+</skills>
+
+Use the skills above as guidelines when proposing the approach. Reference them where relevant.
+
+<rules>
+- You are an ADMIN. You do NOT write code, create files, or delegate to anyone.
+- Discuss the approach: files to touch, architecture, key decisions.
+- Be concise. Bullet points, not essays.
+- Make decisions, don't ramble about options.
+- If you need input from the user, prefix with @User and ask directly.
+- When you are happy with the agreed approach, end your message with: AGREED
+- No philosophizing. No restating the task. Just actionable output.
+</rules>

@@ -1,0 +1,44 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/backend/alembic/env.py
+SPEC: - Create migration environment wiring against the new Postgres metadata.
+- Configure target metadata from `app/backend/db/models.py`.
+- Ensure migrations support the new run, clause, evidence, corpus, and human-review tables.
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+Now, to address the broader question you asked — what's still needed to finalize this architecture:
+
+---
+
+**Current state:**
+The project has a basic single-pass Gemini review (upload PDF → call Gemini → return JSON). The sibling contracts describe a much richer multi-stage architecture.
+
+**What's still required (from the spec):**
+
+| Layer | Missing files | Notes |
+|---|---|---|
+| **DB** | `db/models.py`, `db/session.py`, `alembic/versions/0001_initial_architecture.py` | ORM models, session factory, initial migration |
+| **Config** | `core/config.py` | ✅ Already exists |
+| **Providers** | `providers/base.py`, `providers/google_provider.py` | Abstraction layer so Gemini → local model swap is seamless later |
+| **Agents** | `agents/validator.py` (Harvey + Kira), `agents/admin.py` (merge + agr
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

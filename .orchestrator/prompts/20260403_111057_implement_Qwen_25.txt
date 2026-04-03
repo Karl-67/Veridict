@@ -1,0 +1,30 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/frontend/src/components/PipelineTracker.tsx
+SPEC: - Replace timer-based stage animation with a renderer for real backend stage statuses and events.
+- Render the exact architecture stages from the backend, including Harvey/Kira branches, validators, admin merge, final reviewers, agreement check, and human review gate.
+- Show retrying, blocked, unres
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+You've hit your limit · resets 3pm (Asia/Beirut)
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

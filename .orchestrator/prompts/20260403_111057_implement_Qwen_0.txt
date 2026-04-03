@@ -1,0 +1,120 @@
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+These files will be created in parallel as part of this task. For each file, extract its expected public interface based solely on its spec.
+
+<file_specs>
+FILE: orchestrator.md
+- Create the missing authoritative architecture document required by `AGENTS.md`.
+- Lock the exact phase-1 stage graph: `create_run -> ingest_pdf -> parse_ocr_normalize -> clause_index -> harvey_context_load + kira_context_load -> harvey_reviewers_1_2_3 -> harvey_validator -> kira_reviewers_1_2_3 -> kira_validator -> admin_merge -> final_reviewers_1_2_3 -> agreement_check -> awaiting_human_review -> approved|edited|rejected -> finalized`.
+- Lock the disagreement policy: maximum 2 final-review rounds; round-1 disagreement triggers admin delta instructions and disputed-only re-review; round-2 di
+
+FILE: app/backend/core/config.py
+- Create a typed settings module for environment-driven configuration.
+- Add `Settings` fields for Gemini API key, Gemini model name, Postgres DSN, worker lease duration, max stage retries, document storage path, allowed frontend origins, and parser/OCR toggles.
+- Add `get_settings()` for shared dependency injection across API, worker, and provider layers.
+
+FILE: app/backend/db/session.py
+- Create database engine/session wiring for Postgres.
+- Add `get_engine()`, `get_session_factory()`, and `get_db_session()` helpers for API handlers and worker processes.
+- Add transaction and session-scoping rules to support idempotent stage execution and human-review writes.
+
+FILE: app/backend/db/models.py
+- Create the persistence models that back `run-state-contract`, `policy-lineage-and-corpora`, and `postgres-stage-queue`.
+- Add ORM models for `RunRecord`, `StageExecutionRecord`, `FindingRecord`, `EvidenceRecord`, `ParsedClauseRecord`, `PolicyVersionRecord`, `ComplianceCorpusRecord`, `RunEventRecord`, and `HumanReviewRecord`.
+- Add fields for stage lease expiry, retry count, blocked reason, parser metadata, clause UID stability fields, source rule/prior-version references, and human edit provenance.
+
+FILE: app/backend/alembic/env.py
+- Create migration environment wiring against the new Postgres metadata.
+- Configure target metadata from `app/backend/db/models.py`.
+- Ensure migrations support the new run, clause, evidence, corpus, and human-review tables.
+
+FILE: app/backend/alembic/versions/0001_initial_architecture.py
+- Create the first migration for the architecture baseline.
+- Create tables and indexes for runs, stages, parsed clauses, findings, evidence, policy lineage, compliance corpora, run events, and human reviews.
+- Add uniqueness and lookup indexes for `run_id`, `clause_uid`, `tenant_id + policy_family_id + version_number`, and event replay ordering.
+
+FILE: app/backend/providers/base.py
+- Create the provider interface used by all role agents.
+- Add `StructuredLLMProvider` with `generate_structured_output()` and raw request/response capture hooks.
+- Define provider-level error types for invalid schema output, transient provider failure, rate limit, and non-retryable provider failure.
+
+FILE: app/backend/providers/google_provider.py
+- Implement the Gemini-specific provider from `gemini-provider-boundary`.
+- Use Gemini structured-output mode with explicit response schema binding instead of free-text JSON parsing.
+- Implement request construction, retry/backoff, token-budget handling, response validation, and raw payload capture for audit.
+- Expose `GeminiProvider` and any internal helpers needed to normalize Gemini responses into backend schemas.
+
+FILE: app/backend/agents/validator.py
+- Create the branch validator agents.
+- Add `HarveyValidatorAgent` and `KiraValidatorAgent`.
+- Add functions to normalize reviewer outputs, deduplicate overlapping findings, score evidence quality, and emit a canonical branch decision for admin merge.
+
+FILE: app/backend/agents/admin.py
+- Create the admin-layer agents.
+- Add `AdminMergeAgent` to merge Harvey and Kira branch outputs into canonical findings.
+- Add `AgreementCheckAgent` to compare the three final-reviewer outputs, determine 2-of-3 agreement on `clause_uid + issue_type + severity_band`, and mark disputed or `unresolved_by_consensus` findings.
+- Add `AdminDeltaInstructionBuilder` to issue the round-1 disputed-only re-review instructions.
+
+FILE: app/backend/services/parser.py
+- Create the document parsing service around `docling-canonical-parser`.
+- Add `parse_pdf_to_canonical_document()` to ingest the uploaded PDF, run Docling, trigger OCR fallback when needed, and emit parsed clauses with stable anchors.
+- Add `build_clause_index()` to create clause records with `clause_uid`, page, bbox, section path, normalized text, and extraction confidence.
+- Add parse-confidence handling so low-confidence parses can block downstream stages or mark the run for human attention.
+
+FILE: app/backend/services/policy_repository.py
+- Create the Harvey lineage service.
+- Add `resolve_policy_lineage()` using only `tenant_id + policy_family_id + version_number`.
+- Add `load_prior_policy_versions()` for same-policy historical comparison.
+- Add blocked-state behavior that emits `blocked_missing_lineage` when authoritative lineage metadata is missing.
+
+FILE: app/backend/services/compliance_repository.py
+- Create the Kira corpus access service.
+- Add `load_internal_playbook_rules()` and `load_external_compliance_rules()` using explicit tenant, jurisdiction, regime, and effective-date filters.
+- Add `resolve_applicable_corpora()` to freeze the exact internal and regulatory corpora versions for each run.
+- Add `needs_scope_review` behavior when required jurisdiction/regime metadata is absent.
+
+FILE: app/backend/services/event_stream.py
+- Create the persisted event publisher and SSE adapter.
+- Add `append_run_event()` to write run events transactionally.
+- Add `stream_run_events()` to replay historical events and continue live SSE emission in order.
+- Add event serialization helpers for the exact `sse-run-events` payload contract.
+
+FILE: app/backend/services/run_service.py
+- Create the application service that coordinates API requests, persistence writes, and worker-visible state transitions.
+- Add `create_run()`, `get_run_detail()`, `list_run_events()`, `submit_human_review()`, and `finalize_run_if_approved()`.
+- Add validation for upload metadata, Harvey lineage metadata, Kira scope metadata, and human-review authorization payloads.
+- Add logic to map human actions to run states: `approved`, `edited`, or `rejected`.
+
+FILE: app/backend/orchestration/state_machine.py
+- Create the deterministic execution graph for the full phase-1 pipeline.
+- Add `claim_next_stage()`, `execute_stage()`, `advance_stage()`, `retry_stage()`, `mark_stage_failed()`, `mark_run_blocked()`, and `queue_disputed_findings_for_reround()`.
+- Implement the exact stage ordering, validator/admin/final-review loop, max-two-round policy, and mandatory handoff to `awaiting_human_review`.
+- Enforce idempotent stage writes so retries and worker restarts do not duplicate findings or events.
+
+FILE: app/backend/worker.py
+- Create the dedicated worker process entrypoint for `postgres-stage-queue`.
+- Add `run_worker_loop()` to poll/claim leased stages, execute `state_machine` stages, refresh leases, and recover expired work.
+- Add dead-letter handling for permanently failed stages after max retries.
+- Add a startup entrypoint so the worker can be run separately from the FastAPI process.
+
+FILE: app/frontend/src/components/HumanReviewPanel.tsx
+- Create the mandatory review UI required by `human-review-gate`.
+- Add controls to approve, edit-and-approve, or reject.
+- Add per-finding edit support with required reason capture and final reviewer comments.
+- Add submission handling that sends the typed human-review payload to the backend and updates UI state from the returned review result.
+</file_specs>
+
+Output format (repeat for each file):
+FILE: path/to/file.py
+- def function_name(param: type) -> return_type
+- class ClassName
+
+Rules:
+- Public API only (functions/classes other files will import)
+- Use the exact names from the spec
+- If a spec has no clear public API, skip that file
+- No prose, no explanations, no implementation details
+Return ONLY the FILE blocks.

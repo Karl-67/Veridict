@@ -1,0 +1,47 @@
+A Claude subagent just implemented one file. Extract memory entries.
+
+<task>[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
+
+i want you to look at the project, a</task>
+
+<file_spec>
+FILE: app/backend/alembic/versions/0001_initial_architecture.py
+SPEC: - Create the first migration for the architecture baseline.
+- Create tables and indexes for runs, stages, parsed clauses, findings, evidence, policy lineage, compliance corpora, run events, and human reviews.
+- Add uniqueness and lookup indexes for `run_id`, `clause_uid`, `tenant_id + policy_family_
+</file_spec>
+
+<context>
+CLAUDE OUTPUT (what the agent reported doing):
+Created `app/backend/alembic/versions/0001_initial_architecture.py`.
+
+To answer your broader question — here's the full picture of what the architecture needs vs. what exists:
+
+**What exists (prototype only):**
+- `reviewer.py` — single Gemini call, no pipeline
+- `routes/contracts.py` — one upload endpoint, no queue
+- `models/schemas.py` — basic Pydantic types only
+
+**What's missing to finalize phase 1:**
+
+| Layer | Files needed |
+|---|---|
+| Config | `core/config.py` |
+| DB | `db/session.py`, `db/models.py`, alembic env + migration (migration now done) |
+| Providers | `providers/base.py`, `providers/google_provider.py` |
+| Agents | `agents/validator.py`, `agents/admin.py` (reviewer.py needs refactor) |
+| Services | `services/parser.py`, `services/policy_repository.py`, `services/compliance
+</context>
+
+<output_format>
+Return a JSON object (omit any key if nothing real to record):
+{
+  "key_facts": [{"category": "Code Conventions", "fact": "All handlers are async"}],
+  "bugs": [{"issue": "...", "root_cause": "...", "solution": "...", "prevention": "..."}],
+  "lessons": ["short concrete lesson"]
+}
+</output_format>
+
+Only record things specific to THIS file and THIS task. No generic advice.
+Return ONLY valid JSON, no markdown fences.

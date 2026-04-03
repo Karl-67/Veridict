@@ -1,0 +1,71 @@
+patterns_learned: []
+codebase_conventions: []
+past_mistakes:
+- date: '2026-04-03'
+  text: Scaffolding files should not be used as reference for target architecture
+    — always consult sibling contracts and shared dependency specs
+- date: '2026-04-03'
+  text: Group requirements.txt by architectural boundary to make dependency ownership
+    explicit
+- date: '2026-04-03'
+  text: Keep fallback parsers as optional/low-priority entries with clear comments
+- date: '2026-04-03'
+  text: All configuration flows through a single Settings class with env var aliases
+    — no hardcoded defaults should be scattered across modules
+- date: '2026-04-03'
+  text: Sync workers must explicitly commit after stage lease/completion/human-review
+    writes so leases are immediately visible to other workers
+- date: '2026-04-03'
+  text: Alembic migration 0001 is the schema baseline — all 9 tables must exist before
+    any ORM models or services can be built
+- date: '2026-04-03'
+  text: Separating retryable (transient/rate-limit) from non-retryable (schema violation/auth
+    failure) errors at the provider level lets orchestrators implement correct retry
+    logic without inspecting error messages
+- date: '2026-04-03'
+  text: google-genai SDK errors may embed status codes in string representation —
+    _extract_status_code() parses both .status_code/.code attributes and string fallback
+- date: '2026-04-03'
+  text: Structured output mode should guarantee valid JSON, but defensive parsing
+    (code fence stripping, empty response check, dict type check) protects against
+    future model regressions
+- date: '2026-04-03'
+  text: 'Blocked-state behavior is delegated: repository raises MissingLineageError,
+    state_machine.py catches it and writes blocked_reason to RunRecord — separation
+    of concerns between data access and state management'
+- date: '2026-04-03'
+  text: Using sync sessions for repository services aligns with the convention that
+    workers (not API handlers) consume these services
+- date: '2026-04-03'
+  text: main.py is the FastAPI entry point but remains in scaffolding state — CORS,
+    title/version, and router registration are in place, but settings injection, DB
+    engine/session lifecycle, startup connectivity checks, and the run router are
+    not yet wired
+- date: '2026-04-03'
+  text: Dual-ref synchronization (apiDoneRef + pipelineDoneRef) is a code smell indicating
+    two independent async flows that should be unified under a single event source
+- date: '2026-04-03'
+  text: Fake pipeline animations create technical debt — they must be torn down and
+    replaced when real backend state arrives
+- date: '2026-04-03'
+  text: Polling intervals in an SSE-driven architecture indicate the frontend is not
+    yet using the event stream as the source of truth
+- date: '2026-04-03'
+  text: Timer-based UI animations are a synchronization anti-pattern when an SSE event
+    stream is available — always prefer event-driven state transitions
+- date: '2026-04-03'
+  text: Frontend stage definitions must be derived from the canonical backend stage
+    graph, not invented independently
+- date: '2026-04-03'
+  text: A pipeline tracker is incomplete without retrying/blocked/failed states —
+    these are critical for production observability
+- date: '2026-04-03'
+  text: VerdictCard.tsx and ReviewResult type must be updated together — the type
+    needs branch grouping, consensus state, evidence anchors, exploitability/business
+    impact, unresolved_by_consensus, and human review fields before the UI can display
+    them
+- date: '2026-04-03'
+  text: README documentation must be updated alongside implementation changes to reflect
+    actual architecture, not scaffolding
+architecture_decisions: []
+task_index: []
