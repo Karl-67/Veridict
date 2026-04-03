@@ -162,12 +162,165 @@ def download_ledgar():
     print(f"[LEDGAR] Saved {len(df)} rows to {out_file}")
 
 
+def download_contract_nli():
+    """Download the ContractNLI dataset.
+
+    Source: kiddothe2b/contract-nli (zip file download, no custom script needed)
+    ~9.8k premise/hypothesis pairs with entailment/contradiction/neutral labels.
+    """
+    import zipfile
+
+    out_dir = DATA_DIR / "contractnli"
+    out_file = out_dir / "contractnli.parquet"
+    if out_file.exists():
+        print(f"[ContractNLI] Already cached at {out_file}")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / "contract_nli.zip"
+
+    if not zip_path.exists():
+        print("[ContractNLI] Downloading zip from HuggingFace (kiddothe2b/contract-nli)...")
+        downloaded = hf_hub_download(
+            repo_id="kiddothe2b/contract-nli",
+            filename="contract_nli.zip",
+            repo_type="dataset",
+            local_dir=str(out_dir),
+        )
+        downloaded_path = Path(downloaded)
+        if downloaded_path != zip_path and downloaded_path.exists():
+            import shutil
+            shutil.copy2(downloaded_path, zip_path)
+    else:
+        print(f"[ContractNLI] Zip already cached at {zip_path}")
+
+    # Parse JSONL from zip
+    print("[ContractNLI] Parsing JSONL...")
+    rows = []
+    with zipfile.ZipFile(zip_path) as zf:
+        jsonl_files = [n for n in zf.namelist() if n.endswith(".jsonl")]
+        for fname in jsonl_files:
+            with zf.open(fname) as f:
+                import io
+                for line in io.TextIOWrapper(f, encoding="utf-8", errors="ignore"):
+                    line = line.strip()
+                    if line:
+                        try:
+                            rows.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+
+    df = pd.DataFrame(rows)
+    # Rename 'subset' to 'split' if present
+    if "subset" in df.columns and "split" not in df.columns:
+        df = df.rename(columns={"subset": "split"})
+    # label is already a string ('entailment', 'contradiction', 'neutral')
+    df["label_name"] = df["label"].astype(str)
+
+    df.to_parquet(out_file, index=False)
+    print(f"[ContractNLI] Saved {len(df)} rows to {out_file}")
+
+
+def download_material_contracts():
+    """Download the SEC Material Contracts QA dataset.
+
+    Source: chenghao/sec-material-contracts-qa
+    804 SEC EDGAR contracts with full text and extracted metadata.
+    We skip the images column to keep download manageable.
+    """
+    out_dir = DATA_DIR / "material"
+    out_file = out_dir / "sec_contracts.parquet"
+    if out_file.exists():
+        print(f"[Material Contracts] Already cached at {out_file}")
+        return
+
+    print("[Material Contracts] Downloading from HuggingFace (chenghao/sec-material-contracts-qa)...")
+    ds = load_dataset("chenghao/sec-material-contracts-qa")
+
+    dfs = []
+    for split_name in ds:
+        split_df = ds[split_name].to_pandas()
+        split_df["split"] = split_name
+        dfs.append(split_df)
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    # Drop heavy columns we don't need for EDA
+    drop_cols = [c for c in ["images", "html_content", "page_text"] if c in df.columns]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+        print(f"[Material Contracts] Dropped heavy columns: {drop_cols}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_file, index=False)
+    print(f"[Material Contracts] Saved {len(df)} rows to {out_file}")
+
+
+def download_riscbac():
+    """Download the RISCBAC dataset (synthetic insurance contracts, English).
+
+    Source: https://graal.ift.ulaval.ca/public/datasets/riscbac.zip
+    10,000 synthetic automobile insurance contracts in English.
+    The HuggingFace repo uses a deprecated custom script; we download directly.
+    """
+    import urllib.request
+    import zipfile
+
+    out_dir = DATA_DIR / "riscbac"
+    out_file = out_dir / "riscbac.parquet"
+    if out_file.exists():
+        print(f"[RISCBAC] Already cached at {out_file}")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / "riscbac.zip"
+
+    if not zip_path.exists():
+        url = "https://graal.ift.ulaval.ca/public/datasets/riscbac.zip"
+        print(f"[RISCBAC] Downloading from {url} ...")
+        try:
+            urllib.request.urlretrieve(url, zip_path)
+            print(f"[RISCBAC] Downloaded to {zip_path}")
+        except Exception as e:
+            print(f"[RISCBAC] WARNING: Download failed ({e})")
+            print(f"[RISCBAC] The GRAAL server may be temporarily unavailable.")
+            print(f"[RISCBAC] Manual download: visit {url} and save to {zip_path}")
+            print(f"[RISCBAC] Skipping RISCBAC for now. Other datasets are unaffected.")
+            return
+    else:
+        print(f"[RISCBAC] Zip already cached at {zip_path}")
+
+    print("[RISCBAC] Parsing en.jsonl from zip...")
+    rows = []
+    with zipfile.ZipFile(zip_path) as zf:
+        with zf.open("en.jsonl") as f:
+            import io
+            for line in io.TextIOWrapper(f, encoding="utf-8", errors="ignore"):
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+
+    df = pd.DataFrame(rows)
+    df["split"] = "full_en"
+    df.to_parquet(out_file, index=False)
+    print(f"[RISCBAC] Saved {len(df)} rows to {out_file}")
+
+
 def main():
     print(f"Data directory: {DATA_DIR}\n")
 
     download_cuad()
     print()
     download_ledgar()
+    print()
+    download_contract_nli()
+    print()
+    download_material_contracts()
+    print()
+    download_riscbac()
 
     print("\nDone! All datasets saved to", DATA_DIR)
 
