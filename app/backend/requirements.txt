@@ -1,7 +1,29 @@
-fastapi
-uvicorn
-pdfplumber
-google-genai
-python-multipart
-pydantic
-python-dotenv
+# ── Web framework ────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# ── Settings / env ───────────────────────────────────────────────────────────
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.1
+
+# ── gemini-provider-boundary ─────────────────────────────────────────────────
+google-genai>=1.5.0
+
+# ── docling-canonical-parser ─────────────────────────────────────────────────
+docling>=2.21.0
+# OCR fallback (Tesseract wrapper used by docling's OCR pipeline)
+pytesseract>=0.3.10
+Pillow>=10.3.0
+# pdfplumber kept as low-priority fallback utility only
+pdfplumber>=0.11.0
+
+# ── postgres-stage-queue ─────────────────────────────────────────────────────
+sqlalchemy>=2.0.30
+alembic>=1.13.1
+psycopg2-binary>=2.9.9          # sync driver used by alembic env & worker
+asyncpg>=0.29.0                 # async driver used by SQLAlchemy async engine
+
+# ── sse-run-events ───────────────────────────────────────────────────────────
+sse-starlette>=2.1.0
