@@ -68,9 +68,14 @@ target_metadata = Base.metadata
 
 def _get_db_url() -> str:
     url = config.get_main_option("sqlalchemy.url")
-    if url:
-        return url
-    return get_settings().postgres_dsn
+    if not url:
+        url = get_settings().postgres_dsn
+    # Alembic runs migrations with a sync engine. The application's
+    # POSTGRES_DSN typically uses the async asyncpg driver, which sync
+    # SQLAlchemy can't open. Translate it to psycopg2 for migrations.
+    if "+asyncpg" in url:
+        url = url.replace("+asyncpg", "+psycopg2")
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +111,11 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode using a live DB connection."""
-    # Allow the ini section to be overridden with the resolved URL from Settings.
+    # Always resolve the URL via _get_db_url() so that an empty
+    # `sqlalchemy.url` in alembic.ini falls through to POSTGRES_DSN from .env
+    # (and asyncpg → psycopg2 translation is applied).
     ini_section = config.get_section(config.config_ini_section, {})
-    ini_section.setdefault("sqlalchemy.url", _get_db_url())
+    ini_section["sqlalchemy.url"] = _get_db_url()
 
     connectable = engine_from_config(
         ini_section,

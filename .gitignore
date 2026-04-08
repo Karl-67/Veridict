@@ -15,6 +15,10 @@ venv/
 # Environment variables
 .env
 
+# Local document upload storage
+/storage/
+/app/backend/storage/
+
 # macOS
 .DS_Store
 

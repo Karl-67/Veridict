@@ -88,7 +88,6 @@ def upgrade() -> None:
         "ix_stage_executions_claim",
         "stage_executions",
         ["status", "stage_order", "lease_expires_at"],
-        comment="Worker SELECT FOR UPDATE SKIP LOCKED index",
     )
 
     # ------------------------------------------------------------------
@@ -248,7 +247,6 @@ def upgrade() -> None:
         "ix_run_events_replay_order",
         "run_events",
         ["run_id", "sequence_number"],
-        comment="SSE replay cursor ordering",
     )
     op.create_index("ix_run_events_event_type", "run_events", ["event_type"])
 

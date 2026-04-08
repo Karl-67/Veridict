@@ -63,6 +63,10 @@ export default function App() {
       } catch (err) {
         console.error("Upload failed:", err);
         alert(`Upload failed: ${(err as Error).message}`);
+        setState("upload");
+        apiDoneRef.current = false;
+        pipelineDoneRef.current = false;
+        resultRef.current = null;
       } finally {
         setIsPending(false);
       }
