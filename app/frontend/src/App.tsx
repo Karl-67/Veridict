@@ -11,7 +11,7 @@ import PipelineTracker from "@/components/PipelineTracker";
 import AIEngineInsights from "@/components/AIEngineInsights";
 import PipelineMethodology from "@/components/PipelineMethodology";
 import VerdictCard from "@/components/VerdictCard";
-import { uploadContract } from "@/lib/api";
+import { createRun, pollRunUntilDone, verdictToReviewResult } from "@/lib/api";
 import type { ReviewResult } from "@/types";
 
 type AppState = "upload" | "pipeline" | "waiting" | "verdict";
@@ -43,12 +43,26 @@ export default function App() {
       setState("pipeline");
 
       try {
-        const data = await uploadContract(file);
-        resultRef.current = data.result;
+        const created = await createRun(file);
+        const run = await pollRunUntilDone(created.run_id);
+        if (run.state === "finalized" && run.verdict) {
+          resultRef.current = verdictToReviewResult(run.verdict);
+        } else if (run.state === "awaiting_human_review") {
+          throw new Error(
+            "Run is awaiting human review — human review UI not implemented yet."
+          );
+        } else if (run.state === "blocked") {
+          throw new Error(`Run blocked: ${run.blocked_reason ?? "unknown reason"}`);
+        } else if (run.state === "failed" || run.state === "rejected") {
+          throw new Error(`Run ${run.state}`);
+        } else if (!run.verdict) {
+          throw new Error("Run finished without a verdict");
+        }
         apiDoneRef.current = true;
         tryShowVerdict();
       } catch (err) {
         console.error("Upload failed:", err);
+        alert(`Upload failed: ${(err as Error).message}`);
       } finally {
         setIsPending(false);
       }
