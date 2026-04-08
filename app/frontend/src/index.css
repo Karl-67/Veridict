@@ -3,24 +3,48 @@
 @import "@fontsource/inter/500.css";
 @import "@fontsource/inter/600.css";
 @import "@fontsource/inter/700.css";
+@import "@fontsource/playfair-display/700.css";
+@import "@fontsource/playfair-display/800.css";
 
 @theme {
-  --color-background: #0a0f1e;
-  --color-surface: #111827;
-  --color-primary: #3b82f6;
-  --color-primary-hover: #2563eb;
-  --color-text-primary: #f8fafc;
-  --color-text-muted: #94a3b8;
-  --color-risk-high: #ef4444;
-  --color-risk-medium: #f59e0b;
-  --color-risk-low: #22c55e;
-  --color-border: rgba(255, 255, 255, 0.1);
+  --color-background: #FAFAF7;
+  --color-surface: #FFFFFF;
+  --color-accent: #C8973E;
+  --color-accent-hover: #B5862F;
+  --color-text-primary: #1A1A1A;
+  --color-text-secondary: #6B6560;
+  --color-border: #E8E4DF;
+  --color-risk-high: #C4432B;
+  --color-risk-medium: #C8973E;
+  --color-risk-low: #3D8B5E;
+  --color-drop-zone: #F5F3EE;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
 }
 
 body {
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: var(--font-sans);
   background-color: var(--color-background);
   color: var(--color-text-primary);
   margin: 0;
   min-height: 100vh;
+  transition: background-color 0.3s, color 0.3s;
+}
+
+.dark {
+  --color-background: #1A1815;
+  --color-surface: #252220;
+  --color-accent: #C8973E;
+  --color-accent-hover: #D9A84F;
+  --color-text-primary: #F5F3EE;
+  --color-text-secondary: #9A9490;
+  --color-border: #3A3632;
+  --color-risk-high: #E05A43;
+  --color-risk-medium: #D9A84F;
+  --color-risk-low: #4EA872;
+  --color-drop-zone: #1F1C19;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-serif);
 }
