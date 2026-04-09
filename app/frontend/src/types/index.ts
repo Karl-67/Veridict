@@ -108,3 +108,20 @@ export interface RunDetail {
   verdict?: FinalVerdict | null;
   blocked_reason?: string | null;
 }
+
+export type HumanRunAction = "approved" | "edited" | "rejected";
+
+export interface HumanReviewPayload {
+  schema_version?: number;
+  run_action: HumanRunAction;
+  reviewer_id: string;
+  finding_actions?: unknown[];
+  rejection_reason?: string;
+}
+
+export interface HumanReviewResult {
+  run_id: string;
+  run_action: HumanRunAction;
+  state: RunState;
+  verdict?: FinalVerdict | null;
+}

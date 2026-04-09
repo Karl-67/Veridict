@@ -1,5 +1,7 @@
 import type {
   FinalVerdict,
+  HumanReviewPayload,
+  HumanReviewResult,
   ReviewResult,
   RunCreateResponse,
   RunDetail,
@@ -87,20 +89,23 @@ const TERMINAL_STATES = new Set([
 
 /**
  * Poll GET /api/runs/{run_id} until the run reaches a terminal state.
+ * onUpdate is called with every intermediate result so the UI can show live stage progress.
  */
 export async function pollRunUntilDone(
   runId: string,
   intervalMs = 1500,
-  timeoutMs = 5 * 60_000
+  timeoutMs = 5 * 60_000,
+  onUpdate?: (run: RunDetail) => void
 ): Promise<RunDetail> {
   const start = Date.now();
   while (true) {
     const run = await getRun(runId);
+    onUpdate?.(run);
     if (TERMINAL_STATES.has(run.state)) {
       return run;
     }
     if (Date.now() - start > timeoutMs) {
-      throw new Error("Run polling timed out");
+      throw new Error("Run polling timed out after 5 minutes");
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -108,6 +113,22 @@ export async function pollRunUntilDone(
 
 export async function healthCheck(): Promise<{ status: string }> {
   const response = await fetch(`${API_BASE}/health`);
+  return response.json();
+}
+
+export async function submitHumanReview(
+  runId: string,
+  payload: HumanReviewPayload
+): Promise<HumanReviewResult> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/human-review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Review submission failed" }));
+    throw new Error(error.detail || "Review submission failed");
+  }
   return response.json();
 }
 

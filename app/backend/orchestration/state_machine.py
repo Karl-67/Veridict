@@ -5,8 +5,30 @@ Deterministic stage execution graph.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+_FAILURE_LOG = Path("logs/failures.jsonl")
+
+
+def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_count: int) -> None:
+    """Append one JSON line to logs/failures.jsonl for every permanent stage failure."""
+    try:
+        _FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "run_id": run_id,
+            "stage": stage_name,
+            "error": error_detail,
+            "retry_count": retry_count,
+        }
+        with _FAILURE_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to write failure log: %s", exc)
 
 from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session, aliased
@@ -87,6 +109,7 @@ def mark_stage_failed(session: Session, stage: StageExecutionRecord, error_detai
     stage.finished_at = datetime.utcnow()
     stage.run.status = "failed"
     append_run_event(session, stage.run_id, "stage_failed", {"stage_name": stage.stage_name, "error": error_detail})
+    _write_failure_log(stage.run_id, stage.stage_name, error_detail, stage.retry_count)
     session.commit()
 
 
@@ -94,6 +117,7 @@ def mark_run_blocked(session: Session, run: RunRecord, blocked_reason: str) -> N
     run.status = "blocked"
     run.blocked_reason = blocked_reason
     append_run_event(session, run.id, "stage_failed", {"stage_name": "blocked", "error": blocked_reason})
+    _write_failure_log(run.id, "blocked", blocked_reason, 0)
     session.commit()
 
 
@@ -116,11 +140,17 @@ def queue_disputed_findings_for_reround(session: Session, run: RunRecord, disput
 
 
 def _provider(settings: Settings):
-    from app.backend.providers.google_provider import build_gemini_provider
+    from app.backend.providers.openrouter_provider import build_openrouter_provider, build_ollama_provider
 
-    return build_gemini_provider(
-        api_key=settings.gemini_api_key,
-        model_name=settings.gemini_model_name,
+    if settings.llm_provider == "ollama":
+        return build_ollama_provider(
+            base_url=settings.ollama_base_url,
+            model_name=settings.ollama_model,
+            max_retries=settings.max_stage_retries,
+        )
+    return build_openrouter_provider(
+        api_key=settings.openrouter_api_key,
+        model_name=settings.openrouter_model,
         max_retries=settings.max_stage_retries,
     )
 
@@ -153,10 +183,29 @@ def _load_clause_index(session: Session, run_id: str) -> list[dict]:
 
 
 def _stage_output(session: Session, run_id: str, stage_name: str) -> dict:
-    stage = session.scalars(
-        select(StageExecutionRecord).where(StageExecutionRecord.run_id == run_id, StageExecutionRecord.stage_name == stage_name)
-    ).first()
-    return stage.structured_output if stage and stage.structured_output else {}
+    """Return the structured_output of the latest completed execution for a stage.
+
+    Stages like harvey_review_block can have multiple rounds; we want the
+    highest round_number that has a non-null structured_output (i.e. the
+    final round that wrote validated_output, not an intermediate rerun row).
+    """
+    stages = session.scalars(
+        select(StageExecutionRecord)
+        .where(
+            StageExecutionRecord.run_id == run_id,
+            StageExecutionRecord.stage_name == stage_name,
+            StageExecutionRecord.structured_output.isnot(None),
+        )
+        .order_by(StageExecutionRecord.round_number.desc())
+    ).all()
+    # Prefer the row that contains validated_output (final round)
+    for stage in stages:
+        if stage.structured_output and "validated_output" in stage.structured_output:
+            return stage.structured_output
+    # Fall back to latest round with any output
+    if stages:
+        return stages[0].structured_output or {}
+    return {}
 
 
 def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
@@ -177,52 +226,61 @@ def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
 
 async def _run_harvey_review_block(clause_index: list[dict], context: dict, settings: Settings, round_number: int) -> ReviewBlockResult:
     provider = _provider(settings)
-    reviewers = [HarveyReviewerAgent(provider, index) for index in (1, 2, 3)]
-    review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
-    review_outputs = [
-        output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
-        for output in review_outputs
-    ]
-    votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-    return ReviewBlockAggregator().aggregate(
-        branch="harvey",
-        review_outputs=review_outputs,
-        reviewer_votes=votes,
-        round_number=round_number,
-        max_reruns=5,
-    )
+    try:
+        reviewers = [HarveyReviewerAgent(provider, index) for index in (1, 2, 3)]
+        review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
+        review_outputs = [
+            output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
+            for output in review_outputs
+        ]
+        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
+        return ReviewBlockAggregator().aggregate(
+            branch="harvey",
+            review_outputs=review_outputs,
+            reviewer_votes=votes,
+            round_number=round_number,
+            max_reruns=5,
+        )
+    finally:
+        await provider.aclose()
 
 
 async def _run_kira_review_block(clause_index: list[dict], context: dict, settings: Settings, round_number: int) -> ReviewBlockResult:
     provider = _provider(settings)
-    reviewers = [KiraReviewerAgent(provider, index) for index in (1, 2, 3)]
-    review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
-    review_outputs = [
-        output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
-        for output in review_outputs
-    ]
-    votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-    return ReviewBlockAggregator().aggregate(
-        branch="kira",
-        review_outputs=review_outputs,
-        reviewer_votes=votes,
-        round_number=round_number,
-        max_reruns=5,
-    )
+    try:
+        reviewers = [KiraReviewerAgent(provider, index) for index in (1, 2, 3)]
+        review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
+        review_outputs = [
+            output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
+            for output in review_outputs
+        ]
+        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
+        return ReviewBlockAggregator().aggregate(
+            branch="kira",
+            review_outputs=review_outputs,
+            reviewer_votes=votes,
+            round_number=round_number,
+            max_reruns=5,
+        )
+    finally:
+        await provider.aclose()
 
 
 async def _run_final_review_block(clause_index: list[dict], merged_findings: list[dict], settings: Settings, round_number: int) -> ReviewBlockResult:
     provider = _provider(settings)
-    reviewers = [FinalReviewerAgent(provider, index) for index in (1, 2, 3)]
-    review_outputs = [await reviewer.review(clause_index, merged_findings, round_number=round_number) for reviewer in reviewers]
-    votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-    return ReviewBlockAggregator().aggregate(
-        branch="final",
-        review_outputs=review_outputs,
-        reviewer_votes=votes,
-        round_number=round_number,
-        max_reruns=5,
-    )
+    try:
+        reviewers = [FinalReviewerAgent(provider, index) for index in (1, 2, 3)]
+        review_outputs = [await reviewer.review(clause_index, merged_findings, round_number=round_number) for reviewer in reviewers]
+        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
+        return ReviewBlockAggregator().aggregate(
+            branch="final",
+            review_outputs=review_outputs,
+            reviewer_votes=votes,
+            round_number=round_number,
+            max_reruns=5,
+        )
+    finally:
+        await provider.aclose()
 
 
 def execute_stage(session: Session, stage: StageExecutionRecord, settings: Settings) -> None:

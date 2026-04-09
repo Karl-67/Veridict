@@ -92,9 +92,9 @@ async def create_run(
             )
         )
 
-    from app.backend.services.event_stream import append_run_event
+    from app.backend.services.event_stream import async_append_run_event as append_run_event
 
-    append_run_event(session.sync_session, run.id, "run_created", {"filename": file.filename})
+    await append_run_event(session, run.id, "run_created", {"filename": file.filename})
     await session.flush()
     return RunCreateResponse(run_id=run.id, state="created", created_at=run.created_at)
 
@@ -194,7 +194,7 @@ async def submit_human_review(session: AsyncSession, run_id: str, payload: Human
     if payload.run_action == "rejected" and not payload.rejection_reason:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Rejected reviews require a rejection reason.")
 
-    from app.backend.services.event_stream import append_run_event
+    from app.backend.services.event_stream import async_append_run_event as append_run_event
 
     for finding_action in payload.finding_actions:
         finding = await session.get(FindingRecord, finding_action.finding_id)
@@ -227,12 +227,12 @@ async def submit_human_review(session: AsyncSession, run_id: str, payload: Human
 
     if payload.run_action == "rejected":
         run.status = "rejected"
-        append_run_event(session.sync_session, run_id, "human_rejected", {"reviewer_id": payload.reviewer_id, "reason": payload.rejection_reason})
+        await append_run_event(session, run_id, "human_rejected", {"reviewer_id": payload.reviewer_id, "reason": payload.rejection_reason})
         return HumanReviewResult(run_id=run_id, run_action="rejected", state="rejected")
 
     run.status = "processing"
-    append_run_event(
-        session.sync_session,
+    await append_run_event(
+        session,
         run_id,
         "human_edited" if payload.run_action == "edited" else "human_approved",
         {"reviewer_id": payload.reviewer_id},
@@ -251,7 +251,7 @@ async def finalize_run_if_approved(session: AsyncSession, run_id: str, human_act
     if verdict is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run cannot be finalized yet.")
 
-    from app.backend.services.event_stream import append_run_event
+    from app.backend.services.event_stream import async_append_run_event as append_run_event
 
     run.status = "finalized"
     run.verdict_payload = verdict.model_dump(mode="json")
@@ -266,5 +266,5 @@ async def finalize_run_if_approved(session: AsyncSession, run_id: str, human_act
     if finalized_stage is not None:
         finalized_stage.status = "completed"
         finalized_stage.finished_at = run.updated_at
-    append_run_event(session.sync_session, run_id, "run_finalized", {"human_action": human_action})
+    await append_run_event(session, run_id, "run_finalized", {"human_action": human_action})
     return verdict

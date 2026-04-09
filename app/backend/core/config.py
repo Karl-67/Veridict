@@ -8,15 +8,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file="app/backend/.env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
 
-    # Gemini / LLM provider
-    gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
-    gemini_model_name: str = Field("gemini-2.5-flash", alias="GEMINI_MODEL_NAME")
+    # LLM provider selection: "ollama" or "openrouter"
+    llm_provider: str = Field("ollama", alias="LLM_PROVIDER")
+
+    # Ollama (local)
+    ollama_base_url: str = Field("http://localhost:11434/v1", alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field("llama3.2:latest", alias="OLLAMA_MODEL")
+
+    # OpenRouter (cloud fallback — only required when LLM_PROVIDER=openrouter)
+    openrouter_api_key: str = Field("", alias="OPENROUTER_API_KEY")
+    openrouter_model: str = Field("google/gemma-4-31b-it:free", alias="OPENROUTER_MODEL")
+
+    # Gemini / LLM provider (kept for backwards compat — no longer used)
+    gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
+    gemini_model_name: str = Field("gemini-2.0-flash-lite", alias="GEMINI_MODEL_NAME")
 
     # Postgres
     postgres_dsn: str = Field(..., alias="POSTGRES_DSN")

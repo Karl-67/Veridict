@@ -1,6 +1,6 @@
 import { useState, useCallback, type DragEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Upload, FileText, X, AlertCircle, Lock } from "lucide-react";
+import { FileText, X, AlertCircle, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface UploadFormProps {

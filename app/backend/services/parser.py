@@ -35,7 +35,6 @@ def _build_clause_uid(document_hash: str, page: int, index: int, text: str) -> s
 
 def parse_pdf_to_canonical_document(pdf_bytes: bytes, settings: Settings) -> CanonicalDocument:
     import pdfplumber
-    import pytesseract
 
     document_hash = hashlib.sha256(pdf_bytes).hexdigest()
     clauses: list[dict] = []
@@ -47,6 +46,7 @@ def parse_pdf_to_canonical_document(pdf_bytes: bytes, settings: Settings) -> Can
             normalized = _normalize_text(text)
             if not normalized:
                 if settings.enable_ocr_fallback:
+                    import pytesseract
                     used_ocr_fallback = True
                     try:
                         page_image = page.to_image(resolution=200).original

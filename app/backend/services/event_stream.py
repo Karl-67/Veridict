@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
 
 from app.backend.db.models import RunEventRecord
@@ -16,6 +16,7 @@ from app.backend.models.schemas import RunEvent
 
 
 def append_run_event(session: Session, run_id: str, event_type: str, payload: dict) -> RunEventRecord:
+    """Sync version — used by the worker via a psycopg2 Session."""
     current_sequence = session.scalar(
         select(func.max(RunEventRecord.sequence_number)).where(RunEventRecord.run_id == run_id)
     )
@@ -27,6 +28,22 @@ def append_run_event(session: Session, run_id: str, event_type: str, payload: di
     )
     session.add(event)
     session.flush()
+    return event
+
+
+async def async_append_run_event(session: AsyncSession, run_id: str, event_type: str, payload: dict) -> RunEventRecord:
+    """Async version — used by FastAPI request handlers via an asyncpg AsyncSession."""
+    current_sequence = await session.scalar(
+        select(func.max(RunEventRecord.sequence_number)).where(RunEventRecord.run_id == run_id)
+    )
+    event = RunEventRecord(
+        run_id=run_id,
+        event_type=event_type,
+        payload=payload,
+        sequence_number=(current_sequence or 0) + 1,
+    )
+    session.add(event)
+    await session.flush()
     return event
 
 

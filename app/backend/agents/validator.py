@@ -9,6 +9,7 @@ from typing import Any
 
 from app.backend.models.schemas import BranchReviewOutput, Finding, ValidatorOutput
 from app.backend.providers.base import StructuredLLMProvider
+from app.backend.agents.reviewer import _coerce_issue_type, _coerce_level, _VALID_SEVERITIES
 
 _VALIDATOR_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -86,12 +87,14 @@ def _deduplicate_overlapping_findings(findings: list[Finding], finding_verdicts:
                 if key not in seen_keys:
                     seen_keys.add(key)
                     merged_evidence.append(evidence)
+        raw_severity = verdict.get("normalised_severity", primary.severity)
+        raw_issue_type = verdict.get("normalised_issue_type", primary.issue_type)
         deduped.append(
             primary.model_copy(
                 update={
                     "evidence": merged_evidence,
-                    "severity": verdict.get("normalised_severity", primary.severity),
-                    "issue_type": verdict.get("normalised_issue_type", primary.issue_type),
+                    "severity": _coerce_level(raw_severity, _VALID_SEVERITIES, primary.severity),
+                    "issue_type": _coerce_issue_type(raw_issue_type) if raw_issue_type else primary.issue_type,
                 }
             )
         )

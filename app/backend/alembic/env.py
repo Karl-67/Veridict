@@ -18,9 +18,9 @@ from sqlalchemy import engine_from_config, pool
 # Path fix: make sure the backend package is importable when alembic is
 # invoked from the project root (e.g. `alembic -c app/backend/alembic.ini …`)
 # ---------------------------------------------------------------------------
-_backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _backend_dir not in sys.path:
-    sys.path.insert(0, _backend_dir)
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 # ---------------------------------------------------------------------------
 # Import project metadata and settings AFTER the path fix.

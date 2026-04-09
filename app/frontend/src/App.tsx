@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
@@ -12,97 +12,99 @@ import AIEngineInsights from "@/components/AIEngineInsights";
 import PipelineMethodology from "@/components/PipelineMethodology";
 import VerdictCard from "@/components/VerdictCard";
 import { createRun, pollRunUntilDone, verdictToReviewResult } from "@/lib/api";
-import type { ReviewResult } from "@/types";
+import HumanReviewPanel from "@/components/HumanReviewPanel";
+import { XCircle, RefreshCw } from "lucide-react";
+import type { FinalVerdict, ReviewResult, RunDetail } from "@/types";
 
-type AppState = "upload" | "pipeline" | "waiting" | "verdict";
+type AppState = "upload" | "processing" | "human_review" | "verdict" | "failed";
+
+interface FailureInfo {
+  stage: string;
+  error: string;
+  runId?: string;
+}
 
 export default function App() {
   const [state, setState] = useState<AppState>("upload");
   const [result, setResult] = useState<ReviewResult | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [fileName, setFileName] = useState("");
-  const apiDoneRef = useRef(false);
-  const resultRef = useRef<ReviewResult | null>(null);
-  const pipelineDoneRef = useRef(false);
+  const [pendingRunId, setPendingRunId] = useState<string | null>(null);
+  const [currentRun, setCurrentRun] = useState<RunDetail | null>(null);
+  const [failureInfo, setFailureInfo] = useState<FailureInfo | null>(null);
 
-  const tryShowVerdict = useCallback(() => {
-    if (apiDoneRef.current && pipelineDoneRef.current && resultRef.current) {
-      setResult(resultRef.current);
-      setState("verdict");
+  const handleSubmit = useCallback(async (file: File) => {
+    setIsPending(true);
+    setFileName(file.name);
+    setCurrentRun(null);
+    setFailureInfo(null);
+    setState("processing");
+
+    try {
+      const created = await createRun(file);
+
+      const run = await pollRunUntilDone(
+        created.run_id,
+        1500,
+        5 * 60_000,
+        (r) => setCurrentRun(r)       // live stage updates on every poll tick
+      );
+      setCurrentRun(run);
+
+      if (run.state === "awaiting_human_review") {
+        setPendingRunId(created.run_id);
+        setState("human_review");
+      } else if (run.state === "finalized" && run.verdict) {
+        setResult(verdictToReviewResult(run.verdict));
+        setState("verdict");
+      } else if (run.state === "failed" || run.state === "blocked") {
+        const failedStage = run.stages.find((s) => s.state === "failed" || s.state === "blocked");
+        setFailureInfo({
+          stage: failedStage?.stage_name ?? "unknown",
+          error: failedStage?.error_detail ?? run.blocked_reason ?? "Unknown error",
+          runId: run.run_id,
+        });
+        setState("failed");
+      } else {
+        setFailureInfo({
+          stage: "unknown",
+          error: `Run ended in unexpected state: ${run.state}`,
+          runId: run.run_id,
+        });
+        setState("failed");
+      }
+    } catch (err) {
+      setFailureInfo({
+        stage: "unknown",
+        error: (err as Error).message,
+      });
+      setState("failed");
+    } finally {
+      setIsPending(false);
     }
   }, []);
 
-  const handleSubmit = useCallback(
-    async (file: File) => {
-      setIsPending(true);
-      setFileName(file.name);
-      apiDoneRef.current = false;
-      pipelineDoneRef.current = false;
-      resultRef.current = null;
+  const handleHumanApproved = useCallback((verdict: FinalVerdict) => {
+    setResult(verdictToReviewResult(verdict));
+    setState("verdict");
+    setPendingRunId(null);
+  }, []);
 
-      setState("pipeline");
-
-      try {
-        const created = await createRun(file);
-        const run = await pollRunUntilDone(created.run_id);
-        if (run.state === "finalized" && run.verdict) {
-          resultRef.current = verdictToReviewResult(run.verdict);
-        } else if (run.state === "awaiting_human_review") {
-          throw new Error(
-            "Run is awaiting human review — human review UI not implemented yet."
-          );
-        } else if (run.state === "blocked") {
-          throw new Error(`Run blocked: ${run.blocked_reason ?? "unknown reason"}`);
-        } else if (run.state === "failed" || run.state === "rejected") {
-          throw new Error(`Run ${run.state}`);
-        } else if (!run.verdict) {
-          throw new Error("Run finished without a verdict");
-        }
-        apiDoneRef.current = true;
-        tryShowVerdict();
-      } catch (err) {
-        console.error("Upload failed:", err);
-        alert(`Upload failed: ${(err as Error).message}`);
-        setState("upload");
-        apiDoneRef.current = false;
-        pipelineDoneRef.current = false;
-        resultRef.current = null;
-      } finally {
-        setIsPending(false);
-      }
-    },
-    [tryShowVerdict]
-  );
-
-  const handlePipelineComplete = useCallback(() => {
-    pipelineDoneRef.current = true;
-    if (apiDoneRef.current) {
-      tryShowVerdict();
-    } else {
-      setState("waiting");
-    }
-  }, [tryShowVerdict]);
+  const handleHumanRejected = useCallback(() => {
+    setState("upload");
+    setPendingRunId(null);
+    setFileName("");
+    setCurrentRun(null);
+  }, []);
 
   const handleReset = useCallback(() => {
     setState("upload");
     setResult(null);
     setFileName("");
-    apiDoneRef.current = false;
-    pipelineDoneRef.current = false;
-    resultRef.current = null;
+    setPendingRunId(null);
+    setCurrentRun(null);
+    setFailureInfo(null);
   }, []);
-
-  useEffect(() => {
-    if (state !== "waiting") return;
-    const interval = setInterval(() => {
-      if (apiDoneRef.current && resultRef.current) {
-        setResult(resultRef.current);
-        setState("verdict");
-        clearInterval(interval);
-      }
-    }, 300);
-    return () => clearInterval(interval);
-  }, [state]);
 
   return (
     <div className="min-h-screen bg-background transition-colors duration-300 flex flex-col">
@@ -110,7 +112,8 @@ export default function App() {
 
       <main className="flex-1 mx-auto w-full max-w-6xl px-6 lg:px-8 py-16">
         <AnimatePresence mode="wait">
-          {/* ============ UPLOAD PAGE ============ */}
+
+          {/* ── UPLOAD ── */}
           {state === "upload" && (
             <motion.div
               key="upload"
@@ -120,7 +123,6 @@ export default function App() {
               transition={{ duration: 0.4 }}
               className="space-y-20"
             >
-              {/* Hero header */}
               <div className="text-center">
                 <h1 className="font-serif text-4xl lg:text-5xl font-bold tracking-tight text-text-primary">
                   Review your contract
@@ -131,7 +133,6 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Two-column hero grid */}
               <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-8 items-start -mt-10">
                 <UploadForm onSubmit={handleSubmit} isPending={isPending} />
                 <div className="space-y-4">
@@ -140,25 +141,21 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Methodology */}
               <MethodologySection />
-
-              {/* Trust & Security */}
               <TrustSecurity />
             </motion.div>
           )}
 
-          {/* ============ ANALYZING PAGE ============ */}
-          {(state === "pipeline" || state === "waiting") && (
+          {/* ── PROCESSING ── */}
+          {state === "processing" && (
             <motion.div
-              key="pipeline"
+              key="processing"
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.4 }}
               className="space-y-12"
             >
-              {/* Header */}
               <div className="text-center">
                 <h1 className="font-serif text-4xl lg:text-5xl font-bold text-text-primary">
                   Analyzing your contract
@@ -170,38 +167,128 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Two-column: insights left, pipeline right */}
               <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-8 items-start">
-                <AIEngineInsights
-                  fileName={fileName}
-                  charCount={42852}
-                />
+                <AIEngineInsights fileName={fileName} charCount={42852} />
                 <div className="rounded-2xl border border-border bg-surface p-8 space-y-10">
-                  <PipelineTracker onComplete={handlePipelineComplete} />
+                  <PipelineTracker
+                    stages={currentRun?.stages ?? []}
+                    runState={currentRun?.state ?? null}
+                  />
                   <div className="border-t border-border pt-8">
                     <PipelineMethodology />
                   </div>
                 </div>
               </div>
 
-              {/* Status pill */}
-              <div className="text-center space-y-3">
+              <div className="text-center">
                 <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-5 py-2.5">
                   <span className="h-2 w-2 rounded-full bg-risk-low animate-pulse" />
                   <span className="text-sm font-medium text-text-primary">
                     AI Engine running at peak performance
                   </span>
                 </div>
-                <p className="text-sm italic text-text-secondary">
-                  {state === "waiting"
-                    ? "Finalizing verdict..."
-                    : "This usually takes 15-30 seconds. Do not refresh this page."}
+                <p className="mt-2 text-sm italic text-text-secondary">
+                  This usually takes 15–30 seconds. Do not refresh this page.
                 </p>
               </div>
             </motion.div>
           )}
 
-          {/* ============ VERDICT PAGE ============ */}
+          {/* ── FAILED ── */}
+          {state === "failed" && (
+            <motion.div
+              key="failed"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.4 }}
+              className="space-y-8"
+            >
+              <div className="text-center">
+                <h1 className="font-serif text-4xl lg:text-5xl font-bold text-text-primary mb-3">
+                  Analysis Failed
+                </h1>
+                <p className="text-lg text-text-secondary max-w-xl mx-auto">
+                  Something went wrong while processing{" "}
+                  <span className="italic text-text-primary">{fileName}</span>.
+                </p>
+              </div>
+
+              <div className="max-w-2xl mx-auto space-y-4">
+                {/* Error card */}
+                <div className="rounded-2xl border border-risk-high/30 bg-risk-high/5 p-6 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <XCircle className="h-5 w-5 text-risk-high shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-risk-high uppercase tracking-wide">
+                        {failureInfo?.stage && failureInfo.stage !== "unknown"
+                          ? `Stage Failed: ${failureInfo.stage.replace(/_/g, " ")}`
+                          : "Pipeline Error"}
+                      </p>
+                      <p className="text-sm text-text-secondary leading-relaxed">
+                        {failureInfo?.error ?? "An unexpected error occurred."}
+                      </p>
+                    </div>
+                  </div>
+
+                  {failureInfo?.runId && (
+                    <div className="border-t border-risk-high/15 pt-3">
+                      <p className="text-[11px] text-text-secondary/50 font-mono">
+                        Run ID: {failureInfo.runId}
+                      </p>
+                      <p className="text-[11px] text-text-secondary/50 mt-0.5">
+                        Full error details logged to{" "}
+                        <span className="font-mono">logs/failures.jsonl</span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Stage snapshot (if we have run data) */}
+                {currentRun && currentRun.stages.length > 0 && (
+                  <div className="rounded-2xl border border-border bg-surface p-6">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-4">
+                      Pipeline Snapshot
+                    </p>
+                    <PipelineTracker
+                      stages={currentRun.stages}
+                      runState={currentRun.state}
+                    />
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleReset}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Try Again
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── HUMAN REVIEW ── */}
+          {state === "human_review" && pendingRunId && (
+            <motion.div
+              key="human_review"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.4 }}
+            >
+              <HumanReviewPanel
+                runId={pendingRunId}
+                fileName={fileName}
+                onApproved={handleHumanApproved}
+                onRejected={handleHumanRejected}
+              />
+            </motion.div>
+          )}
+
+          {/* ── VERDICT ── */}
           {state === "verdict" && result && (
             <motion.div
               key="verdict"
@@ -217,6 +304,7 @@ export default function App() {
               />
             </motion.div>
           )}
+
         </AnimatePresence>
       </main>
 

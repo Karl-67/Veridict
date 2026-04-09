@@ -13,6 +13,131 @@ from typing import Literal
 from app.backend.models.schemas import BranchReviewOutput, EvidenceRef, Finding, ReviewerVote
 from app.backend.providers.base import StructuredLLMProvider
 
+# ---------------------------------------------------------------------------
+# Enum coercion — small models often return plausible-but-wrong values.
+# We map the most common deviations to a valid literal before Pydantic sees it.
+# ---------------------------------------------------------------------------
+
+_VALID_ISSUE_TYPES = {
+    "liability_exposure", "open_clause", "ambiguity",
+    "exploitability", "weakened_protection", "compliance_failure",
+}
+_ISSUE_TYPE_MAP: dict[str, str] = {
+    # indemnification / liability variants
+    "indemnification": "liability_exposure",
+    "indemnity": "liability_exposure",
+    "liability": "liability_exposure",
+    "limitation_of_liability": "liability_exposure",
+    "unlimited_liability": "liability_exposure",
+    # vague / undefined clause variants
+    "termination": "open_clause",
+    "payment": "open_clause",
+    "force_majeure": "open_clause",
+    "notice": "open_clause",
+    "undefined_term": "open_clause",
+    "missing_term": "open_clause",
+    # protection / IP / confidentiality variants
+    "warranty": "weakened_protection",
+    "intellectual_property": "weakened_protection",
+    "ip": "weakened_protection",
+    "confidentiality": "weakened_protection",
+    "data_protection": "weakened_protection",
+    "non_compete": "weakened_protection",
+    # compliance variants
+    "regulatory": "compliance_failure",
+    "gdpr": "compliance_failure",
+    "anti_bribery": "compliance_failure",
+}
+
+_VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+_VALID_RECOMMENDATIONS = {"negotiate", "reject", "accept_with_note", "seek_legal_advice"}
+
+
+def _coerce_issue_type(value: str) -> str:
+    v = value.lower().strip().replace(" ", "_").replace("-", "_")
+    if v in _VALID_ISSUE_TYPES:
+        return v
+    if v in _ISSUE_TYPE_MAP:
+        return _ISSUE_TYPE_MAP[v]
+    # Keyword-based fallback
+    if any(k in v for k in ("liab", "indemn", "penalty", "damages")):
+        return "liability_exposure"
+    if any(k in v for k in ("comply", "regulat", "gdpr", "law", "statute")):
+        return "compliance_failure"
+    if any(k in v for k in ("vague", "ambig", "unclear", "undefined")):
+        return "ambiguity"
+    if any(k in v for k in ("exploit", "attack", "weaponiz")):
+        return "exploitability"
+    if any(k in v for k in ("protect", "weak", "ip", "warrant", "confid")):
+        return "weakened_protection"
+    return "open_clause"  # safest generic fallback
+
+
+def _coerce_level(value: str, valid: set[str], default: str) -> str:
+    v = value.lower().strip() if isinstance(value, str) else default
+    return v if v in valid else default
+
+
+def _coerce_recommendation(value: str) -> str:
+    v = value.lower().strip().replace(" ", "_").replace("-", "_") if isinstance(value, str) else "seek_legal_advice"
+    if v in _VALID_RECOMMENDATIONS:
+        return v
+    if "reject" in v:
+        return "reject"
+    if "accept" in v or "note" in v:
+        return "accept_with_note"
+    if "negot" in v:
+        return "negotiate"
+    return "seek_legal_advice"
+
+
+def _normalize_vote_raw(raw: dict, reviewer_index: int) -> dict:
+    """Coerce model vote output to valid ranges before Pydantic sees it."""
+    # correctness_score: model may use 0-10 or 0-100 scale instead of 0-1
+    score = raw.get("correctness_score", 0.0)
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        score = 0.5
+    if score > 1.0:
+        # Detect scale: >10 → assume 0-100, else assume 0-10
+        score = score / 100.0 if score > 10 else score / 10.0
+    score = max(0.0, min(1.0, score))
+
+    # supported_reviewer_indexes: filter to valid 1-3
+    raw_supported = raw.get("supported_reviewer_indexes", [])
+    if not isinstance(raw_supported, list):
+        raw_supported = []
+    supported = [
+        int(i) for i in raw_supported
+        if isinstance(i, (int, float)) and 1 <= int(i) <= 3
+    ]
+
+    # accepted_finding_keys: must be a list of strings
+    raw_keys = raw.get("accepted_finding_keys", [])
+    if not isinstance(raw_keys, list):
+        raw_keys = []
+    accepted_keys = [str(k) for k in raw_keys if isinstance(k, str)]
+
+    return {
+        "reviewer_index": reviewer_index,
+        "supported_reviewer_indexes": supported,
+        "accepted_finding_keys": accepted_keys,
+        "correctness_score": score,
+        "rationale": raw.get("rationale"),
+    }
+
+
+def _normalize_finding_item(item: dict) -> dict:
+    """Coerce model output fields to valid enum values before Pydantic validation."""
+    item = dict(item)
+    item["issue_type"] = _coerce_issue_type(item.get("issue_type", ""))
+    item["severity"] = _coerce_level(item.get("severity", ""), _VALID_SEVERITIES, "medium")
+    item["exploitability"] = _coerce_level(item.get("exploitability", ""), _VALID_SEVERITIES, "medium")
+    item["business_impact"] = _coerce_level(item.get("business_impact", ""), _VALID_SEVERITIES, "medium")
+    item["recommendation"] = _coerce_recommendation(item.get("recommendation", ""))
+    return item
+
 ReviewerRole = Literal["issue_discovery", "false_positive_challenge", "exploitability_impact"]
 
 _ROLE_BY_INDEX: dict[int, ReviewerRole] = {
@@ -56,14 +181,12 @@ _FINDING_ITEM_SCHEMA: dict = {
         },
         "recommendation_detail": {"type": "string"},
     },
-    "additionalProperties": False,
 }
 
 REVIEWER_OUTPUT_SCHEMA: dict = {
     "type": "object",
     "required": ["findings"],
     "properties": {"findings": {"type": "array", "items": _FINDING_ITEM_SCHEMA}},
-    "additionalProperties": False,
 }
 
 REVIEWER_VOTE_SCHEMA: dict = {
@@ -72,16 +195,15 @@ REVIEWER_VOTE_SCHEMA: dict = {
     "properties": {
         "supported_reviewer_indexes": {
             "type": "array",
-            "items": {"type": "integer", "minimum": 1, "maximum": 3},
+            "items": {"type": "integer"},
         },
         "accepted_finding_keys": {
             "type": "array",
             "items": {"type": "string"},
         },
-        "correctness_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "correctness_score": {"type": "number"},
         "rationale": {"type": "string"},
     },
-    "additionalProperties": False,
 }
 
 _ISSUE_DISCOVERY_SYSTEM = """\
@@ -180,7 +302,8 @@ def _assemble_branch_output(
     clauses_by_uid = {clause["clause_uid"]: clause for clause in clause_index}
     findings: list[Finding] = []
 
-    for item in raw.get("findings", []):
+    for raw_item in raw.get("findings", []):
+        item = _normalize_finding_item(raw_item)
         clause_uid = item.get("clause_uid")
         clause = clauses_by_uid.get(clause_uid)
         if not clause:
@@ -193,9 +316,9 @@ def _assemble_branch_output(
                 severity=item["severity"],
                 exploitability=item["exploitability"],
                 business_impact=item["business_impact"],
-                description=item["description"],
+                description=item.get("description", ""),
                 recommendation=item["recommendation"],
-                recommendation_detail=item["recommendation_detail"],
+                recommendation_detail=item.get("recommendation_detail", ""),
                 evidence=[
                     EvidenceRef(
                         document_hash=clause["document_hash"],
@@ -260,13 +383,7 @@ class HarveyReviewerAgent:
             + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
         )
         raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
-        return ReviewerVote(
-            reviewer_index=self._reviewer_index,
-            supported_reviewer_indexes=raw.get("supported_reviewer_indexes", []),
-            accepted_finding_keys=raw.get("accepted_finding_keys", []),
-            correctness_score=raw["correctness_score"],
-            rationale=raw.get("rationale"),
-        )
+        return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))
 
 
 class KiraReviewerAgent:
@@ -308,13 +425,7 @@ class KiraReviewerAgent:
             + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
         )
         raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
-        return ReviewerVote(
-            reviewer_index=self._reviewer_index,
-            supported_reviewer_indexes=raw.get("supported_reviewer_indexes", []),
-            accepted_finding_keys=raw.get("accepted_finding_keys", []),
-            correctness_score=raw["correctness_score"],
-            rationale=raw.get("rationale"),
-        )
+        return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))
 
 
 class FinalReviewerAgent:
@@ -365,10 +476,4 @@ class FinalReviewerAgent:
             + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
         )
         raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
-        return ReviewerVote(
-            reviewer_index=self._reviewer_index,
-            supported_reviewer_indexes=raw.get("supported_reviewer_indexes", []),
-            accepted_finding_keys=raw.get("accepted_finding_keys", []),
-            correctness_score=raw["correctness_score"],
-            rationale=raw.get("rationale"),
-        )
+        return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))

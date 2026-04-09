@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, UploadFile, status
 from sse_starlette.sse import EventSourceResponse
 
@@ -11,10 +14,32 @@ from app.backend.services.run_service import create_run, get_run_detail, submit_
 
 router = APIRouter(prefix="/api", tags=["runs"])
 
+_FAILURE_LOG = Path("logs/failures.jsonl")
+
 
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/failures")
+async def get_failures(limit: int = 50) -> list[dict]:
+    """Return the last `limit` entries from the structured failure log."""
+    if not _FAILURE_LOG.exists():
+        return []
+    lines = _FAILURE_LOG.read_text(encoding="utf-8").splitlines()
+    entries: list[dict] = []
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+        if len(entries) >= limit:
+            break
+    return entries
 
 
 @router.post("/runs", response_model=RunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
