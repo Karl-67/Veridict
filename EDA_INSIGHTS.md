@@ -13,25 +13,21 @@
 4. [ContractNLI](#4-contractnli)
 5. [Material Contracts (SEC)](#5-material-contracts-sec)
 6. [Cross-Dataset Comparison](#6-cross-dataset-comparison)
-7. [LLM Training Readiness](#7-llm-training-readiness)
-8. [Recommendations](#8-recommendations)
+7. [Token Budget and Imbalance Summary](#7-token-budget-and-imbalance-summary)
+8. [Data Quality Flags](#8-data-quality-flags)
 
 ---
 
 ## 1. Dataset Overview
 
-| Dataset | Role | Rows | Granularity | Labels |
-|---------|------|-----:|-------------|--------|
-| Atticus (CUAD) | Supervised / Classification | 13,823 | Clause | 41 clause types |
-| LEDGAR | Supervised / Classification | 80,000 | Clause | 100 provision types |
-| ContractNLI | Reasoning / NLI | 9,788 | Premise–Hypothesis pairs | 3 (entail / contradict / neutral) |
-| Material Contracts (SEC) | Raw / Pretraining | 804 | Full document | 52 doc types |
-| RISCBAC | Raw / Pretraining | 10,000 | Full document | — (⚠️ pending) |
+| Dataset | Rows | Granularity | Labels |
+|---------|-----:|-------------|--------|
+| Atticus (CUAD) | 13,823 | Clause | 41 clause types |
+| LEDGAR | 80,000 | Clause | 100 provision types |
+| ContractNLI | 9,788 | Premise–Hypothesis pairs | 3 (entail / contradict / neutral) |
+| Material Contracts (SEC) | 804 | Full document | 52 doc types |
+| RISCBAC | 10,000 | Full document | — (⚠️ pending) |
 
-The pipeline is structured around **3 task roles**:
-- **Supervised / Classification** — Atticus + LEDGAR → clause tagging and labeling
-- **Reasoning / NLI** — ContractNLI → claim validation against contract text
-- **Raw / Pretraining** — Material + RISCBAC → continued pretraining and retrieval
 
 ---
 
@@ -240,27 +236,29 @@ The two supervised datasets use **different labeling schemes**. CUAD uses 41 spe
 
 ---
 
-## 7. LLM Training Readiness
+## 7. Token Budget and Imbalance Summary
 
-### Token Budget Summary (Supervised / Clause-Level)
+### Token Budget (Clause-Level Datasets)
 
 | Metric | Value |
 |--------|------:|
-| Combined supervised samples (CUAD + LEDGAR) | 93,823 |
+| Combined clause samples (CUAD + LEDGAR) | 93,823 |
 | Median estimated tokens | 99 |
 | 95th percentile tokens | 381 |
 | 99th percentile tokens | 604 |
 | Samples needing chunking (>2048 tokens) | **0** |
 
-> **Clause-level training is extremely LLM-friendly.** The entire supervised dataset fits within a 512-token window for 95% of samples, and nothing requires chunking. This makes fine-tuning both fast and memory-efficient.
+> Clause-level data (CUAD, LEDGAR, ContractNLI premises) fits almost entirely within a 512-token window — nothing requires chunking. Material Contracts are a different story: only 5% fit at 512 tokens; 16k context is needed to cover 99.6% without chunking.
 
-### By Task Role
+### Context Window Requirements by Dataset
 
-| Role | Dataset | Context Window Needed | Chunking Required? |
-|------|---------|----------------------|--------------------|
-| Classification | CUAD + LEDGAR | 512 tokens | No |
-| NLI / Reasoning | ContractNLI | 512 tokens | No (99.2% fit) |
-| Pretraining | Material Contracts | 4k–16k tokens | Yes (47–95% of docs) |
+| Dataset | Context Window | % That Fit |
+|---------|---------------|----------:|
+| CUAD | 512 tokens | 99.9% |
+| LEDGAR | 512 tokens | 97.7% |
+| ContractNLI pairs | 512 tokens | 99.2% |
+| Material Contracts | 4,096 tokens | 53.1% |
+| Material Contracts | 16,384 tokens | 99.6% |
 
 ### Class Imbalance Summary
 
@@ -274,54 +272,25 @@ Both supervised datasets have severe imbalance. This is a **critical issue** for
 
 ---
 
-## 8. Recommendations
+## 8. Data Quality Flags
 
-### Data Cleaning (Do Before Training)
+Issues to address before using any dataset downstream:
 
-1. **CUAD:** Remove `is_impossible=True` rows and de-duplicate by `clause_text`. This eliminates ~15% of rows but significantly improves signal quality.
-2. **LEDGAR:** Remove or merge the bottom 10 labels (<100 samples each) into an "Other" class, or apply oversampling (SMOTE on embeddings, or in-context data augmentation with an LLM).
-3. **Material Contracts:** Filter rows where `full_text` is empty or under 100 words.
-
-### Training Strategy
-
-**Model 1 — Clause Classifier**
-- Data: CUAD + LEDGAR (clean, de-duplicated)
-- Architecture: LegalBERT or RoBERTa-base, sequence classification
-- Context: 512 tokens (covers 97%+ of data)
-- Key issue: Handle 169.7× imbalance with class-weighted cross-entropy
-- Recommended split: Use LEDGAR's official splits; add CUAD with 80/10/10 stratified by clause_type
-
-**Model 2 — Contract NLI / Reasoning**
-- Data: ContractNLI
-- Architecture: BERT-style cross-encoder (premise + hypothesis in single input)
-- Context: 512 tokens (99.2% fit)
-- Key issue: Contradiction class is underrepresented (11.3%) — consider 2× oversampling
-- Use provided train/dev/test splits for fair evaluation
-
-**Model 3 — Document Encoder / Retriever**
-- Data: Material Contracts (SEC)
-- Architecture: Long-context model (e.g., Longformer, BigBird) or chunked embeddings
-- Context: 4k–16k tokens required
-- Use for retrieval-augmented generation (RAG) over full contracts
-
-### Recommended Split Ratios
-
-| Dataset | Train | Val | Test | Strategy |
-|---------|------:|----:|-----:|---------|
-| CUAD | 80% | 10% | 10% | Stratify by clause_type |
-| LEDGAR | 75% | 12.5% | 12.5% | Use official splits |
-| ContractNLI | 70% | 10% | 20% | Use official splits |
-| Material | 70% | 15% | 15% | Stratify by doc_type |
-
-### Priority Flags
-
-| Flag | Dataset | Action |
+| Flag | Dataset | Detail |
 |------|---------|--------|
-| 🔴 Severe imbalance | CUAD, LEDGAR | Weighted loss + oversampling |
-| 🟡 Contradiction underrepresented | ContractNLI | Mild oversampling (2×) |
-| 🟡 15% duplicates | CUAD | De-duplicate before split |
-| 🔴 Document length | Material Contracts | Chunking pipeline required |
-| ⚠️ RISCBAC unavailable | RISCBAC | Manual download from GRAAL server |
+| 🔴 Severe imbalance (94.6×) | CUAD | Top label (Parties, 2,554) vs bottom (Price Restrictions, 27) |
+| 🔴 Severe imbalance (169.7×) | LEDGAR | Top label (Financings, 4,243) vs bottom (Capitalization, 25) |
+| 🟡 Contradiction underrepresented | ContractNLI | 11.3% contradiction vs 46.4% entailment |
+| 🟡 15% duplicates | CUAD | 2,140 duplicate clause spans — filter before use |
+| 🟡 Short/noise rows | CUAD | 1,619 clauses under 3 words — likely impossible-answer spans |
+| 🔴 Document length | Material Contracts | Only 5% fit in 512 tokens; 16k context covers 99.6% |
+| 🟡 Missing governing law | Material Contracts | 27% of rows have "N/A" for `governing_law` |
+| ⚠️ RISCBAC unavailable | RISCBAC | GRAAL server unreachable — manual download required |
+
+**Minimum cleaning steps before any use:**
+1. **CUAD:** Filter `is_impossible=True` rows; de-duplicate on `clause_text`
+2. **LEDGAR:** Flag or merge bottom-quartile labels (<100 samples) — too few for reliable signal
+3. **Material Contracts:** Drop rows where `full_text` is empty or under 100 words
 
 ---
 
