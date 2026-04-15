@@ -9,8 +9,8 @@ const ITEMS = [
 
 export default function RecentActivity() {
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
+    <div className="rounded-2xl border border-border bg-surface p-4">
+      <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs font-bold uppercase tracking-widest text-accent">
           Recent Activity
         </h3>
@@ -21,13 +21,13 @@ export default function RecentActivity() {
           View All
         </a>
       </div>
-      <div>
+      <div className="space-y-1">
         {ITEMS.map((item, i) => (
           <div
             key={i}
             className={cn(
-              "flex items-center gap-3 py-3 border-b border-border/60 last:border-0 hover:bg-drop-zone/20 transition-colors cursor-pointer -mx-2 px-2",
-              item.accent && "border-l-2 border-l-accent ml-0 pl-2"
+              "flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-drop-zone cursor-pointer",
+              item.accent && "border-l-2 border-accent"
             )}
           >
             <FileText className="h-4 w-4 text-text-secondary/60 shrink-0" />

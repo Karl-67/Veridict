@@ -99,8 +99,7 @@ export default function VerdictCard({
   const risk = riskConfig[result.risk_level];
   const RiskIcon = risk.icon;
 
-  const alignmentScore =
-    result.risk_level === "high" ? 42 : result.risk_level === "medium" ? 65 : 88;
+  const alignmentScore = result.risk_level === "high" ? 42 : result.risk_level === "medium" ? 65 : 88;
 
   return (
     <motion.div
@@ -110,7 +109,7 @@ export default function VerdictCard({
       transition={{ duration: 0.5 }}
       className="w-full"
     >
-      {/* Page header */}
+      {/* Centered header */}
       <div className="text-center mb-8">
         <h1 className="font-serif text-4xl lg:text-5xl font-bold text-text-primary mb-3">
           Your Verdict
@@ -120,44 +119,58 @@ export default function VerdictCard({
           <span className="italic text-text-primary">{fileName}</span>
         </p>
         <div className="flex justify-center">
-          <div className={cn("inline-flex items-center gap-2 rounded-full px-5 py-2", risk.bg)}>
+          <div
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full px-5 py-2",
+              risk.bg
+            )}
+          >
             <RiskIcon className={cn("h-4 w-4", risk.color)} />
-            <span className={cn("text-xs font-bold tracking-widest", risk.color)}>
+            <span
+              className={cn("text-xs font-bold tracking-widest", risk.color)}
+            >
               {risk.label}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Summary — ONE kept container */}
+      {/* Quote panel */}
       <div className="rounded-2xl border border-border bg-surface p-8 lg:p-10 mb-10">
         <p className="text-center font-serif text-lg lg:text-xl italic leading-relaxed text-text-primary/85">
           &ldquo;{result.summary}&rdquo;
         </p>
       </div>
 
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-16 items-start">
-
-        {/* ── Left column ── */}
-        <div className="space-y-14">
-
+      {/* Two-column grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-8 items-start">
+        {/* Left column */}
+        <div className="space-y-8">
           {/* Flagged Clauses */}
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-6 pb-3 border-b border-border">
-              Flagged Clauses &amp; Document Text
-            </h3>
-            <div>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-px flex-1 bg-border" />
+              <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary whitespace-nowrap">
+                Flagged Clauses &amp; Document Text
+              </h3>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <div className="space-y-4">
               {result.clause_flags.map((flag, i) => (
-                <div key={i} className="border-b border-border/60 last:border-0">
+                <div
+                  key={i}
+                  className="rounded-2xl border border-border bg-surface overflow-hidden"
+                >
                   <button
-                    onClick={() => setExpandedClause(expandedClause === i ? null : i)}
-                    className="flex w-full items-center justify-between py-4 text-left cursor-pointer"
+                    onClick={() =>
+                      setExpandedClause(expandedClause === i ? null : i)
+                    }
+                    className="flex w-full items-center justify-between px-5 py-4 text-left cursor-pointer"
                   >
                     <div className="flex items-center gap-3">
                       <span
                         className={cn(
-                          "rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+                          "rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
                           severityStyles[flag.severity]
                         )}
                       >
@@ -169,7 +182,6 @@ export default function VerdictCard({
                     </div>
                     <ChevronsUpDown className="h-4 w-4 text-text-secondary/50 shrink-0" />
                   </button>
-
                   <AnimatePresence>
                     {expandedClause === i && (
                       <motion.div
@@ -179,11 +191,13 @@ export default function VerdictCard({
                         transition={{ duration: 0.2 }}
                         className="overflow-hidden"
                       >
-                        <div className="pb-5 pl-4 border-l-2 border-accent/30 ml-0 space-y-2">
-                          <p className="text-sm italic text-text-secondary leading-relaxed">
-                            &ldquo;{flag.issue}&rdquo;
-                          </p>
-                          <p className="text-xs text-text-primary/70">
+                        <div className="px-5 pb-5 space-y-3">
+                          <div className="rounded-xl bg-drop-zone border border-border p-4">
+                            <p className="text-sm italic text-text-secondary leading-relaxed">
+                              &ldquo;{flag.issue}&rdquo;
+                            </p>
+                          </div>
+                          <p className="text-sm text-text-primary/80">
                             This clause requires immediate legal review and
                             potential renegotiation.
                           </p>
@@ -196,92 +210,104 @@ export default function VerdictCard({
             </div>
           </div>
 
-          {/* Compliance Benchmarking — table only, no wrapper card */}
+          {/* Compliance Benchmarking */}
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-6 pb-3 border-b border-border">
-              Compliance Benchmarking
-            </h3>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="pb-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
-                    Metric
-                  </th>
-                  <th className="pb-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
-                    This Document
-                  </th>
-                  <th className="pb-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
-                    Industry Avg
-                  </th>
-                  <th className="pb-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
-                    Firm Standard
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {BENCHMARKS.map((row) => (
-                  <tr key={row.metric} className="border-b border-border/50 last:border-0">
-                    <td className="py-3 font-medium text-text-primary">
-                      {row.metric}
-                    </td>
-                    <td
-                      className={cn(
-                        "py-3 font-medium",
-                        row.documentFlag ? "text-risk-high" : "text-text-primary"
-                      )}
-                    >
-                      {row.document}
-                    </td>
-                    <td className="py-3 text-text-secondary">{row.industry}</td>
-                    <td className="py-3 text-text-secondary">{row.firm}</td>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-px flex-1 bg-border" />
+              <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary whitespace-nowrap">
+                Compliance Benchmarking
+              </h3>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
+                      Metric
+                    </th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
+                      This Document
+                    </th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
+                      Industry Avg
+                    </th>
+                    <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-widest text-text-secondary">
+                      Firm Standard
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {BENCHMARKS.map((row) => (
+                    <tr key={row.metric} className="border-b border-border last:border-0">
+                      <td className="px-5 py-3 font-medium text-text-primary">
+                        {row.metric}
+                      </td>
+                      <td
+                        className={cn(
+                          "px-5 py-3 font-medium",
+                          row.documentFlag ? "text-risk-high" : "text-text-primary"
+                        )}
+                      >
+                        {row.document}
+                      </td>
+                      <td className="px-5 py-3 text-text-secondary">
+                        {row.industry}
+                      </td>
+                      <td className="px-5 py-3 text-text-secondary">
+                        {row.firm}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
-            {/* Alignment score */}
-            <div className="mt-5 pt-5 border-t border-border">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary">
-                  Overall Alignment Score
-                </span>
-                <span className="text-2xl font-bold text-text-primary">
-                  {alignmentScore}%
-                </span>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-border overflow-hidden">
-                <div
-                  className={cn(
-                    "h-full rounded-full transition-all duration-1000",
-                    alignmentScore >= 70
-                      ? "bg-risk-low"
-                      : alignmentScore >= 50
-                        ? "bg-risk-medium"
-                        : "bg-risk-high"
-                  )}
-                  style={{ width: `${alignmentScore}%` }}
-                />
+              {/* Alignment score */}
+              <div className="px-5 py-4 bg-drop-zone/50">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary">
+                    Overall Alignment Score
+                  </span>
+                  <span className="text-2xl font-bold text-text-primary">
+                    {alignmentScore}%
+                  </span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-border overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all duration-1000",
+                      alignmentScore >= 70
+                        ? "bg-risk-low"
+                        : alignmentScore >= 50
+                          ? "bg-risk-medium"
+                          : "bg-risk-high"
+                    )}
+                    style={{ width: `${alignmentScore}%` }}
+                  />
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* ── Right column ── */}
-        <div className="space-y-12 lg:mt-12">
-
-          {/* Legal Team Notes — no cards, just entries */}
+        {/* Right column */}
+        <div className="space-y-6 lg:mt-12">
+          {/* Legal Team Notes */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-4">
               Legal Team Notes
             </h3>
-            <div>
+            <div className="space-y-3">
               {LEGAL_NOTES.map((note, i) => (
-                <div key={i} className="py-4 border-b border-border/50 last:border-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                <div
+                  key={i}
+                  className="rounded-xl border border-border bg-surface p-4 border-l-2 border-l-accent/40"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-semibold text-text-primary">
                       {note.author}
                     </span>
-                    <span className="text-xs text-text-secondary/60">
+                    <span className="text-xs text-text-secondary">
                       {note.time}
                     </span>
                   </div>
@@ -291,27 +317,28 @@ export default function VerdictCard({
                 </div>
               ))}
             </div>
-            <div className="mt-4 relative">
+            {/* Comment input */}
+            <div className="mt-3 relative">
               <textarea
                 placeholder="Add a comment..."
                 rows={2}
-                className="w-full border-b border-border bg-transparent px-0 py-2 text-sm text-text-primary placeholder:text-text-secondary/40 resize-none focus:outline-none focus:border-accent/50 transition-colors"
+                className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-text-primary placeholder:text-text-secondary/50 resize-none focus:outline-none focus:border-accent/50"
               />
-              <button className="absolute bottom-3 right-0 text-accent hover:text-accent-hover transition-colors cursor-pointer">
+              <button className="absolute bottom-3 right-3 text-accent hover:text-accent-hover transition-colors cursor-pointer">
                 <Send className="h-4 w-4" />
               </button>
             </div>
           </div>
 
-          {/* Immediate Actions — clean numbered list */}
+          {/* Immediate Actions */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-4">
               Immediate Actions
             </h3>
-            <div className="space-y-4">
+            <div className="space-y-3">
               {result.recommendations.slice(0, 2).map((rec, i) => (
                 <div key={i} className="flex items-start gap-3">
-                  <span className="text-lg font-bold text-accent/40 leading-tight shrink-0 w-6">
+                  <span className="text-2xl font-bold text-accent/40 leading-none">
                     {String(i + 1).padStart(2, "0")}
                   </span>
                   <div>
@@ -329,27 +356,28 @@ export default function VerdictCard({
             </div>
           </div>
 
-          {/* Next Steps — tiered buttons */}
+          {/* Next Steps */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-4">
               Next Steps
             </h3>
-            <div className="space-y-2">
+            <div className="space-y-3">
               <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer">
                 <FileEdit className="h-4 w-4" />
                 Generate Redline
               </button>
-              <button className="flex w-full items-center justify-center gap-2 rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-text-secondary hover:text-text-primary hover:border-text-secondary/40 transition-colors cursor-pointer">
+              <button className="flex w-full items-center justify-center gap-2 rounded-xl bg-text-primary/10 px-4 py-3 text-sm font-semibold text-text-primary hover:bg-text-primary/15 transition-colors cursor-pointer">
                 <CalendarDays className="h-4 w-4" />
                 Schedule Partner Review
               </button>
-              <button className="flex w-full items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-text-secondary/60 hover:text-text-secondary transition-colors cursor-pointer">
+              <button className="flex w-full items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 text-sm font-medium text-text-secondary hover:bg-drop-zone hover:text-text-primary transition-colors cursor-pointer">
                 <Download className="h-4 w-4" />
                 Export Report
               </button>
             </div>
           </div>
 
+          {/* Review another */}
           <button
             onClick={onReset}
             className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer mx-auto"

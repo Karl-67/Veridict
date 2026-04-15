@@ -1,6 +1,6 @@
 import { Puzzle, MapPin, Sparkles } from "lucide-react";
 
-const STEPS = [
+const CARDS = [
   {
     icon: Puzzle,
     title: "Structural Auditing",
@@ -27,28 +27,25 @@ export default function MethodologySection() {
       <p className="text-xs font-semibold uppercase tracking-widest text-accent mb-2">
         Our Methodology
       </p>
-      <h2 className="font-serif text-3xl font-bold text-text-primary mb-12">
+      <h2 className="font-serif text-3xl font-bold text-text-primary mb-10">
         The Veridict Process
       </h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-x-16 gap-y-0">
-        {STEPS.map((step, i) => {
-          const Icon = step.icon;
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {CARDS.map((card) => {
+          const Icon = card.icon;
           return (
             <div
-              key={step.title}
-              className="text-left pt-6 border-t border-border md:pr-10 md:last:pr-0"
+              key={card.title}
+              className="rounded-2xl border border-border bg-surface p-6 text-left"
             >
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-[10px] font-bold tracking-widest text-text-secondary/40 uppercase">
-                  0{i + 1}
-                </span>
-                <Icon className="h-4 w-4 text-accent" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent/10 text-accent mb-4">
+                <Icon className="h-5 w-5" />
               </div>
               <h3 className="font-serif text-lg font-bold text-text-primary mb-2">
-                {step.title}
+                {card.title}
               </h3>
               <p className="text-sm leading-relaxed text-text-secondary">
-                {step.description}
+                {card.description}
               </p>
             </div>
           );

@@ -78,22 +78,12 @@ def resolve_applicable_corpora(tenant_id: str, jurisdiction: str | None, regime:
         raise MissingComplianceScopeError("Jurisdiction and regime are required to resolve Kira corpora.")
     internal = load_internal_playbook_rules(tenant_id, jurisdiction, regime, effective_date)
     external = load_external_compliance_rules(tenant_id, jurisdiction, regime, effective_date)
-    def _flatten(records: list[dict]) -> list:
-        result = []
-        for record in records:
-            rp = record.get("rules_payload")
-            if isinstance(rp, dict):
-                result.extend(rp.get("rules", []))
-            elif isinstance(rp, list):
-                result.extend(rp)
-        return result
-
     return {
         "tenant_id": tenant_id,
         "jurisdiction": jurisdiction,
         "regime": regime,
         "effective_date": (effective_date or date.today()).isoformat(),
-        "internal_rules": _flatten(internal),
-        "external_rules": _flatten(external),
+        "internal_rules": [record["rules_payload"] for record in internal],
+        "external_rules": [record["rules_payload"] for record in external],
         "corpora_records": {"internal": internal, "external": external},
     }

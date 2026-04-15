@@ -49,27 +49,24 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
 
   return (
     <div className="w-full">
-      {/* Drop zone — no dashed box, just a clean centered area */}
+      {/* Drop zone */}
       <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
         onClick={openPicker}
         className={cn(
-          "relative cursor-pointer px-8 py-24 text-center transition-all duration-300",
-          dragOver ? "bg-accent/5" : "hover:bg-drop-zone/40"
+          "relative cursor-pointer rounded-2xl border-2 border-dashed px-6 py-20 transition-all duration-300",
+          dragOver
+            ? "border-accent bg-accent/10"
+            : "border-border bg-surface hover:border-text-secondary/30"
         )}
       >
-        {/* Bottom indicator line */}
-        <div
-          className={cn(
-            "absolute bottom-0 inset-x-0 h-px transition-colors duration-300",
-            dragOver ? "bg-accent" : "bg-border/70"
-          )}
-        />
-
         <div className="flex flex-col items-center gap-3 text-text-secondary">
-          <div className="flex h-12 w-12 items-center justify-center text-accent">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent">
             <Lock className="h-5 w-5" />
           </div>
           <p className="text-base font-medium text-text-primary">
@@ -87,16 +84,18 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
         </div>
       </div>
 
-      {/* File row — inline, not a card */}
+      {/* File row */}
       <AnimatePresence>
         {file && (
           <motion.div
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
-            className="mt-4 flex items-center gap-3 pt-4 border-t border-border"
+            className="mt-3 flex items-center gap-3 rounded-xl bg-drop-zone px-4 py-3"
           >
-            <FileText className="h-4 w-4 text-text-secondary shrink-0" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface">
+              <FileText className="h-4 w-4 text-text-secondary" />
+            </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-text-primary truncate">
                 {file.name}
@@ -109,7 +108,10 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
               Ready
             </span>
             <button
-              onClick={(e) => { e.stopPropagation(); setFile(null); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                setFile(null);
+              }}
               className="text-text-secondary/50 hover:text-text-primary transition-colors cursor-pointer"
             >
               <X className="h-4 w-4" />
@@ -130,16 +132,16 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
       )}
 
       {/* Action row */}
-      <div className="mt-5 flex items-center justify-between">
+      <div className="mt-4 flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-text-secondary/40">
           <Lock className="h-3 w-3" />
-          End-to-end encrypted
+          End-to-end encrypted intelligence
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {file && (
             <button
               onClick={() => setFile(null)}
-              className="text-sm font-medium text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
+              className="rounded-xl border border-border bg-surface px-5 py-2.5 text-sm font-medium text-text-primary hover:bg-drop-zone transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -150,7 +152,7 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
             className={cn(
               "rounded-xl px-6 py-2.5 text-sm font-semibold transition-all duration-200",
               file && !isPending
-                ? "bg-accent text-white hover:bg-accent-hover cursor-pointer"
+                ? "bg-accent text-white hover:bg-accent-hover cursor-pointer shadow-sm"
                 : "bg-border/50 text-text-secondary cursor-not-allowed"
             )}
           >
