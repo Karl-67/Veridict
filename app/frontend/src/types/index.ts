@@ -109,6 +109,49 @@ export interface RunDetail {
   blocked_reason?: string | null;
 }
 
+// ============================================================================
+// Contract versioning types
+// ============================================================================
+
+export interface ContractVersion {
+  id: number;
+  label: string;
+  branch_name: string | null;
+  run_id: string | null;
+  run_state: string | null;
+  risk_level: string | null;
+  filename: string | null;
+  created_at: string;
+}
+
+export interface ContractSummary {
+  id: number;
+  name: string;
+  tenant_id: string;
+  latest_label: string | null;
+  latest_risk: string | null;
+  latest_run_state: string | null;
+  version_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractDetail {
+  id: number;
+  name: string;
+  tenant_id: string;
+  versions: ContractVersion[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AddVersionResponse {
+  run_id: string;
+  label: string;
+  contract_id: number;
+  version_id: number;
+}
+
 export type HumanRunAction = "approved" | "edited" | "rejected";
 
 export interface HumanReviewPayload {

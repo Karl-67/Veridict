@@ -18,6 +18,7 @@ interface VerdictCardProps {
   result: ReviewResult;
   fileName: string;
   onReset: () => void;
+  resetLabel?: string;
 }
 
 const riskConfig = {
@@ -94,6 +95,7 @@ export default function VerdictCard({
   result,
   fileName,
   onReset,
+  resetLabel = "Review another document",
 }: VerdictCardProps) {
   const [expandedClause, setExpandedClause] = useState<number | null>(0);
   const risk = riskConfig[result.risk_level];
@@ -354,7 +356,7 @@ export default function VerdictCard({
             onClick={onReset}
             className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer mx-auto"
           >
-            Review another document
+            {resetLabel}
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>

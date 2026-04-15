@@ -379,6 +379,61 @@ class ComplianceCorpusRecord(Base):
 
 
 # ---------------------------------------------------------------------------
+# ContractRecord
+# A named contract entity that groups one or more versioned runs together.
+# ---------------------------------------------------------------------------
+
+
+class ContractRecord(Base):
+    __tablename__ = "contracts"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    name: str = Column(String(512), nullable=False)
+    tenant_id: str = Column(String(255), nullable=False, index=True)
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    versions = relationship(
+        "ContractVersionRecord",
+        back_populates="contract",
+        cascade="all, delete-orphan",
+        order_by="ContractVersionRecord.id",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ContractVersionRecord
+# One row per uploaded version of a contract.
+# Main branch: branch_letter is NULL, label = "v1", "v2", "v3"
+# Branch:      branch_letter = "a"/"b"/"c", label = "v1a", "v2b"
+# ---------------------------------------------------------------------------
+
+
+class ContractVersionRecord(Base):
+    __tablename__ = "contract_versions"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    contract_id: int = Column(
+        Integer, ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    run_id: str = Column(
+        String(36), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+
+    main_version: int = Column(Integer, nullable=False)       # 1, 2, 3 …
+    branch_letter: str = Column(String(4), nullable=True)     # null = main | 'a','b','c' = branch
+    branch_name: str = Column(String(255), nullable=True)     # optional user-provided label
+
+    label: str = Column(String(32), nullable=False)           # "v1", "v1a", "v2b" …
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    contract = relationship("ContractRecord", back_populates="versions")
+    run = relationship("RunRecord")
+
+
+# ---------------------------------------------------------------------------
 # RunEventRecord
 # Persisted SSE event stream for a run (sse-run-events dependency).
 # Append-only; never updated after insert.

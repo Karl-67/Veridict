@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.backend.core.config import get_settings
 from app.backend.db.session import get_engine
 from app.backend.routes.contracts import router as runs_router
+from app.backend.routes.contract_management import router as contracts_router
 
 
 @asynccontextmanager
@@ -31,3 +32,4 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(runs_router)
+app.include_router(contracts_router)

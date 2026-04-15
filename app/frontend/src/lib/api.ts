@@ -1,4 +1,7 @@
 import type {
+  AddVersionResponse,
+  ContractDetail,
+  ContractSummary,
   FinalVerdict,
   HumanReviewPayload,
   HumanReviewResult,
@@ -128,6 +131,61 @@ export async function submitHumanReview(
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Review submission failed" }));
     throw new Error(error.detail || "Review submission failed");
+  }
+  return response.json();
+}
+
+// ----------------------------------------------------------------------------
+// Contract versioning API
+// ----------------------------------------------------------------------------
+
+export async function listContracts(tenantId = "demo-tenant"): Promise<ContractSummary[]> {
+  const response = await fetch(`${API_BASE}/contracts?tenant_id=${encodeURIComponent(tenantId)}`);
+  if (!response.ok) throw new Error("Failed to fetch contracts");
+  return response.json();
+}
+
+export async function createContract(name: string, tenantId = "demo-tenant"): Promise<ContractSummary> {
+  const response = await fetch(`${API_BASE}/contracts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, tenant_id: tenantId }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to create contract" }));
+    throw new Error(error.detail || "Failed to create contract");
+  }
+  return response.json();
+}
+
+export async function getContract(contractId: number): Promise<ContractDetail> {
+  const response = await fetch(`${API_BASE}/contracts/${contractId}`);
+  if (!response.ok) throw new Error("Failed to fetch contract");
+  return response.json();
+}
+
+export async function addContractVersion(
+  contractId: number,
+  file: File,
+  options: { branchFrom?: number; branchName?: string } = {}
+): Promise<AddVersionResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("tenant_id", DEFAULT_RUN_PARAMS.tenant_id);
+  formData.append("policy_family_id", DEFAULT_RUN_PARAMS.policy_family_id);
+  formData.append("policy_version", DEFAULT_RUN_PARAMS.policy_version);
+  formData.append("jurisdiction", DEFAULT_RUN_PARAMS.jurisdiction);
+  formData.append("regime", DEFAULT_RUN_PARAMS.regime);
+  if (options.branchFrom !== undefined) formData.append("branch_from", String(options.branchFrom));
+  if (options.branchName) formData.append("branch_name", options.branchName);
+
+  const response = await fetch(`${API_BASE}/contracts/${contractId}/versions`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to add version" }));
+    throw new Error(error.detail || "Failed to add version");
   }
   return response.json();
 }

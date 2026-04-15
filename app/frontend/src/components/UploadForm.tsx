@@ -6,9 +6,10 @@ import { cn } from "@/lib/utils";
 interface UploadFormProps {
   onSubmit: (file: File) => void;
   isPending: boolean;
+  disabled?: boolean;
 }
 
-export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
+export default function UploadForm({ onSubmit, isPending, disabled = false }: UploadFormProps) {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,10 +147,10 @@ export default function UploadForm({ onSubmit, isPending }: UploadFormProps) {
           )}
           <button
             onClick={handleSubmit}
-            disabled={!file || isPending}
+            disabled={!file || isPending || disabled}
             className={cn(
               "rounded-xl px-6 py-2.5 text-sm font-semibold transition-all duration-200",
-              file && !isPending
+              file && !isPending && !disabled
                 ? "bg-accent text-white hover:bg-accent-hover cursor-pointer"
                 : "bg-border/50 text-text-secondary cursor-not-allowed"
             )}
