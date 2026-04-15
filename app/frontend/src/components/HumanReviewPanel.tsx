@@ -122,7 +122,7 @@ export default function HumanReviewPanel({
         <motion.div
           initial={{ opacity: 0, height: 0 }}
           animate={{ opacity: 1, height: "auto" }}
-          className="rounded-2xl border border-risk-high/30 bg-risk-high/5 p-6 space-y-4"
+          className="space-y-4 pt-4 border-t border-risk-high/25"
         >
           <p className="text-sm font-semibold text-risk-high">
             Provide a reason for rejection
@@ -132,7 +132,7 @@ export default function HumanReviewPanel({
             onChange={(e) => setRejectionReason(e.target.value)}
             rows={3}
             placeholder="e.g. Insufficient evidence for flagged clauses..."
-            className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-text-primary placeholder:text-text-secondary/50 resize-none focus:outline-none focus:border-risk-high/50"
+            className="w-full border-b border-border bg-transparent px-0 py-2 text-sm text-text-primary placeholder:text-text-secondary/40 resize-none focus:outline-none focus:border-risk-high/50 transition-colors"
           />
           <div className="flex gap-3">
             <button

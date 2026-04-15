@@ -18,18 +18,19 @@ export default function AIEngineInsights({
   ];
 
   return (
-    <div className="rounded-2xl border border-border bg-surface p-6 h-fit">
-      <div className="flex items-center gap-2 mb-6">
+    <div className="h-fit space-y-5">
+      <div className="flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-accent" />
-        <h3 className="text-sm font-semibold text-accent">
+        <h3 className="text-xs font-bold uppercase tracking-widest text-accent">
           AI Engine Insights
         </h3>
       </div>
-      <div className="space-y-4">
+
+      <div className="space-y-0">
         {rows.map((row) => (
           <div
             key={row.label}
-            className="flex items-center justify-between gap-4"
+            className="flex items-center justify-between gap-4 py-3 border-b border-border/50 last:border-0"
           >
             <span className="text-sm text-text-secondary whitespace-nowrap">
               {row.label}
@@ -40,7 +41,7 @@ export default function AIEngineInsights({
               </span>
             ) : row.isBar ? (
               <div className="flex items-center gap-2">
-                <div className="h-1.5 w-16 rounded-full bg-border overflow-hidden">
+                <div className="h-1 w-16 rounded-full bg-border overflow-hidden">
                   <div className="h-full w-[85%] rounded-full bg-accent" />
                 </div>
                 <span className="text-sm font-medium text-text-primary">
@@ -55,12 +56,11 @@ export default function AIEngineInsights({
           </div>
         ))}
       </div>
-      <div className="mt-6 rounded-xl bg-accent/8 border border-accent/15 p-4">
-        <p className="text-xs italic leading-relaxed text-text-secondary">
-          Scanning specifically for indemnification loops and jurisdiction
-          conflicts common in Tech MSA frameworks.
-        </p>
-      </div>
+
+      <p className="text-xs italic leading-relaxed text-text-secondary pt-2 border-t border-border/40">
+        Scanning specifically for indemnification loops and jurisdiction
+        conflicts common in Tech MSA frameworks.
+      </p>
     </div>
   );
 }
