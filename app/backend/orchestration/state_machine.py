@@ -331,7 +331,7 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 {
                     "lineage": lineage,
                     "prior_versions": load_prior_policy_versions(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0),
-                    "playbook_rules": lineage.get("rules_payload", []),
+                    "playbook_rules": (lambda rp: rp.get("rules", []) if isinstance(rp, dict) else (rp or []))(lineage.get("rules_payload")),
                 },
             )
             return

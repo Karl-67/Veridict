@@ -110,7 +110,7 @@ export default function App() {
     <div className="min-h-screen bg-background transition-colors duration-300 flex flex-col">
       <Header />
 
-      <main className="flex-1 mx-auto w-full max-w-6xl px-6 lg:px-8 py-16">
+      <main className="flex-1 mx-auto w-full max-w-[1440px] px-6 sm:px-10 lg:px-14 py-20">
         <AnimatePresence mode="wait">
 
           {/* ── UPLOAD ── */}
@@ -121,21 +121,21 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.4 }}
-              className="space-y-20"
+              className="space-y-24"
             >
               <div className="text-center">
                 <h1 className="font-serif text-4xl lg:text-5xl font-bold tracking-tight text-text-primary">
                   Review your contract
                 </h1>
-                <p className="mt-4 text-lg text-text-secondary max-w-xl mx-auto">
+                <p className="mt-5 text-lg text-text-secondary max-w-2xl mx-auto">
                   Upload your document for a bespoke legal intelligence
                   analysis. Authoritatively precise, instantly delivered.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-8 items-start -mt-10">
+              <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-12 items-start">
                 <UploadForm onSubmit={handleSubmit} isPending={isPending} />
-                <div className="space-y-4">
+                <div className="space-y-6">
                   <RecentActivity />
                   <QuickTip />
                 </div>
@@ -154,27 +154,27 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.4 }}
-              className="space-y-12"
+              className="space-y-16"
             >
               <div className="text-center">
                 <h1 className="font-serif text-4xl lg:text-5xl font-bold text-text-primary">
                   Analyzing your contract
                 </h1>
-                <p className="mt-4 text-lg text-text-secondary max-w-2xl mx-auto">
+                <p className="mt-5 text-lg text-text-secondary max-w-3xl mx-auto">
                   Our Legal Intelligence engine is scanning for risks,
                   inconsistencies, and high-value clauses across your
                   documentation.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-8 items-start">
+              <div className="grid grid-cols-1 lg:grid-cols-[2fr_3fr] gap-14 items-start">
                 <AIEngineInsights fileName={fileName} charCount={42852} />
-                <div className="rounded-2xl border border-border bg-surface p-8 space-y-10">
+                <div className="space-y-10 pt-2">
                   <PipelineTracker
                     stages={currentRun?.stages ?? []}
                     runState={currentRun?.state ?? null}
                   />
-                  <div className="border-t border-border pt-8">
+                  <div className="border-t border-border/60 pt-8">
                     <PipelineMethodology />
                   </div>
                 </div>
@@ -202,7 +202,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.4 }}
-              className="space-y-8"
+              className="space-y-12"
             >
               <div className="text-center">
                 <h1 className="font-serif text-4xl lg:text-5xl font-bold text-text-primary mb-3">
@@ -214,7 +214,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="max-w-2xl mx-auto space-y-4">
+              <div className="max-w-3xl mx-auto space-y-6">
                 {/* Error card */}
                 <div className="rounded-2xl border border-risk-high/30 bg-risk-high/5 p-6 space-y-4">
                   <div className="flex items-start gap-3">

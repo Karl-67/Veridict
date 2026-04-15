@@ -13,7 +13,7 @@ export default function Header({ activePage = "Dashboard" }: HeaderProps) {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-surface/90 backdrop-blur-md">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 lg:px-8 py-4">
+      <div className="mx-auto flex max-w-[1440px] items-center justify-between px-6 sm:px-10 lg:px-14 py-4">
         <div className="flex items-center gap-8">
           <span className="font-serif text-xl font-bold italic tracking-tight text-accent">
             Veridict
