@@ -6,6 +6,8 @@ ORM models backing:
   - docling-canonical-parser (ParsedClauseRecord with bbox, confidence, uid)
   - policy-lineage-and-corpora (PolicyVersionRecord, ComplianceCorpusRecord)
   - human-review-gate        (HumanReviewRecord with per-finding edit provenance)
+  - auth                     (UserRecord)
+  - collaboration            (ContractCommentRecord, FindingCommentRecord)
 """
 
 from __future__ import annotations
@@ -390,6 +392,8 @@ class ContractRecord(Base):
     id: int = Column(Integer, primary_key=True, autoincrement=True)
     name: str = Column(String(512), nullable=False)
     tenant_id: str = Column(String(255), nullable=False, index=True)
+    org_id: str | None = Column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
+    workspace_id: str | None = Column(String(36), ForeignKey("workspaces.id"), nullable=True, index=True)
 
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
@@ -400,6 +404,7 @@ class ContractRecord(Base):
         cascade="all, delete-orphan",
         order_by="ContractVersionRecord.id",
     )
+    workspace = relationship("WorkspaceRecord", foreign_keys=[workspace_id])
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +521,140 @@ class HumanReviewRecord(Base):
     # Relationships
     run = relationship("RunRecord", back_populates="human_reviews")
     finding = relationship("FindingRecord", back_populates="human_reviews")
+
+
+# ---------------------------------------------------------------------------
+# UserRecord — minimal auth: email + hashed password + display name
+# ---------------------------------------------------------------------------
+
+
+class OrganizationRecord(Base):
+    __tablename__ = "organizations"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    name: str = Column(String(255), nullable=False)
+    slug: str = Column(String(64), nullable=False, unique=True)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    users = relationship("UserRecord", back_populates="org")
+    workspaces = relationship("WorkspaceRecord", back_populates="org", cascade="all, delete-orphan")
+    invites = relationship("OrgInviteRecord", back_populates="org", cascade="all, delete-orphan")
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    email: str = Column(String(255), nullable=False, unique=True, index=True)
+    display_name: str = Column(String(128), nullable=False)
+    hashed_password: str = Column(String(255), nullable=False)
+    org_id: str = Column(String(36), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True)
+    org_role: str = Column(String(32), nullable=False, default="member")  # org_admin | member
+    job_title: str = Column(String(128), nullable=True)
+    department: str = Column(String(128), nullable=True)
+    avatar_color: str = Column(String(7), nullable=False, default="#6366f1")
+    failed_login_attempts: int = Column(Integer, nullable=False, default=0)
+    locked_at: datetime = Column(DateTime, nullable=True)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    org = relationship("OrganizationRecord", back_populates="users")
+    contract_comments = relationship("ContractCommentRecord", back_populates="author")
+    finding_comments = relationship("FindingCommentRecord", back_populates="author")
+    workspace_memberships = relationship("WorkspaceMemberRecord", back_populates="user", cascade="all, delete-orphan")
+
+
+class WorkspaceRecord(Base):
+    __tablename__ = "workspaces"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    org_id: str = Column(String(36), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: str = Column(String(255), nullable=False)
+    description: str = Column(Text, nullable=True)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    org = relationship("OrganizationRecord", back_populates="workspaces")
+    members = relationship("WorkspaceMemberRecord", back_populates="workspace", cascade="all, delete-orphan")
+
+
+class WorkspaceMemberRecord(Base):
+    __tablename__ = "workspace_members"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    workspace_id: str = Column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: str = Column(String(32), nullable=False, default="reviewer")  # workspace_admin | reviewer | viewer
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    workspace = relationship("WorkspaceRecord", back_populates="members")
+    user = relationship("UserRecord", back_populates="workspace_memberships")
+
+
+class OrgInviteRecord(Base):
+    __tablename__ = "org_invites"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    org_id: str = Column(String(36), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True)
+    email: str = Column(String(255), nullable=False)
+    org_role: str = Column(String(32), nullable=False, default="member")
+    workspace_id: str = Column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=True)
+    workspace_role: str = Column(String(32), nullable=False, default="reviewer")
+    token: str = Column(String(64), nullable=False, unique=True, index=True)
+    created_by: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    used_at: datetime = Column(DateTime, nullable=True)
+    expires_at: datetime = Column(DateTime, nullable=True)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    org = relationship("OrganizationRecord", back_populates="invites")
+
+
+class RefreshTokenRecord(Base):
+    __tablename__ = "refresh_tokens"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    user_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash: str = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at: datetime = Column(DateTime, nullable=False)
+    revoked: bool = Column(Boolean, nullable=False, default=False)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    user = relationship("UserRecord")
+
+
+# ---------------------------------------------------------------------------
+# ContractCommentRecord — run-level comments shared across the legal team
+# ---------------------------------------------------------------------------
+
+
+class ContractCommentRecord(Base):
+    __tablename__ = "contract_comments"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    run_id: str = Column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    body: str = Column(Text, nullable=False)
+    is_deleted: bool = Column(Boolean, nullable=False, default=False)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    run = relationship("RunRecord")
+    author = relationship("UserRecord", back_populates="contract_comments")
+
+
+# ---------------------------------------------------------------------------
+# FindingCommentRecord — per-finding comments
+# ---------------------------------------------------------------------------
+
+
+class FindingCommentRecord(Base):
+    __tablename__ = "finding_comments"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    run_id: str = Column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    finding_id: str = Column(String(36), nullable=False, index=True)
+    author_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    body: str = Column(Text, nullable=False)
+    is_deleted: bool = Column(Boolean, nullable=False, default=False)
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    author = relationship("UserRecord", back_populates="finding_comments")

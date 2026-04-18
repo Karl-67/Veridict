@@ -1,36 +1,36 @@
 """
-Contract management routes.
+Contract management routes — workspace-scoped.
 
-POST /api/contracts                   — create a named contract
-GET  /api/contracts                   — list all contracts for a tenant
-GET  /api/contracts/{contract_id}     — get contract with all versions + run state
-POST /api/contracts/{id}/versions     — upload a new version (main or branch)
+POST /api/contracts                   — create a contract in a workspace
+GET  /api/contracts                   — list contracts visible to the caller
+GET  /api/contracts/{contract_id}     — get contract + versions
+POST /api/contracts/{id}/versions     — upload a new version
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.backend.core.config import SettingsDep
-from app.backend.db.models import ContractRecord, ContractVersionRecord, RunRecord
+from app.backend.db.models import ContractRecord, ContractVersionRecord, RunRecord, WorkspaceMemberRecord, WorkspaceRecord
 from app.backend.db.session import DbSession
+from app.backend.services.auth_service import require_auth
 from app.backend.services.run_service import create_run
 
 router = APIRouter(prefix="/api/contracts", tags=["contracts"])
 
 
 # ---------------------------------------------------------------------------
-# Pydantic schemas
+# Schemas
 # ---------------------------------------------------------------------------
-
 
 class ContractCreateRequest(BaseModel):
     name: str
-    tenant_id: str = "demo-tenant"
+    workspace_id: str
 
 
 class VersionInfo(BaseModel):
@@ -47,7 +47,8 @@ class VersionInfo(BaseModel):
 class ContractSummary(BaseModel):
     id: int
     name: str
-    tenant_id: str
+    workspace_id: str | None
+    workspace_name: str | None
     latest_label: str | None
     latest_risk: str | None
     latest_run_state: str | None
@@ -59,7 +60,8 @@ class ContractSummary(BaseModel):
 class ContractDetail(BaseModel):
     id: int
     name: str
-    tenant_id: str
+    workspace_id: str | None
+    workspace_name: str | None
     versions: list[VersionInfo]
     created_at: str
     updated_at: str
@@ -68,7 +70,6 @@ class ContractDetail(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 def _risk_from_verdict(verdict_payload: dict | None) -> str | None:
     if not verdict_payload:
@@ -90,43 +91,82 @@ def _version_info(cv: ContractVersionRecord) -> VersionInfo:
     )
 
 
-def _next_main_version(session, contract_id: int) -> int:
-    result = session.execute(
-        select(func.max(ContractVersionRecord.main_version)).where(
-            ContractVersionRecord.contract_id == contract_id,
-            ContractVersionRecord.branch_letter.is_(None),
+async def _assert_workspace_access(db: DbSession, workspace_id: str, token: dict) -> WorkspaceRecord:
+    """Raise 403 if the caller is not an org_admin and not a member of the workspace."""
+    ws = await db.get(WorkspaceRecord, workspace_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    if token.get("org_role") == "org_admin":
+        return ws
+    member = (await db.execute(
+        select(WorkspaceMemberRecord).where(
+            WorkspaceMemberRecord.workspace_id == workspace_id,
+            WorkspaceMemberRecord.user_id == token["sub"],
         )
-    ).scalar()
-    return (result or 0) + 1
+    )).scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    return ws
 
 
-def _next_branch_letter(session, contract_id: int, main_version: int) -> str:
-    count = session.execute(
-        select(func.count(ContractVersionRecord.id)).where(
-            ContractVersionRecord.contract_id == contract_id,
-            ContractVersionRecord.main_version == main_version,
-            ContractVersionRecord.branch_letter.isnot(None),
-        )
-    ).scalar()
-    return chr(ord("a") + (count or 0))
+async def _build_summary(db: DbSession, c: ContractRecord) -> ContractSummary:
+    versions_result = await db.execute(
+        select(ContractVersionRecord)
+        .where(ContractVersionRecord.contract_id == c.id)
+        .order_by(ContractVersionRecord.id.desc())
+    )
+    versions = versions_result.scalars().all()
+    latest = versions[0] if versions else None
+    latest_run = None
+    if latest and latest.run_id:
+        run_result = await db.execute(select(RunRecord).where(RunRecord.id == latest.run_id))
+        latest_run = run_result.scalar_one_or_none()
+    ws_name: str | None = None
+    if c.workspace_id:
+        ws = await db.get(WorkspaceRecord, c.workspace_id)
+        ws_name = ws.name if ws else None
+    return ContractSummary(
+        id=c.id,
+        name=c.name,
+        workspace_id=c.workspace_id,
+        workspace_name=ws_name,
+        latest_label=latest.label if latest else None,
+        latest_risk=_risk_from_verdict(latest_run.verdict_payload if latest_run else None),
+        latest_run_state=latest_run.status if latest_run else None,
+        version_count=len(versions),
+        created_at=c.created_at.isoformat(),
+        updated_at=c.updated_at.isoformat(),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
-
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ContractSummary)
-async def create_contract(payload: ContractCreateRequest, db: DbSession) -> ContractSummary:
+async def create_contract(
+    payload: ContractCreateRequest,
+    db: DbSession,
+    token: dict = Depends(require_auth),
+) -> ContractSummary:
+    ws = await _assert_workspace_access(db, payload.workspace_id, token)
     now = datetime.utcnow()
-    contract = ContractRecord(name=payload.name, tenant_id=payload.tenant_id, created_at=now, updated_at=now)
+    contract = ContractRecord(
+        name=payload.name,
+        tenant_id="org",
+        org_id=token.get("org_id"),
+        workspace_id=payload.workspace_id,
+        created_at=now,
+        updated_at=now,
+    )
     db.add(contract)
     await db.flush()
     await db.refresh(contract)
     return ContractSummary(
         id=contract.id,
         name=contract.name,
-        tenant_id=contract.tenant_id,
+        workspace_id=contract.workspace_id,
+        workspace_name=ws.name,
         latest_label=None,
         latest_risk=None,
         latest_run_state=None,
@@ -137,51 +177,48 @@ async def create_contract(payload: ContractCreateRequest, db: DbSession) -> Cont
 
 
 @router.get("", response_model=list[ContractSummary])
-async def list_contracts(db: DbSession, tenant_id: str = "demo-tenant") -> list[ContractSummary]:
-    result = await db.execute(
-        select(ContractRecord)
-        .where(ContractRecord.tenant_id == tenant_id)
-        .order_by(ContractRecord.updated_at.desc())
-    )
+async def list_contracts(
+    db: DbSession,
+    workspace_id: str | None = None,
+    token: dict = Depends(require_auth),
+) -> list[ContractSummary]:
+    org_id = token.get("org_id")
+    is_admin = token.get("org_role") == "org_admin"
+
+    if workspace_id:
+        await _assert_workspace_access(db, workspace_id, token)
+        q = select(ContractRecord).where(ContractRecord.workspace_id == workspace_id)
+    elif is_admin:
+        # Org admin sees all contracts in the org
+        q = select(ContractRecord).where(ContractRecord.org_id == org_id)
+    else:
+        # Member sees only contracts in their workspaces
+        member_ws = (await db.execute(
+            select(WorkspaceMemberRecord.workspace_id).where(WorkspaceMemberRecord.user_id == token["sub"])
+        )).scalars().all()
+        q = select(ContractRecord).where(ContractRecord.workspace_id.in_(member_ws))
+
+    result = await db.execute(q.order_by(ContractRecord.updated_at.desc()))
     contracts = result.scalars().all()
-
-    summaries = []
-    for c in contracts:
-        versions_result = await db.execute(
-            select(ContractVersionRecord)
-            .where(ContractVersionRecord.contract_id == c.id)
-            .order_by(ContractVersionRecord.id.desc())
-        )
-        versions = versions_result.scalars().all()
-
-        latest = versions[0] if versions else None
-        latest_run = None
-        if latest and latest.run_id:
-            run_result = await db.execute(select(RunRecord).where(RunRecord.id == latest.run_id))
-            latest_run = run_result.scalar_one_or_none()
-
-        summaries.append(
-            ContractSummary(
-                id=c.id,
-                name=c.name,
-                tenant_id=c.tenant_id,
-                latest_label=latest.label if latest else None,
-                latest_risk=_risk_from_verdict(latest_run.verdict_payload if latest_run else None),
-                latest_run_state=latest_run.status if latest_run else None,
-                version_count=len(versions),
-                created_at=c.created_at.isoformat(),
-                updated_at=c.updated_at.isoformat(),
-            )
-        )
-    return summaries
+    return [await _build_summary(db, c) for c in contracts]
 
 
 @router.get("/{contract_id}", response_model=ContractDetail)
-async def get_contract(contract_id: int, db: DbSession) -> ContractDetail:
+async def get_contract(
+    contract_id: int,
+    db: DbSession,
+    token: dict = Depends(require_auth),
+) -> ContractDetail:
     result = await db.execute(select(ContractRecord).where(ContractRecord.id == contract_id))
     contract = result.scalar_one_or_none()
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
+
+    if contract.workspace_id:
+        ws = await _assert_workspace_access(db, contract.workspace_id, token)
+        ws_name = ws.name
+    else:
+        ws_name = None
 
     versions_result = await db.execute(
         select(ContractVersionRecord)
@@ -189,7 +226,6 @@ async def get_contract(contract_id: int, db: DbSession) -> ContractDetail:
         .order_by(ContractVersionRecord.id.asc())
     )
     versions = versions_result.scalars().all()
-
     version_infos = []
     for cv in versions:
         run = None
@@ -202,7 +238,8 @@ async def get_contract(contract_id: int, db: DbSession) -> ContractDetail:
     return ContractDetail(
         id=contract.id,
         name=contract.name,
-        tenant_id=contract.tenant_id,
+        workspace_id=contract.workspace_id,
+        workspace_name=ws_name,
         versions=version_infos,
         created_at=contract.created_at.isoformat(),
         updated_at=contract.updated_at.isoformat(),
@@ -214,10 +251,10 @@ async def add_version(
     contract_id: int,
     db: DbSession,
     settings: SettingsDep,
+    token: dict = Depends(require_auth),
     file: UploadFile = File(...),
     branch_from: int | None = Form(None),
     branch_name: str | None = Form(None),
-    tenant_id: str = Form("demo-tenant"),
     policy_family_id: str = Form("default"),
     policy_version: int = Form(1),
     jurisdiction: str = Form("US"),
@@ -229,17 +266,22 @@ async def add_version(
     if not contract:
         raise HTTPException(status_code=404, detail="Contract not found")
 
-    # Compute version label
-    from sqlalchemy import func as sa_func
-    from sqlalchemy.orm import Session
+    if contract.workspace_id:
+        await _assert_workspace_access(db, contract.workspace_id, token)
 
     if branch_from is not None:
-        # Branch off an existing main version
-        branch_letter = _next_branch_letter(db.sync_session if hasattr(db, 'sync_session') else db, contract_id, branch_from)
+        count_result = await db.execute(
+            select(func.count(ContractVersionRecord.id)).where(
+                ContractVersionRecord.contract_id == contract_id,
+                ContractVersionRecord.main_version == branch_from,
+                ContractVersionRecord.branch_letter.isnot(None),
+            )
+        )
+        count = count_result.scalar() or 0
+        branch_letter = chr(ord("a") + count)
         main_version = branch_from
-        label = f"v{main_version}{branch_letter}"
+        label = f"v{branch_from}{branch_letter}"
     else:
-        # New main version
         main_version_result = await db.execute(
             select(func.max(ContractVersionRecord.main_version)).where(
                 ContractVersionRecord.contract_id == contract_id,
@@ -251,25 +293,10 @@ async def add_version(
         branch_letter = None
         label = f"v{main_version}"
 
-    # If branching, get branch_letter properly via async query
-    if branch_from is not None:
-        count_result = await db.execute(
-            select(func.count(ContractVersionRecord.id)).where(
-                ContractVersionRecord.contract_id == contract_id,
-                ContractVersionRecord.main_version == branch_from,
-                ContractVersionRecord.branch_letter.isnot(None),
-            )
-        )
-        count = count_result.scalar() or 0
-        branch_letter = chr(ord("a") + count)
-        label = f"v{branch_from}{branch_letter}"
-
-    # Create run first
     run_response = await create_run(
-        db,
-        settings,
+        db, settings,
         file=file,
-        tenant_id=tenant_id,
+        tenant_id="org",
         policy_family_id=policy_family_id,
         policy_version=policy_version,
         jurisdiction=jurisdiction,
@@ -277,7 +304,6 @@ async def add_version(
         effective_date=effective_date,
     )
 
-    # Create contract version record
     now = datetime.utcnow()
     cv = ContractVersionRecord(
         contract_id=contract_id,
@@ -289,15 +315,7 @@ async def add_version(
         created_at=now,
     )
     db.add(cv)
-
-    # Update contract updated_at
     contract.updated_at = now
-
     await db.flush()
 
-    return {
-        "run_id": run_response.run_id,
-        "label": label,
-        "contract_id": contract_id,
-        "version_id": cv.id,
-    }
+    return {"run_id": run_response.run_id, "label": label, "contract_id": contract_id, "version_id": cv.id}

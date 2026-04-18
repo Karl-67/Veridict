@@ -2,10 +2,13 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { FileText, ChevronRight, Plus, Clock, AlertTriangle, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
 import { listContracts } from "@/lib/api";
-import type { ContractSummary } from "@/types";
+import type { ContractSummary, Workspace } from "@/types";
 import { cn } from "@/lib/utils";
 
 interface ContractsDashboardProps {
+  workspaces: Workspace[];
+  activeWorkspaceId: string | null;
+  onWorkspaceChange: (id: string | null) => void;
   onNewContract: () => void;
   onOpenContract: (contract: ContractSummary) => void;
 }
@@ -53,16 +56,28 @@ function stateLabel(state: string | null): { text: string; color: string } {
   return map[state] ?? { text: state, color: "text-text-secondary/60" };
 }
 
-export default function ContractsDashboard({ onNewContract, onOpenContract }: ContractsDashboardProps) {
+export default function ContractsDashboard({
+  workspaces,
+  activeWorkspaceId,
+  onWorkspaceChange,
+  onNewContract,
+  onOpenContract,
+}: ContractsDashboardProps) {
   const [contracts, setContracts] = useState<ContractSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // "all" tab is only shown for org_admins (any workspace with role "org_admin")
+  const isAdmin = workspaces.some((w) => w.role === "org_admin");
+  // null activeWorkspaceId = "All" view
+  const effectiveWsId = activeWorkspaceId;
+
   useEffect(() => {
-    listContracts()
+    setLoading(true);
+    listContracts(effectiveWsId ?? undefined)
       .then(setContracts)
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  }, [effectiveWsId]);
 
   return (
     <motion.div
@@ -70,7 +85,7 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.4 }}
-      className="space-y-12"
+      className="space-y-10"
     >
       {/* Header */}
       <div className="flex items-end justify-between">
@@ -91,6 +106,39 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
         </button>
       </div>
 
+      {/* Workspace tabs */}
+      {workspaces.length > 0 && (
+        <div className="flex items-center gap-1 border-b border-border">
+          {isAdmin && (
+            <button
+              onClick={() => onWorkspaceChange(null)}
+              className={cn(
+                "px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer",
+                activeWorkspaceId === null
+                  ? "border-accent text-text-primary"
+                  : "border-transparent text-text-secondary hover:text-text-primary"
+              )}
+            >
+              All
+            </button>
+          )}
+          {workspaces.map((ws) => (
+            <button
+              key={ws.workspace_id}
+              onClick={() => onWorkspaceChange(ws.workspace_id)}
+              className={cn(
+                "px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px cursor-pointer",
+                activeWorkspaceId === ws.workspace_id
+                  ? "border-accent text-text-primary"
+                  : "border-transparent text-text-secondary hover:text-text-primary"
+              )}
+            >
+              {ws.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Contract list */}
       {loading ? (
         <div className="flex items-center justify-center py-24">
@@ -100,16 +148,17 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
         <div className="py-24 text-center">
           <FileText className="h-10 w-10 text-text-secondary/20 mx-auto mb-4" />
           <p className="text-text-secondary">No contracts yet.</p>
-          <button
-            onClick={onNewContract}
-            className="mt-4 text-sm font-medium text-accent hover:text-accent-hover transition-colors cursor-pointer underline underline-offset-2"
-          >
-            Upload your first contract
-          </button>
+          {activeWorkspaceId && (
+            <button
+              onClick={onNewContract}
+              className="mt-4 text-sm font-medium text-accent hover:text-accent-hover transition-colors cursor-pointer underline underline-offset-2"
+            >
+              Upload your first contract
+            </button>
+          )}
         </div>
       ) : (
         <div>
-          {/* Table header */}
           <div className="grid grid-cols-[1fr_80px_160px_120px_40px] gap-4 pb-3 border-b border-border">
             <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Contract</span>
             <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Version</span>
@@ -118,7 +167,6 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
             <span />
           </div>
 
-          {/* Rows */}
           {contracts.map((c, i) => {
             const status = stateLabel(c.latest_run_state);
             return (
@@ -130,18 +178,21 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
                 onClick={() => onOpenContract(c)}
                 className="grid grid-cols-[1fr_80px_160px_120px_40px] gap-4 py-4 border-b border-border/60 last:border-0 hover:bg-drop-zone/20 transition-colors cursor-pointer -mx-3 px-3 rounded-lg"
               >
-                {/* Name + ID */}
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-secondary/50">
                     <FileText className="h-3.5 w-3.5" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-text-primary truncate">{c.name}</p>
-                    <p className="text-[10px] font-mono text-text-secondary/40">#{c.id} · {c.version_count} version{c.version_count !== 1 ? "s" : ""}</p>
+                    <p className="text-[10px] font-mono text-text-secondary/40">
+                      #{c.id} · {c.version_count} version{c.version_count !== 1 ? "s" : ""}
+                      {activeWorkspaceId === null && c.workspace_name && (
+                        <> · <span className="text-text-secondary/60">{c.workspace_name}</span></>
+                      )}
+                    </p>
                   </div>
                 </div>
 
-                {/* Latest version */}
                 <div className="flex items-center">
                   {c.latest_label ? (
                     <span className="text-xs font-mono font-semibold text-text-primary bg-border/40 px-2 py-0.5 rounded">
@@ -152,7 +203,6 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
                   )}
                 </div>
 
-                {/* Status + risk */}
                 <div className="flex items-center gap-2">
                   {riskIcon(c.latest_risk)}
                   <span className={cn("text-xs font-medium", c.latest_risk ? riskColor(c.latest_risk) : status.color)}>
@@ -165,13 +215,11 @@ export default function ContractsDashboard({ onNewContract, onOpenContract }: Co
                   )}
                 </div>
 
-                {/* Date */}
                 <div className="flex items-center gap-1.5 text-xs text-text-secondary/60">
                   <Clock className="h-3 w-3" />
                   {timeAgo(c.updated_at)}
                 </div>
 
-                {/* Arrow */}
                 <div className="flex items-center justify-end">
                   <ChevronRight className="h-4 w-4 text-text-secondary/30" />
                 </div>

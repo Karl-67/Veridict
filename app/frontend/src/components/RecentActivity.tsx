@@ -39,6 +39,7 @@ export default function RecentActivity({ onViewAll, onOpen }: RecentActivityProp
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // No workspace filter — returns all contracts visible to the user
     listContracts()
       .then((data) => setContracts(data.slice(0, 3)))
       .catch(console.error)

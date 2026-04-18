@@ -9,6 +9,7 @@ import type {
   RunCreateResponse,
   RunDetail,
   SeverityLevel,
+  Workspace,
 } from "@/types";
 
 const API_BASE = "http://localhost:8000/api";
@@ -140,20 +141,123 @@ export function getRunFileUrl(runId: string): string {
 }
 
 // ----------------------------------------------------------------------------
+// Auth
+// ----------------------------------------------------------------------------
+
+export interface AuthResponse {
+  token: string;
+  user_id: string;
+  email: string;
+  display_name: string;
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("veridict_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export async function registerUser(email: string, display_name: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, display_name, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Registration failed" }));
+    throw new Error(err.detail || "Registration failed");
+  }
+  return res.json();
+}
+
+export async function loginUser(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Login failed" }));
+    throw new Error(err.detail || "Login failed");
+  }
+  return res.json();
+}
+
+// ----------------------------------------------------------------------------
+// Comments
+// ----------------------------------------------------------------------------
+
+import type { Comment } from "@/types";
+
+export async function listContractComments(runId: string): Promise<Comment[]> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/comments`);
+  if (!res.ok) throw new Error("Failed to fetch comments");
+  return res.json();
+}
+
+export async function createContractComment(runId: string, body: string): Promise<Comment> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error("Failed to post comment");
+  return res.json();
+}
+
+export async function deleteContractComment(runId: string, commentId: string): Promise<void> {
+  await fetch(`${API_BASE}/runs/${runId}/comments/${commentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+}
+
+export async function listFindingComments(runId: string, findingId: string): Promise<Comment[]> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/comments`);
+  if (!res.ok) throw new Error("Failed to fetch finding comments");
+  return res.json();
+}
+
+export async function createFindingComment(runId: string, findingId: string, body: string): Promise<Comment> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error("Failed to post comment");
+  return res.json();
+}
+
+export async function deleteFindingComment(runId: string, findingId: string, commentId: string): Promise<void> {
+  await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/comments/${commentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+}
+
+// ----------------------------------------------------------------------------
 // Contract versioning API
 // ----------------------------------------------------------------------------
 
-export async function listContracts(tenantId = "demo-tenant"): Promise<ContractSummary[]> {
-  const response = await fetch(`${API_BASE}/contracts?tenant_id=${encodeURIComponent(tenantId)}`);
+export async function listWorkspaces(): Promise<Workspace[]> {
+  const response = await fetch(`${API_BASE}/workspaces`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to fetch workspaces");
+  return response.json();
+}
+
+export async function listContracts(workspaceId?: string): Promise<ContractSummary[]> {
+  const url = workspaceId
+    ? `${API_BASE}/contracts?workspace_id=${encodeURIComponent(workspaceId)}`
+    : `${API_BASE}/contracts`;
+  const response = await fetch(url, { headers: authHeaders() });
   if (!response.ok) throw new Error("Failed to fetch contracts");
   return response.json();
 }
 
-export async function createContract(name: string, tenantId = "demo-tenant"): Promise<ContractSummary> {
+export async function createContract(name: string, workspaceId: string): Promise<ContractSummary> {
   const response = await fetch(`${API_BASE}/contracts`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, tenant_id: tenantId }),
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ name, workspace_id: workspaceId }),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Failed to create contract" }));
@@ -163,7 +267,7 @@ export async function createContract(name: string, tenantId = "demo-tenant"): Pr
 }
 
 export async function getContract(contractId: number): Promise<ContractDetail> {
-  const response = await fetch(`${API_BASE}/contracts/${contractId}`);
+  const response = await fetch(`${API_BASE}/contracts/${contractId}`, { headers: authHeaders() });
   if (!response.ok) throw new Error("Failed to fetch contract");
   return response.json();
 }
@@ -175,7 +279,6 @@ export async function addContractVersion(
 ): Promise<AddVersionResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("tenant_id", DEFAULT_RUN_PARAMS.tenant_id);
   formData.append("policy_family_id", DEFAULT_RUN_PARAMS.policy_family_id);
   formData.append("policy_version", DEFAULT_RUN_PARAMS.policy_version);
   formData.append("jurisdiction", DEFAULT_RUN_PARAMS.jurisdiction);
@@ -185,6 +288,7 @@ export async function addContractVersion(
 
   const response = await fetch(`${API_BASE}/contracts/${contractId}/versions`, {
     method: "POST",
+    headers: authHeaders(),
     body: formData,
   });
   if (!response.ok) {

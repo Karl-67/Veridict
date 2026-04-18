@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertTriangle,
@@ -9,11 +9,12 @@ import {
   Download,
   FileEdit,
   CalendarDays,
-  Send,
 } from "lucide-react";
-import type { ReviewResult, Finding } from "@/types";
+import type { ReviewResult, Finding, Comment } from "@/types";
 import { cn } from "@/lib/utils";
 import ContractReader from "@/components/ContractReader";
+import CommentThread from "@/components/CommentThread";
+import { listContractComments, createContractComment, deleteContractComment } from "@/lib/api";
 
 interface VerdictCardProps {
   result: ReviewResult;
@@ -57,18 +58,6 @@ const severityStyles: Record<string, string> = {
   low: "bg-risk-low/15 text-risk-low",
 };
 
-const LEGAL_NOTES = [
-  {
-    author: "J. Sterling",
-    time: "2h ago",
-    text: "Section 14.2 is a non-starter. We need to push back hard on the liability cap before the Monday call.",
-  },
-  {
-    author: "A. Chen",
-    time: "4h ago",
-    text: "Check if the Data Sovereignty clause affects our cloud migration plan.",
-  },
-];
 
 const BENCHMARKS = [
   {
@@ -103,8 +92,39 @@ export default function VerdictCard({
   findings,
 }: VerdictCardProps) {
   const [expandedClause, setExpandedClause] = useState<number | null>(0);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
   const risk = riskConfig[result.risk_level];
   const RiskIcon = risk.icon;
+
+  // Fetch comments + poll every 5s when we have a runId
+  const fetchComments = useCallback(async () => {
+    if (!runId) return;
+    try {
+      const data = await listContractComments(runId);
+      setComments(data);
+    } catch { /* ignore */ }
+  }, [runId]);
+
+  useEffect(() => {
+    if (!runId) return;
+    setCommentsLoading(true);
+    fetchComments().finally(() => setCommentsLoading(false));
+    const interval = setInterval(fetchComments, 5000);
+    return () => clearInterval(interval);
+  }, [runId, fetchComments]);
+
+  const handlePostComment = useCallback(async (body: string) => {
+    if (!runId) return;
+    const comment = await createContractComment(runId, body);
+    setComments((prev) => [...prev, comment]);
+  }, [runId]);
+
+  const handleDeleteComment = useCallback(async (id: string) => {
+    if (!runId) return;
+    await deleteContractComment(runId, id);
+    setComments((prev) => prev.filter((c) => c.id !== id));
+  }, [runId]);
 
   const alignmentScore =
     result.risk_level === "high" ? 42 : result.risk_level === "medium" ? 65 : 88;
@@ -276,38 +296,17 @@ export default function VerdictCard({
         {/* ── Right column ── */}
         <div className="space-y-12 lg:mt-12">
 
-          {/* Legal Team Notes — no cards, just entries */}
+          {/* Legal Team Notes — real shared comments */}
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-4">
               Legal Team Notes
             </h3>
-            <div>
-              {LEGAL_NOTES.map((note, i) => (
-                <div key={i} className="py-4 border-b border-border/50 last:border-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
-                      {note.author}
-                    </span>
-                    <span className="text-xs text-text-secondary/60">
-                      {note.time}
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed text-text-secondary">
-                    {note.text}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 relative">
-              <textarea
-                placeholder="Add a comment..."
-                rows={2}
-                className="w-full border-b border-border bg-transparent px-0 py-2 text-sm text-text-primary placeholder:text-text-secondary/40 resize-none focus:outline-none focus:border-accent/50 transition-colors"
-              />
-              <button className="absolute bottom-3 right-0 text-accent hover:text-accent-hover transition-colors cursor-pointer">
-                <Send className="h-4 w-4" />
-              </button>
-            </div>
+            <CommentThread
+              comments={comments}
+              loading={commentsLoading}
+              onPost={handlePostComment}
+              onDelete={handleDeleteComment}
+            />
           </div>
 
           {/* Immediate Actions — clean numbered list */}

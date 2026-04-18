@@ -1,15 +1,18 @@
-import { Moon, Sun, User, Plus } from "lucide-react";
+import { Moon, Sun, Plus, LogOut, Settings } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
+import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
 interface HeaderProps {
-  activePage?: "Dashboard" | "History";
+  activePage?: "Dashboard" | "History" | "Admin";
   onNavigate?: (page: "Dashboard" | "History") => void;
   onNewContract?: () => void;
+  onAdmin?: () => void;
 }
 
-export default function Header({ activePage = "Dashboard", onNavigate, onNewContract }: HeaderProps) {
+export default function Header({ activePage = "Dashboard", onNavigate, onNewContract, onAdmin }: HeaderProps) {
   const { dark, toggle } = useTheme();
+  const { user, logout } = useAuth();
 
   const NAV_ITEMS: Array<{ label: string; page: "Dashboard" | "History" }> = [
     { label: "Dashboard", page: "Dashboard" },
@@ -61,9 +64,34 @@ export default function Header({ activePage = "Dashboard", onNavigate, onNewCont
           >
             {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </button>
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/15 text-accent">
-            <User className="h-4 w-4" />
-          </div>
+          {user && (
+            <div className="flex items-center gap-2">
+              <span className="hidden sm:block text-xs font-medium text-text-secondary">
+                {user.display_name}
+              </span>
+              {user.org_role === "org_admin" && (
+                <button
+                  onClick={onAdmin}
+                  title="Admin Panel"
+                  className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-full transition-colors cursor-pointer",
+                    activePage === "Admin"
+                      ? "text-accent"
+                      : "text-text-secondary hover:text-text-primary"
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                onClick={logout}
+                title="Sign out"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-risk-high cursor-pointer"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </header>

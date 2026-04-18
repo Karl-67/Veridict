@@ -11,6 +11,10 @@ from app.backend.core.config import get_settings
 from app.backend.db.session import get_engine
 from app.backend.routes.contracts import router as runs_router
 from app.backend.routes.contract_management import router as contracts_router
+from app.backend.routes.auth import router as auth_router
+from app.backend.routes.comments import router as comments_router
+from app.backend.routes.admin import router as admin_router
+from app.backend.routes.workspaces import router as workspaces_router
 
 
 @asynccontextmanager
@@ -33,3 +37,7 @@ app.add_middleware(
 )
 app.include_router(runs_router)
 app.include_router(contracts_router)
+app.include_router(auth_router)
+app.include_router(comments_router)
+app.include_router(admin_router)
+app.include_router(workspaces_router)

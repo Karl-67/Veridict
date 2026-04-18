@@ -127,7 +127,8 @@ export interface ContractVersion {
 export interface ContractSummary {
   id: number;
   name: string;
-  tenant_id: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
   latest_label: string | null;
   latest_risk: string | null;
   latest_run_state: string | null;
@@ -139,10 +140,18 @@ export interface ContractSummary {
 export interface ContractDetail {
   id: number;
   name: string;
-  tenant_id: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
   versions: ContractVersion[];
   created_at: string;
   updated_at: string;
+}
+
+export interface Workspace {
+  workspace_id: string;
+  name: string;
+  description: string | null;
+  role: string | null;
 }
 
 export interface AddVersionResponse {
@@ -167,4 +176,34 @@ export interface HumanReviewResult {
   run_action: HumanRunAction;
   state: RunState;
   verdict?: FinalVerdict | null;
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface AuthUser {
+  user_id: string;
+  email: string;
+  display_name: string;
+  job_title: string | null;
+  department: string | null;
+  avatar_color: string;
+  org_id: string | null;
+  org_role: string;
+  org_name: string | null;
+  token: string;
+}
+
+// ---------------------------------------------------------------------------
+// Comments
+// ---------------------------------------------------------------------------
+
+export interface Comment {
+  id: string;
+  author_id: string;
+  author_name: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
 }

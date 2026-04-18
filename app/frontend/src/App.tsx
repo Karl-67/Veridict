@@ -1,4 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useAuth } from "@/context/AuthContext";
+import AuthPage from "@/components/AuthPage";
 import { motion, AnimatePresence } from "framer-motion";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
@@ -9,6 +11,7 @@ import PipelineTracker from "@/components/PipelineTracker";
 import AIEngineInsights from "@/components/AIEngineInsights";
 import PipelineMethodology from "@/components/PipelineMethodology";
 import VerdictCard from "@/components/VerdictCard";
+import AdminPage from "@/components/AdminPage";
 import ContractsDashboard from "@/components/ContractsDashboard";
 import ContractDetail from "@/components/ContractDetail";
 import {
@@ -17,7 +20,9 @@ import {
   createContract,
   addContractVersion,
   getRun,
+  listWorkspaces,
 } from "@/lib/api";
+import type { Workspace } from "@/types";
 import HumanReviewPanel from "@/components/HumanReviewPanel";
 import { XCircle, RefreshCw, ArrowLeft } from "lucide-react";
 import type { FinalVerdict, ReviewResult, RunDetail, ContractSummary } from "@/types";
@@ -29,7 +34,8 @@ type AppState =
   | "processing"
   | "human_review"
   | "verdict"
-  | "failed";
+  | "failed"
+  | "admin";
 
 interface FailureInfo {
   stage: string;
@@ -38,6 +44,14 @@ interface FailureInfo {
 }
 
 export default function App() {
+  const { user } = useAuth();
+  const hasInvite = new URLSearchParams(window.location.search).has("invite");
+  if (!user || hasInvite) return <AuthPage />;
+
+  return <AppInner />;
+}
+
+function AppInner() {
   const [state, setState] = useState<AppState>("dashboard");
   const [result, setResult] = useState<ReviewResult | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -46,10 +60,58 @@ export default function App() {
   const [currentRun, setCurrentRun] = useState<RunDetail | null>(null);
   const [failureInfo, setFailureInfo] = useState<FailureInfo | null>(null);
 
+  // Workspace context
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+
   // Contract context
   const [selectedContractId, setSelectedContractId] = useState<number | null>(null);
   const [newContractName, setNewContractName] = useState("");
   const [rawVerdict, setRawVerdict] = useState<FinalVerdict | null>(null);
+
+  useEffect(() => {
+    listWorkspaces().then((ws) => {
+      setWorkspaces(ws);
+      if (ws.length > 0) setActiveWorkspaceId(ws[0].workspace_id);
+    }).catch(console.error);
+  }, []);
+
+  // ── Browser history (pushState so Chrome back button works) ──────────────
+  useEffect(() => {
+    window.history.replaceState({ appState: "dashboard", selectedContractId: null }, "");
+    const onPop = (e: PopStateEvent) => {
+      const s = e.state as { appState?: AppState; selectedContractId?: number | null } | null;
+      // If no state or unrecognised state, fall back to dashboard
+      const SAFE_STATES: AppState[] = ["dashboard", "contract_detail", "new_contract", "admin"];
+      const target = s?.appState && SAFE_STATES.includes(s.appState) ? s.appState : "dashboard";
+      // contract_detail without a contractId is meaningless — fall back to dashboard
+      const contractId = target === "contract_detail" ? (s?.selectedContractId ?? null) : null;
+      if (target === "contract_detail" && !contractId) {
+        setState("dashboard");
+        setSelectedContractId(null);
+      } else {
+        setState(target);
+        setSelectedContractId(contractId);
+      }
+      setResult(null);
+      setRawVerdict(null);
+      setFileName("");
+      setCurrentRun(null);
+      setFailureInfo(null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // ── History-aware navigation (only for stable pages, not transient states) ─
+  const HISTORY_STATES: AppState[] = ["dashboard", "contract_detail", "new_contract", "admin"];
+  const navigate = useCallback((newState: AppState, contractId?: number | null) => {
+    if (HISTORY_STATES.includes(newState)) {
+      window.history.pushState({ appState: newState, selectedContractId: contractId ?? null }, "");
+    }
+    setState(newState);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Shared polling logic ─────────────────────────────────────────────────
 
@@ -101,7 +163,7 @@ export default function App() {
 
   const handleNewContractSubmit = useCallback(
     async (file: File) => {
-      if (!newContractName.trim()) return;
+      if (!newContractName.trim() || !activeWorkspaceId) return;
       setIsPending(true);
       setFileName(file.name);
       setCurrentRun(null);
@@ -109,7 +171,7 @@ export default function App() {
       setState("processing");
 
       try {
-        const contract = await createContract(newContractName.trim());
+        const contract = await createContract(newContractName.trim(), activeWorkspaceId);
         setSelectedContractId(contract.id);
         const versionResp = await addContractVersion(contract.id, file);
         await processRun(versionResp.run_id, contract.id);
@@ -119,7 +181,7 @@ export default function App() {
         setIsPending(false);
       }
     },
-    [newContractName, processRun]
+    [newContractName, activeWorkspaceId, processRun]
   );
 
   // ── Add version to existing contract ────────────────────────────────────
@@ -181,22 +243,22 @@ export default function App() {
 
   const handleHumanRejected = useCallback(() => {
     if (selectedContractId) {
-      setState("contract_detail");
+      navigate("contract_detail", selectedContractId);
     } else {
-      setState("dashboard");
+      navigate("dashboard");
     }
     setPendingRunId(null);
     setFileName("");
     setCurrentRun(null);
-  }, [selectedContractId]);
+  }, [selectedContractId, navigate]);
 
   // ── Reset / back navigation ──────────────────────────────────────────────
 
   const handleReset = useCallback(() => {
     if (selectedContractId) {
-      setState("contract_detail");
+      navigate("contract_detail", selectedContractId);
     } else {
-      setState("dashboard");
+      navigate("dashboard");
     }
     setResult(null);
     setRawVerdict(null);
@@ -204,23 +266,23 @@ export default function App() {
     setPendingRunId(null);
     setCurrentRun(null);
     setFailureInfo(null);
-  }, [selectedContractId]);
+  }, [selectedContractId, navigate]);
 
   const handleBackToDashboard = useCallback(() => {
-    setState("dashboard");
+    navigate("dashboard");
     setSelectedContractId(null);
     setNewContractName("");
-  }, []);
+  }, [navigate]);
 
   // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-background transition-colors duration-300 flex flex-col">
       <Header
-        activePage={state === "dashboard" || state === "contract_detail" ? "Dashboard" : state === "new_contract" ? "Dashboard" : "Dashboard"}
+        activePage={state === "admin" ? "Admin" : "Dashboard"}
         onNavigate={(page) => {
           if (page === "Dashboard" || page === "History") {
-            setState("dashboard");
+            navigate("dashboard");
             setSelectedContractId(null);
             setNewContractName("");
             setResult(null);
@@ -231,10 +293,12 @@ export default function App() {
           }
         }}
         onNewContract={() => {
+          if (!activeWorkspaceId && workspaces.length > 0) setActiveWorkspaceId(workspaces[0].workspace_id);
           setSelectedContractId(null);
           setNewContractName("");
-          setState("new_contract");
+          navigate("new_contract");
         }}
+        onAdmin={() => navigate("admin")}
       />
 
       <main className="flex-1 mx-auto w-full max-w-[1440px] px-6 sm:px-10 lg:px-14 py-20">
@@ -244,14 +308,18 @@ export default function App() {
           {state === "dashboard" && (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
               <ContractsDashboard
+                workspaces={workspaces}
+                activeWorkspaceId={activeWorkspaceId}
+                onWorkspaceChange={setActiveWorkspaceId}
                 onNewContract={() => {
+                  if (!activeWorkspaceId && workspaces.length > 0) setActiveWorkspaceId(workspaces[0].workspace_id);
                   setSelectedContractId(null);
                   setNewContractName("");
-                  setState("new_contract");
+                  navigate("new_contract");
                 }}
                 onOpenContract={(contract: ContractSummary) => {
                   setSelectedContractId(contract.id);
-                  setState("contract_detail");
+                  navigate("contract_detail", contract.id);
                 }}
               />
             </motion.div>
@@ -312,19 +380,44 @@ export default function App() {
                       className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-text-primary placeholder:text-text-secondary/40 focus:border-accent focus:outline-none transition-colors"
                     />
                   </div>
+                  {/* Workspace selector */}
+                  {workspaces.length > 1 && (
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-widest text-text-secondary/60 mb-2">
+                        Workspace
+                      </label>
+                      <select
+                        value={activeWorkspaceId ?? ""}
+                        onChange={(e) => setActiveWorkspaceId(e.target.value)}
+                        className="w-full rounded-xl border border-border bg-surface px-4 py-3 text-sm text-text-primary focus:border-accent focus:outline-none transition-colors"
+                      >
+                        {workspaces.map((ws) => (
+                          <option key={ws.workspace_id} value={ws.workspace_id}>{ws.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {workspaces.length === 1 && activeWorkspaceId && (
+                    <p className="text-xs text-text-secondary/60">
+                      Workspace: <span className="font-medium text-text-primary">{workspaces[0].name}</span>
+                    </p>
+                  )}
+                  {workspaces.length === 0 && (
+                    <p className="text-xs text-risk-high">You are not a member of any workspace. Ask an admin to add you.</p>
+                  )}
                   {/* Upload form */}
                   <UploadForm
                     onSubmit={handleNewContractSubmit}
                     isPending={isPending}
-                    disabled={!newContractName.trim()}
+                    disabled={!newContractName.trim() || !activeWorkspaceId}
                   />
                 </div>
                 <div className="space-y-6">
                   <RecentActivity
-                    onViewAll={() => setState("dashboard")}
+                    onViewAll={() => navigate("dashboard")}
                     onOpen={(contract) => {
                       setSelectedContractId(contract.id);
-                      setState("contract_detail");
+                      navigate("contract_detail", contract.id);
                     }}
                   />
                   <QuickTip />
@@ -490,6 +583,13 @@ export default function App() {
                 runId={rawVerdict?.run_id}
                 findings={rawVerdict?.findings}
               />
+            </motion.div>
+          )}
+
+          {/* ── ADMIN ── */}
+          {state === "admin" && (
+            <motion.div key="admin" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+              <AdminPage onBack={() => setState("dashboard")} />
             </motion.div>
           )}
 
