@@ -49,6 +49,7 @@ export default function App() {
   // Contract context
   const [selectedContractId, setSelectedContractId] = useState<number | null>(null);
   const [newContractName, setNewContractName] = useState("");
+  const [rawVerdict, setRawVerdict] = useState<FinalVerdict | null>(null);
 
   // ── Shared polling logic ─────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ export default function App() {
           setState("human_review");
         } else if (run.state === "finalized" && run.verdict) {
           setResult(verdictToReviewResult(run.verdict));
+          setRawVerdict(run.verdict);
           setState("verdict");
         } else if (run.state === "failed" || run.state === "blocked") {
           const failedStage = run.stages.find(
@@ -159,6 +161,7 @@ export default function App() {
         setState("human_review");
       } else if (run.verdict) {
         setResult(verdictToReviewResult(run.verdict));
+        setRawVerdict(run.verdict);
         setFileName(run.filename ?? "");
         setState("verdict");
       }
@@ -171,6 +174,7 @@ export default function App() {
 
   const handleHumanApproved = useCallback((verdict: FinalVerdict) => {
     setResult(verdictToReviewResult(verdict));
+    setRawVerdict(verdict);
     setState("verdict");
     setPendingRunId(null);
   }, []);
@@ -195,6 +199,7 @@ export default function App() {
       setState("dashboard");
     }
     setResult(null);
+    setRawVerdict(null);
     setFileName("");
     setPendingRunId(null);
     setCurrentRun(null);
@@ -482,6 +487,8 @@ export default function App() {
                 fileName={fileName}
                 onReset={handleReset}
                 resetLabel={selectedContractId ? "Back to Contract" : "Back to Dashboard"}
+                runId={rawVerdict?.run_id}
+                findings={rawVerdict?.findings}
               />
             </motion.div>
           )}

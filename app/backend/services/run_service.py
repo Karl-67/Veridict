@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, HumanReviewRecord, RunRecord, StageExecutionRecord
-from app.backend.models.schemas import FinalVerdict, HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail, StageStatus
+from app.backend.models.schemas import EvidenceRef, Finding, FinalVerdict, HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail, StageStatus
 
 STAGE_SEQUENCE = [
     "create_run",
@@ -111,9 +111,111 @@ def _map_stage_state(record: StageExecutionRecord) -> str:
     return mapping.get(record.status, "pending")
 
 
-def _build_final_verdict(run: RunRecord, findings: list[FindingRecord], human_action: str | None) -> FinalVerdict | None:
+def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
+    """Convert a FindingRecord DB row into a Finding schema object with synthetic evidence."""
+    try:
+        clause_text = fr.clause_text or fr.issue or ""
+        return Finding.model_construct(
+            finding_id=str(fr.id),
+            clause_uid=fr.clause_uid or "unknown",
+            issue_type="liability_exposure",
+            severity=fr.severity,  # type: ignore[arg-type]
+            exploitability="medium",
+            business_impact="medium",
+            description=fr.issue,
+            recommendation="negotiate",
+            recommendation_detail=fr.recommendation or "",
+            evidence=[
+                EvidenceRef.model_construct(
+                    page=1,
+                    bbox=[0.0, 0.0, 0.0, 0.0],
+                    normalized_text=clause_text,
+                    extraction_confidence=1.0,
+                )
+            ],
+            branch="harvey",
+            agent_role=fr.source_agent or "unknown",
+            round_number=fr.round_number,
+            consensus_status=None,
+            unresolved_by_consensus=False,
+            human_edited=False,
+            human_edit_delta=None,
+        )
+    except Exception:
+        return None
+
+
+async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Finding]:
+    """Load Finding objects: primary source is admin_merge, supplemented by FindingRecord table.
+
+    The admin_merge LLM sometimes aggressively deduplicates down to 1 finding. To ensure
+    the UI shows all meaningful findings, we also load unique findings from the DB and merge.
+    """
+    # 1. Load from admin_merge structured_output (full Finding schema, proper evidence)
+    stage_result = await session.execute(
+        select(StageExecutionRecord).where(
+            StageExecutionRecord.run_id == run_id,
+            StageExecutionRecord.stage_name == "admin_merge",
+            StageExecutionRecord.status == "completed",
+        )
+    )
+    stage = stage_result.scalars().first()
+    merged_findings: list[Finding] = []
+    seen_clause_uids: set[str] = set()
+    if stage and stage.structured_output:
+        for f in stage.structured_output.get("merged_findings", []):
+            try:
+                finding = Finding.model_validate(f)
+                merged_findings.append(finding)
+                seen_clause_uids.add(finding.clause_uid)
+            except Exception:
+                continue
+
+    # 2. Supplement with FindingRecord entries not already covered.
+    #    Use the highest-priority source agent: prefer final_reviewer > admin > harvey/kira.
+    #    Deduplicate by clause_uid — keep one representative finding per clause.
+    db_result = await session.execute(
+        select(FindingRecord)
+        .where(FindingRecord.run_id == run_id)
+        .order_by(FindingRecord.created_at.asc())
+    )
+    db_findings = db_result.scalars().all()
+
+    # Group by clause_uid, pick the best representative per clause
+    best_by_clause: dict[str, FindingRecord] = {}
+    priority = {"final_reviewer": 0, "admin": 1, "harvey": 2, "kira": 3}
+    for fr in db_findings:
+        uid = fr.clause_uid or fr.id
+        if uid in seen_clause_uids:
+            continue
+        existing = best_by_clause.get(uid)
+        if existing is None:
+            best_by_clause[uid] = fr
+        else:
+            rank = lambda r: min(priority.get(p, 9) for p in priority if (r.source_agent or "").startswith(p))
+            if rank(fr) < rank(existing):
+                best_by_clause[uid] = fr
+
+    for fr in best_by_clause.values():
+        finding = _finding_record_to_finding(fr)
+        if finding is not None:
+            merged_findings.append(finding)
+
+    return merged_findings
+
+
+def _build_final_verdict(
+    run: RunRecord,
+    findings: list[FindingRecord],
+    human_action: str | None,
+    full_findings: list[Finding] | None = None,
+) -> FinalVerdict | None:
     if run.verdict_payload is not None:
-        return FinalVerdict.model_validate(run.verdict_payload)
+        cached = FinalVerdict.model_validate(run.verdict_payload)
+        # Backfill findings if the cached payload has none (legacy runs stored before this fix)
+        if not cached.findings and full_findings:
+            cached = cached.model_copy(update={"findings": full_findings})
+        return cached
     if human_action is None:
         return None
     risk = "low"
@@ -129,7 +231,7 @@ def _build_final_verdict(run: RunRecord, findings: list[FindingRecord], human_ac
         run_id=run.id,
         finalized_at=run.updated_at,
         overall_risk_level=risk,  # type: ignore[arg-type]
-        findings=[],
+        findings=full_findings or [],
         summary=f"{len(findings)} findings were reviewed.",
         recommendations=[finding.recommendation for finding in findings if finding.recommendation],
         human_action=human_action,  # type: ignore[arg-type]
@@ -164,7 +266,8 @@ async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
         )
         for stage in stages_result.scalars().all()
     ]
-    verdict = _build_final_verdict(run, findings, run_review.action if run_review else None)
+    full_findings = await _load_full_findings(session, run_id)
+    verdict = _build_final_verdict(run, findings, run_review.action if run_review else None, full_findings=full_findings)
     return RunDetail(
         run_id=run.id,
         state=run.status,  # type: ignore[arg-type]
@@ -247,7 +350,8 @@ async def finalize_run_if_approved(session: AsyncSession, run_id: str, human_act
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
     finding_result = await session.execute(select(FindingRecord).where(FindingRecord.run_id == run_id))
     findings = finding_result.scalars().all()
-    verdict = _build_final_verdict(run, findings, human_action)
+    full_findings = await _load_full_findings(session, run_id)
+    verdict = _build_final_verdict(run, findings, human_action, full_findings=full_findings)
     if verdict is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run cannot be finalized yet.")
 

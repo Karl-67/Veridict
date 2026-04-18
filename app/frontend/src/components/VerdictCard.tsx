@@ -11,14 +11,17 @@ import {
   CalendarDays,
   Send,
 } from "lucide-react";
-import type { ReviewResult } from "@/types";
+import type { ReviewResult, Finding } from "@/types";
 import { cn } from "@/lib/utils";
+import ContractReader from "@/components/ContractReader";
 
 interface VerdictCardProps {
   result: ReviewResult;
   fileName: string;
   onReset: () => void;
   resetLabel?: string;
+  runId?: string;
+  findings?: Finding[];
 }
 
 const riskConfig = {
@@ -96,6 +99,8 @@ export default function VerdictCard({
   fileName,
   onReset,
   resetLabel = "Review another document",
+  runId,
+  findings,
 }: VerdictCardProps) {
   const [expandedClause, setExpandedClause] = useState<number | null>(0);
   const risk = riskConfig[result.risk_level];
@@ -361,6 +366,16 @@ export default function VerdictCard({
           </button>
         </div>
       </div>
+
+      {/* ── Contract Reader ── */}
+      {runId && findings && findings.length > 0 && (
+        <div className="mt-16 pt-10 border-t border-border">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-8">
+            Contract Document
+          </h2>
+          <ContractReader runId={runId} findings={findings} />
+        </div>
+      )}
     </motion.div>
   );
 }

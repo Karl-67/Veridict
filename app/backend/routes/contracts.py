@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from app.backend.core.config import SettingsDep
 from app.backend.db.session import DbSession, get_session_factory
 from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail
 from app.backend.services.event_stream import list_run_events, stream_run_events
+from app.backend.db.models import RunRecord
 from app.backend.services.run_service import create_run, get_run_detail, submit_human_review
+from sqlalchemy import select
 
 router = APIRouter(prefix="/api", tags=["runs"])
 
@@ -85,3 +88,15 @@ async def get_run_events_list(run_id: str, after: int = 0):
 @router.post("/runs/{run_id}/human-review", response_model=HumanReviewResult)
 async def post_human_review(run_id: str, payload: HumanReviewPayload, db: DbSession) -> HumanReviewResult:
     return await submit_human_review(db, run_id, payload)
+
+
+@router.get("/runs/{run_id}/file")
+async def get_run_file(run_id: str, db: DbSession) -> FileResponse:
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    path = Path(run.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    return FileResponse(path, media_type="application/pdf", filename=run.original_filename)

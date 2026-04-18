@@ -135,6 +135,10 @@ export async function submitHumanReview(
   return response.json();
 }
 
+export function getRunFileUrl(runId: string): string {
+  return `${API_BASE}/runs/${runId}/file`;
+}
+
 // ----------------------------------------------------------------------------
 // Contract versioning API
 // ----------------------------------------------------------------------------
