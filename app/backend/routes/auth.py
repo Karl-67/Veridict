@@ -310,3 +310,50 @@ async def me(token: dict = Depends(require_auth)) -> dict:
         "department": token.get("department"),
         "avatar_color": token.get("avatar_color"),
     }
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str | None = None
+    job_title: str | None = None
+    department: str | None = None
+    avatar_color: str | None = None
+    current_password: str | None = None
+    new_password: str | None = None
+
+
+@router.patch("/me", response_model=AuthResponse)
+async def update_me(
+    body: UpdateProfileRequest,
+    db: DbSession,
+    token: dict = Depends(require_auth),
+) -> AuthResponse:
+    user = await db.get(UserRecord, token["sub"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if body.new_password:
+        if not body.current_password:
+            raise HTTPException(status_code=400, detail="Current password is required to set a new password")
+        verify_password = __import__("app.backend.services.auth_service", fromlist=["verify_password"]).verify_password
+        if not verify_password(body.current_password, user.hashed_password):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        validate_password_strength(body.new_password)
+        user.hashed_password = hash_password(body.new_password)
+
+    if body.display_name is not None:
+        user.display_name = body.display_name.strip() or user.display_name
+    if body.job_title is not None:
+        user.job_title = body.job_title.strip() or None
+    if body.department is not None:
+        user.department = body.department.strip() or None
+    if body.avatar_color is not None and body.avatar_color in AVATAR_COLORS:
+        user.avatar_color = body.avatar_color
+
+    await db.flush()
+
+    org_name: str | None = None
+    if user.org_id:
+        org = await db.get(OrganizationRecord, user.org_id)
+        org_name = org.name if org else None
+
+    return _build_auth_response(user, create_access_token(user), org_name)

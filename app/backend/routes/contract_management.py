@@ -22,6 +22,7 @@ from app.backend.services.auth_service import require_auth
 from app.backend.services.run_service import create_run
 
 router = APIRouter(prefix="/api/contracts", tags=["contracts"])
+history_router = APIRouter(prefix="/api/history", tags=["history"])
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +32,21 @@ router = APIRouter(prefix="/api/contracts", tags=["contracts"])
 class ContractCreateRequest(BaseModel):
     name: str
     workspace_id: str
+
+
+class HistoryEntry(BaseModel):
+    run_id: str
+    contract_id: int
+    contract_name: str
+    workspace_id: str | None
+    workspace_name: str | None
+    version_label: str
+    filename: str | None
+    state: str
+    risk_level: str | None
+    human_action: str | None
+    created_at: str
+    updated_at: str
 
 
 class VersionInfo(BaseModel):
@@ -341,3 +357,99 @@ async def add_version(
     await db.flush()
 
     return {"run_id": run_response.run_id, "label": label, "contract_id": contract_id, "version_id": cv.id}
+
+
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+
+@history_router.get("", response_model=list[HistoryEntry])
+async def list_history(
+    db: DbSession,
+    limit: int = 100,
+    token: dict = Depends(require_auth),
+) -> list[HistoryEntry]:
+    """Return a flat chronological list of all runs visible to the caller."""
+    org_id = token.get("org_id")
+    is_admin = token.get("org_role") == "org_admin"
+
+    if is_admin:
+        ws_ids_result = await db.execute(
+            select(WorkspaceRecord.id).where(WorkspaceRecord.org_id == org_id)
+        )
+        visible_ws_ids = ws_ids_result.scalars().all()
+    else:
+        member_ws_result = await db.execute(
+            select(WorkspaceMemberRecord.workspace_id).where(
+                WorkspaceMemberRecord.user_id == token["sub"]
+            )
+        )
+        visible_ws_ids = member_ws_result.scalars().all()
+
+    if not visible_ws_ids:
+        return []
+
+    contracts_result = await db.execute(
+        select(ContractRecord).where(ContractRecord.workspace_id.in_(visible_ws_ids))
+    )
+    contract_map = {c.id: c for c in contracts_result.scalars().all()}
+    if not contract_map:
+        return []
+
+    ws_ids_needed = {c.workspace_id for c in contract_map.values() if c.workspace_id}
+    ws_map: dict[str, WorkspaceRecord] = {}
+    if ws_ids_needed:
+        ws_result = await db.execute(
+            select(WorkspaceRecord).where(WorkspaceRecord.id.in_(ws_ids_needed))
+        )
+        ws_map = {ws.id: ws for ws in ws_result.scalars().all()}
+
+    versions_result = await db.execute(
+        select(ContractVersionRecord)
+        .where(
+            ContractVersionRecord.contract_id.in_(list(contract_map.keys())),
+            ContractVersionRecord.run_id.isnot(None),
+        )
+    )
+    versions = versions_result.scalars().all()
+    if not versions:
+        return []
+
+    run_ids = [cv.run_id for cv in versions]
+    runs_result = await db.execute(
+        select(RunRecord).where(RunRecord.id.in_(run_ids))
+    )
+    run_map = {r.id: r for r in runs_result.scalars().all()}
+
+    entries: list[HistoryEntry] = []
+    for cv in versions:
+        run = run_map.get(cv.run_id)
+        if not run:
+            continue
+        contract = contract_map.get(cv.contract_id)
+        if not contract:
+            continue
+        ws = ws_map.get(contract.workspace_id) if contract.workspace_id else None
+
+        risk = _risk_from_verdict(run.verdict_payload)
+        human_action: str | None = None
+        if run.verdict_payload:
+            human_action = run.verdict_payload.get("human_action")
+
+        entries.append(HistoryEntry(
+            run_id=run.id,
+            contract_id=contract.id,
+            contract_name=contract.name,
+            workspace_id=contract.workspace_id,
+            workspace_name=ws.name if ws else None,
+            version_label=cv.label,
+            filename=run.original_filename,
+            state=run.status,
+            risk_level=risk,
+            human_action=human_action,
+            created_at=run.created_at.isoformat(),
+            updated_at=run.updated_at.isoformat(),
+        ))
+
+    entries.sort(key=lambda e: e.created_at, reverse=True)
+    return entries[:limit]

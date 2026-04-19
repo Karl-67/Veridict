@@ -155,6 +155,21 @@ export interface Workspace {
   role: string | null;
 }
 
+export interface HistoryEntry {
+  run_id: string;
+  contract_id: number;
+  contract_name: string;
+  workspace_id: string | null;
+  workspace_name: string | null;
+  version_label: string;
+  filename: string | null;
+  state: RunState;
+  risk_level: string | null;
+  human_action: "approved" | "rejected" | "edited" | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AddVersionResponse {
   run_id: string;
   label: string;

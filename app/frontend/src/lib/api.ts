@@ -4,6 +4,7 @@ import type {
   ContractSummary,
   Finding,
   FinalVerdict,
+  HistoryEntry,
   HumanReviewPayload,
   HumanReviewResult,
   ReviewResult,
@@ -329,6 +330,46 @@ export async function addContractVersion(
     throw new Error(error.detail || "Failed to add version");
   }
   return response.json();
+}
+
+export interface UpdateProfilePayload {
+  display_name?: string;
+  job_title?: string;
+  department?: string;
+  avatar_color?: string;
+  current_password?: string;
+  new_password?: string;
+}
+
+export async function updateProfile(payload: UpdateProfilePayload): Promise<import("@/types").AuthUser> {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Update failed" }));
+    throw new Error(err.detail || "Update failed");
+  }
+  const data = await res.json();
+  return {
+    user_id: data.user_id,
+    email: data.email,
+    display_name: data.display_name,
+    job_title: data.job_title,
+    department: data.department,
+    avatar_color: data.avatar_color,
+    org_id: data.org_id,
+    org_role: data.org_role,
+    org_name: data.org_name,
+    token: data.access_token,
+  };
+}
+
+export async function listHistory(limit = 100): Promise<HistoryEntry[]> {
+  const res = await fetch(`${API_BASE}/history?limit=${limit}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch history");
+  return res.json();
 }
 
 // ----------------------------------------------------------------------------

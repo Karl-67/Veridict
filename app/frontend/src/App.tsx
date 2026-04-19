@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { NotificationProvider, useNotifications } from "@/context/NotificationContext";
+import type { AppNotification } from "@/context/NotificationContext";
 import AuthPage from "@/components/AuthPage";
 import { motion, AnimatePresence } from "framer-motion";
 import Header from "@/components/Header";
@@ -14,6 +16,9 @@ import VerdictCard from "@/components/VerdictCard";
 import AdminPage from "@/components/AdminPage";
 import ContractsDashboard from "@/components/ContractsDashboard";
 import ContractDetail from "@/components/ContractDetail";
+import HistoryPage from "@/components/HistoryPage";
+import ProfilePage from "@/components/ProfilePage";
+import SearchModal from "@/components/SearchModal";
 import {
   pollRunUntilDone,
   type PollSignal,
@@ -34,6 +39,8 @@ import type { FinalVerdict, ReviewResult, RunDetail, ContractSummary } from "@/t
 
 type AppState =
   | "dashboard"
+  | "history"
+  | "profile"
   | "contract_detail"
   | "new_contract"
   | "processing"
@@ -53,7 +60,11 @@ export default function App() {
   const hasInvite = new URLSearchParams(window.location.search).has("invite");
   if (!user || hasInvite) return <AuthPage />;
 
-  return <AppInner />;
+  return (
+    <NotificationProvider>
+      <AppInner />
+    </NotificationProvider>
+  );
 }
 
 function AppInner() {
@@ -76,6 +87,9 @@ function AppInner() {
   const [isAwaitingReview, setIsAwaitingReview] = useState(false);
   const [reviewFindings, setReviewFindings] = useState<import("@/types").Finding[]>([]);
   const pollSignalRef = useRef<PollSignal | null>(null);
+  const backgroundInfoRef = useRef<{ contractId: number | null; contractName: string } | null>(null);
+  const { add: addNotification } = useNotifications();
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
     listWorkspaces().then((ws) => {
@@ -90,7 +104,7 @@ function AppInner() {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as { appState?: AppState; selectedContractId?: number | null } | null;
       // If no state or unrecognised state, fall back to dashboard
-      const SAFE_STATES: AppState[] = ["dashboard", "contract_detail", "new_contract", "admin"];
+      const SAFE_STATES: AppState[] = ["dashboard", "history", "profile", "contract_detail", "new_contract", "admin"];
       const target = s?.appState && SAFE_STATES.includes(s.appState) ? s.appState : "dashboard";
       // contract_detail without a contractId is meaningless — fall back to dashboard
       const contractId = target === "contract_detail" ? (s?.selectedContractId ?? null) : null;
@@ -112,7 +126,18 @@ function AppInner() {
   }, []);
 
   // ── History-aware navigation (only for stable pages, not transient states) ─
-  const HISTORY_STATES: AppState[] = ["dashboard", "contract_detail", "new_contract", "admin"];
+  const HISTORY_STATES: AppState[] = ["dashboard", "history", "profile", "contract_detail", "new_contract", "admin"];
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setSearchOpen(v => !v);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const navigate = useCallback((newState: AppState, contractId?: number | null) => {
     if (HISTORY_STATES.includes(newState)) {
       window.history.pushState({ appState: newState, selectedContractId: contractId ?? null }, "");
@@ -137,7 +162,21 @@ function AppInner() {
         );
         setCurrentRun(run);
 
+        const bgInfo = backgroundInfoRef.current;
+
         if (run.state === "awaiting_human_review") {
+          if (bgInfo) {
+            const risk = run.verdict?.overall_risk_level;
+            addNotification({
+              type: "awaiting_review",
+              title: `${bgInfo.contractName} — Review required`,
+              body: `Analysis complete${risk ? ` · ${risk} risk` : ""}. Your sign-off is needed.`,
+              contractId: bgInfo.contractId,
+              runId,
+            });
+            backgroundInfoRef.current = null;
+            return;
+          }
           setPendingRunId(runId);
           if (run.verdict) {
             setResult(verdictToReviewResult(run.verdict));
@@ -145,10 +184,34 @@ function AppInner() {
           }
           setState("human_review");
         } else if (run.state === "finalized" && run.verdict) {
+          if (bgInfo) {
+            const risk = run.verdict.overall_risk_level;
+            addNotification({
+              type: "run_complete",
+              title: `${bgInfo.contractName} — Analysis complete`,
+              body: `${risk ? `${risk.charAt(0).toUpperCase() + risk.slice(1)} risk` : "Analysis"} · Finalized.`,
+              contractId: bgInfo.contractId,
+              runId,
+            });
+            backgroundInfoRef.current = null;
+            return;
+          }
           setResult(verdictToReviewResult(run.verdict));
           setRawVerdict(run.verdict);
+          setIsAwaitingReview(false);
           setState("verdict");
         } else if (run.state === "failed" || run.state === "blocked") {
+          if (bgInfo) {
+            addNotification({
+              type: "run_failed",
+              title: `${bgInfo.contractName} — Analysis failed`,
+              body: run.blocked_reason ?? "Something went wrong during processing.",
+              contractId: bgInfo.contractId,
+              runId,
+            });
+            backgroundInfoRef.current = null;
+            return;
+          }
           const failedStage = run.stages.find(
             (s) => s.state === "failed" || s.state === "blocked"
           );
@@ -159,7 +222,6 @@ function AppInner() {
           });
           setState("failed");
         } else if (run.state === "processing" || run.state === "created") {
-          // Polling window expired but backend is still running — go back to dashboard
           if (contractId) {
             navigate("contract_detail", contractId);
           } else {
@@ -168,13 +230,14 @@ function AppInner() {
         }
       } catch (err) {
         if ((err as DOMException)?.name === "AbortError") return;
+        if (backgroundInfoRef.current) { backgroundInfoRef.current = null; return; }
         setFailureInfo({ stage: "unknown", error: (err as Error).message });
         setState("failed");
       } finally {
         setIsPending(false);
       }
     },
-    [navigate]
+    [navigate, addNotification]
   );
 
   // ── New contract creation ────────────────────────────────────────────────
@@ -243,13 +306,14 @@ function AppInner() {
           setRawVerdict(run.verdict);
         }
         if (run.state === "under_review") {
-          await handleStartReview();
+          await startReviewForRun(runId);
           return;
         }
         setState("human_review");
       } else if (run.state === "finalized" && run.verdict) {
         setResult(verdictToReviewResult(run.verdict));
         setRawVerdict(run.verdict);
+        setIsAwaitingReview(false);
         setState("verdict");
       } else if (run.state === "processing" || run.state === "created") {
         setIsPending(true);
@@ -272,19 +336,16 @@ function AppInner() {
   // ── Human review callbacks ───────────────────────────────────────────────
 
 
-  const handleStartReview = useCallback(async () => {
-    cancelPoll();
-    if (!pendingRunId) { setIsAwaitingReview(true); setState("verdict"); return; }
+  const startReviewForRun = useCallback(async (runId: string) => {
+    try { await startRunReview(runId); } catch { /* already under_review is fine */ }
     try {
-      await startRunReview(pendingRunId);
-    } catch { /* state may already be under_review */ }
-    try {
-      const findings = await getRunFindings(pendingRunId);
+      const findings = await getRunFindings(runId);
       setReviewFindings(findings);
-      if (!result) {
+      setResult(prev => {
+        if (prev) return prev;
         const risk = findings.some((f) => f.severity === "critical" || f.severity === "high")
           ? "high" : findings.some((f) => f.severity === "medium") ? "medium" : "low";
-        setResult({
+        return {
           risk_level: risk,
           summary: `${findings.length} findings identified.`,
           recommendations: findings.map((f) => f.recommendation).filter(Boolean),
@@ -293,12 +354,18 @@ function AppInner() {
             issue: f.recommendation_detail || f.description,
             severity: (f.severity === "critical" ? "high" : f.severity) as "low" | "medium" | "high",
           })),
-        });
-      }
-    } catch { /* proceed */ }
+        };
+      });
+    } catch { /* proceed with what we have */ }
     setIsAwaitingReview(true);
     setState("verdict");
-  }, [cancelPoll, result, pendingRunId]);
+  }, []);
+
+  const handleStartReview = useCallback(async () => {
+    cancelPoll();
+    if (!pendingRunId) return;
+    await startReviewForRun(pendingRunId);
+  }, [cancelPoll, pendingRunId, startReviewForRun]);
 
   const handleApproveVerdict = useCallback(async () => {
     if (!pendingRunId) return;
@@ -378,18 +445,25 @@ function AppInner() {
   return (
     <div className="min-h-screen bg-background transition-colors duration-300 flex flex-col">
       <Header
-        activePage={state === "admin" ? "Admin" : "Dashboard"}
-        onNavigate={(page) => {
-          if (page === "Dashboard" || page === "History") {
-            navigate("dashboard");
-            setSelectedContractId(null);
-            setNewContractName("");
-            setResult(null);
-            setFileName("");
-            setPendingRunId(null);
-            setCurrentRun(null);
-            setFailureInfo(null);
+        activePage={state === "admin" ? "Admin" : state === "history" ? "History" : state === "profile" ? "Profile" : "Dashboard"}
+        onProfile={() => navigate("profile")}
+        onSearchOpen={() => setSearchOpen(true)}
+        onNotificationClick={(n: AppNotification) => {
+          if (n.contractId) {
+            setSelectedContractId(n.contractId);
+            navigate("contract_detail", n.contractId);
           }
+        }}
+        onNavigate={(page) => {
+          setSelectedContractId(null);
+          setNewContractName("");
+          setResult(null);
+          setFileName("");
+          setPendingRunId(null);
+          setCurrentRun(null);
+          setFailureInfo(null);
+          if (page === "History") navigate("history");
+          else navigate("dashboard");
         }}
         onAdmin={() => navigate("admin")}
       />
@@ -413,6 +487,25 @@ function AppInner() {
                 onOpenContract={(contract: ContractSummary) => {
                   setSelectedContractId(contract.id);
                   navigate("contract_detail", contract.id);
+                }}
+              />
+            </motion.div>
+          )}
+
+          {/* ── PROFILE ── */}
+          {state === "profile" && (
+            <motion.div key="profile" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+              <ProfilePage />
+            </motion.div>
+          )}
+
+          {/* ── HISTORY ── */}
+          {state === "history" && (
+            <motion.div key="history" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.3 }}>
+              <HistoryPage
+                onOpenContract={(contractId) => {
+                  setSelectedContractId(contractId);
+                  navigate("contract_detail", contractId);
                 }}
               />
             </motion.div>
@@ -565,7 +658,10 @@ function AppInner() {
                 </p>
                 <button
                   onClick={() => {
-                    cancelPoll();
+                    backgroundInfoRef.current = {
+                      contractId: selectedContractId,
+                      contractName: newContractName.trim() || fileName || "Contract",
+                    };
                     setIsPending(false);
                     if (selectedContractId) navigate("contract_detail", selectedContractId);
                     else navigate("dashboard");
@@ -715,6 +811,15 @@ function AppInner() {
       </main>
 
       <Footer />
+
+      <SearchModal
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSelect={(contract) => {
+          setSelectedContractId(contract.id);
+          navigate("contract_detail", contract.id);
+        }}
+      />
     </div>
   );
 }

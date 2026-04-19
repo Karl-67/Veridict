@@ -171,7 +171,7 @@ export default function HumanReviewPanel({
             onClick={() => setDecisionState("idle")}
             className="flex items-center gap-2 text-sm font-semibold text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
           >
-            I&apos;ve reviewed — make a decision
+            Ready to review this contract
             <ChevronDown className="h-4 w-4" />
           </button>
         </div>
