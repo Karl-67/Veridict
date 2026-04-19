@@ -12,7 +12,7 @@ from app.backend.db.session import DbSession, get_session_factory
 from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail
 from app.backend.services.event_stream import list_run_events, stream_run_events
 from app.backend.db.models import RunRecord
-from app.backend.services.run_service import create_run, get_run_detail, submit_human_review
+from app.backend.services.run_service import create_run, get_run_detail, submit_human_review, _load_full_findings
 from sqlalchemy import select
 
 router = APIRouter(prefix="/api", tags=["runs"])
@@ -85,9 +85,63 @@ async def get_run_events_list(run_id: str, after: int = 0):
     return await list_run_events(get_session_factory(), run_id, after_sequence=after)
 
 
+@router.post("/runs/{run_id}/start-review")
+async def start_review(run_id: str, db: DbSession):
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "awaiting_human_review":
+        raise HTTPException(status_code=409, detail="Run is not awaiting human review")
+    run.status = "under_review"
+    db.add(run)
+    await db.commit()
+    return {"run_id": run_id, "state": "under_review"}
+
+
 @router.post("/runs/{run_id}/human-review", response_model=HumanReviewResult)
 async def post_human_review(run_id: str, payload: HumanReviewPayload, db: DbSession) -> HumanReviewResult:
     return await submit_human_review(db, run_id, payload)
+
+
+@router.post("/runs/{run_id}/retry")
+async def retry_run(run_id: str, db: DbSession):
+    from app.backend.db.models import StageExecutionRecord
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in ("blocked", "failed"):
+        raise HTTPException(status_code=409, detail="Only blocked or failed runs can be retried")
+
+    # Reset the blocked/failed stage(s) back to pending
+    stages_result = await db.execute(
+        select(StageExecutionRecord).where(StageExecutionRecord.run_id == run_id)
+    )
+    for stage in stages_result.scalars().all():
+        if stage.status in ("blocked", "failed", "running"):
+            stage.status = "pending"
+            stage.error_detail = None
+            stage.retry_count = 0
+            stage.lease_expires_at = None
+            stage.worker_id = None
+            db.add(stage)
+
+    run.status = "processing"
+    run.blocked_reason = None
+    db.add(run)
+    await db.commit()
+    return {"run_id": run_id, "state": "processing"}
+
+
+@router.get("/runs/{run_id}/findings")
+async def get_run_findings(run_id: str, db: DbSession):
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    findings = await _load_full_findings(db, run_id)
+    return [f.model_dump(mode="json") for f in findings]
 
 
 @router.get("/runs/{run_id}/file")

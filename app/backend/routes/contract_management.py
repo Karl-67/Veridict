@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from app.backend.core.config import SettingsDep
-from app.backend.db.models import ContractRecord, ContractVersionRecord, RunRecord, WorkspaceMemberRecord, WorkspaceRecord
+from app.backend.db.models import ContractRecord, ContractVersionRecord, FindingRecord, RunRecord, WorkspaceMemberRecord, WorkspaceRecord
 from app.backend.db.session import DbSession
 from app.backend.services.auth_service import require_auth
 from app.backend.services.run_service import create_run
@@ -77,15 +77,24 @@ def _risk_from_verdict(verdict_payload: dict | None) -> str | None:
     return verdict_payload.get("overall_risk_level")
 
 
-def _version_info(cv: ContractVersionRecord) -> VersionInfo:
+def _risk_from_findings(findings: list) -> str | None:
+    if not findings:
+        return None
+    severity_order = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+    top = max((f.severity for f in findings), key=lambda s: severity_order.get(s, 0))
+    return "high" if top in ("critical", "high") else top
+
+
+def _version_info(cv: ContractVersionRecord, precomputed_risk: str | None = None) -> VersionInfo:
     run: RunRecord | None = cv.run
+    risk = _risk_from_verdict(run.verdict_payload if run else None) or precomputed_risk
     return VersionInfo(
         id=cv.id,
         label=cv.label,
         branch_name=cv.branch_name,
         run_id=cv.run_id,
         run_state=run.status if run else None,
-        risk_level=_risk_from_verdict(run.verdict_payload if run else None),
+        risk_level=risk,
         filename=run.original_filename if run else None,
         created_at=cv.created_at.isoformat(),
     )
@@ -125,13 +134,20 @@ async def _build_summary(db: DbSession, c: ContractRecord) -> ContractSummary:
     if c.workspace_id:
         ws = await db.get(WorkspaceRecord, c.workspace_id)
         ws_name = ws.name if ws else None
+    risk = _risk_from_verdict(latest_run.verdict_payload if latest_run else None)
+    if not risk and latest_run and latest_run.status in ("awaiting_human_review", "under_review"):
+        findings_result = await db.execute(
+            select(FindingRecord).where(FindingRecord.run_id == latest_run.id)
+        )
+        risk = _risk_from_findings(findings_result.scalars().all())
+
     return ContractSummary(
         id=c.id,
         name=c.name,
         workspace_id=c.workspace_id,
         workspace_name=ws_name,
         latest_label=latest.label if latest else None,
-        latest_risk=_risk_from_verdict(latest_run.verdict_payload if latest_run else None),
+        latest_risk=risk,
         latest_run_state=latest_run.status if latest_run else None,
         version_count=len(versions),
         created_at=c.created_at.isoformat(),
@@ -233,7 +249,13 @@ async def get_contract(
             run_result = await db.execute(select(RunRecord).where(RunRecord.id == cv.run_id))
             run = run_result.scalar_one_or_none()
         cv.run = run
-        version_infos.append(_version_info(cv))
+        precomputed_risk = None
+        if run and not run.verdict_payload and run.status in ("awaiting_human_review", "under_review"):
+            findings_result = await db.execute(
+                select(FindingRecord).where(FindingRecord.run_id == run.id)
+            )
+            precomputed_risk = _risk_from_findings(findings_result.scalars().all())
+        version_infos.append(_version_info(cv, precomputed_risk))
 
     return ContractDetail(
         id=contract.id,

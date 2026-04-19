@@ -2,6 +2,7 @@ import type {
   AddVersionResponse,
   ContractDetail,
   ContractSummary,
+  Finding,
   FinalVerdict,
   HumanReviewPayload,
   HumanReviewResult,
@@ -89,27 +90,35 @@ const TERMINAL_STATES = new Set([
   "blocked",
   "failed",
   "awaiting_human_review",
+  "under_review",
 ]);
 
 /**
  * Poll GET /api/runs/{run_id} until the run reaches a terminal state.
  * onUpdate is called with every intermediate result so the UI can show live stage progress.
  */
+export interface PollSignal {
+  cancelled: boolean;
+}
+
 export async function pollRunUntilDone(
   runId: string,
   intervalMs = 1500,
-  timeoutMs = 5 * 60_000,
-  onUpdate?: (run: RunDetail) => void
+  timeoutMs = 30 * 60_000,
+  onUpdate?: (run: RunDetail) => void,
+  signal?: PollSignal
 ): Promise<RunDetail> {
   const start = Date.now();
   while (true) {
+    if (signal?.cancelled) throw new DOMException("Cancelled", "AbortError");
     const run = await getRun(runId);
+    if (signal?.cancelled) throw new DOMException("Cancelled", "AbortError");
     onUpdate?.(run);
     if (TERMINAL_STATES.has(run.state)) {
       return run;
     }
     if (Date.now() - start > timeoutMs) {
-      throw new Error("Run polling timed out after 5 minutes");
+      return { ...run, state: "processing" };
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
@@ -138,6 +147,30 @@ export async function submitHumanReview(
 
 export function getRunFileUrl(runId: string): string {
   return `${API_BASE}/runs/${runId}/file`;
+}
+
+export async function retryRun(runId: string): Promise<{ run_id: string; state: string }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/retry`, { method: "POST" });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Retry failed" }));
+    throw new Error(error.detail || "Retry failed");
+  }
+  return response.json();
+}
+
+export async function startRunReview(runId: string): Promise<{ run_id: string; state: string }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/start-review`, { method: "POST" });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Failed to start review" }));
+    throw new Error(error.detail || "Failed to start review");
+  }
+  return response.json();
+}
+
+export async function getRunFindings(runId: string): Promise<Finding[]> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/findings`);
+  if (!response.ok) throw new Error("Failed to fetch findings");
+  return response.json();
 }
 
 // ----------------------------------------------------------------------------

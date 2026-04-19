@@ -9,6 +9,9 @@ import {
   Download,
   FileEdit,
   CalendarDays,
+  CheckCircle2,
+  XCircle,
+  Loader2,
 } from "lucide-react";
 import type { ReviewResult, Finding, Comment } from "@/types";
 import { cn } from "@/lib/utils";
@@ -23,6 +26,10 @@ interface VerdictCardProps {
   resetLabel?: string;
   runId?: string;
   findings?: Finding[];
+  isAwaitingReview?: boolean;
+  humanAction?: "approved" | "edited" | "rejected" | null;
+  onApprove?: () => Promise<void>;
+  onReject?: (reason: string) => Promise<void>;
 }
 
 const riskConfig = {
@@ -90,10 +97,19 @@ export default function VerdictCard({
   resetLabel = "Review another document",
   runId,
   findings,
+  isAwaitingReview = false,
+  humanAction,
+  onApprove,
+  onReject,
 }: VerdictCardProps) {
   const [expandedClause, setExpandedClause] = useState<number | null>(0);
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejecting, setRejecting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const risk = riskConfig[result.risk_level];
   const RiskIcon = risk.icon;
 
@@ -146,22 +162,37 @@ export default function VerdictCard({
           Comprehensive risk analysis for{" "}
           <span className="italic text-text-primary">{fileName}</span>
         </p>
-        <div className="flex justify-center">
+        <div className="flex justify-center gap-3 flex-wrap">
           <div className={cn("inline-flex items-center gap-2 rounded-full px-5 py-2", risk.bg)}>
             <RiskIcon className={cn("h-4 w-4", risk.color)} />
             <span className={cn("text-xs font-bold tracking-widest", risk.color)}>
               {risk.label}
             </span>
           </div>
+          {humanAction === "approved" && (
+            <div className="inline-flex items-center gap-2 rounded-full px-5 py-2 bg-risk-low/10">
+              <CheckCircle2 className="h-4 w-4 text-risk-low" />
+              <span className="text-xs font-bold tracking-widest text-risk-low">APPROVED</span>
+            </div>
+          )}
+          {humanAction === "rejected" && (
+            <div className="inline-flex items-center gap-2 rounded-full px-5 py-2 bg-risk-high/10">
+              <XCircle className="h-4 w-4 text-risk-high" />
+              <span className="text-xs font-bold tracking-widest text-risk-high">REJECTED</span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Summary — ONE kept container */}
-      <div className="rounded-2xl border border-border bg-surface p-8 lg:p-10 mb-10">
-        <p className="text-center font-serif text-lg lg:text-xl italic leading-relaxed text-text-primary/85">
-          &ldquo;{result.summary}&rdquo;
-        </p>
-      </div>
+      {/* Contract Reader — before findings */}
+      {runId && findings && findings.length > 0 && (
+        <div className="mb-14 pt-2">
+          <h2 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-6 pb-3 border-b border-border">
+            Contract Document
+          </h2>
+          <ContractReader runId={runId} findings={findings} />
+        </div>
+      )}
 
       {/* Two-column layout */}
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-16 items-start">
@@ -356,6 +387,79 @@ export default function VerdictCard({
             </div>
           </div>
 
+          {/* Approve / Reject — shown when human review is pending */}
+          {isAwaitingReview && (
+            <div className="space-y-3 border-t border-border pt-6">
+              <p className="text-xs font-semibold uppercase tracking-widest text-text-secondary">
+                Your Decision
+              </p>
+              {reviewError && (
+                <p className="text-xs text-risk-high">{reviewError}</p>
+              )}
+              <AnimatePresence>
+                {rejectMode && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="space-y-3"
+                  >
+                    <textarea
+                      value={rejectionReason}
+                      onChange={(e) => setRejectionReason(e.target.value)}
+                      rows={3}
+                      placeholder="Reason for rejection..."
+                      className="w-full border-b border-border bg-transparent px-0 py-2 text-sm text-text-primary placeholder:text-text-secondary/40 resize-none focus:outline-none focus:border-risk-high/50 transition-colors"
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setRejectMode(false); setReviewError(null); }}
+                        className="flex-1 rounded-xl border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-drop-zone transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        disabled={rejecting}
+                        onClick={async () => {
+                          if (!rejectionReason.trim()) { setReviewError("Please enter a reason."); return; }
+                          setRejecting(true); setReviewError(null);
+                          try { await onReject?.(rejectionReason); }
+                          catch (e) { setReviewError((e as Error).message); setRejecting(false); }
+                        }}
+                        className="flex-1 rounded-xl bg-risk-high px-3 py-2 text-xs font-semibold text-white hover:bg-risk-high/80 transition-colors disabled:opacity-40 cursor-pointer"
+                      >
+                        {rejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin mx-auto" /> : "Confirm Rejection"}
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              {!rejectMode && (
+                <div className="flex gap-2">
+                  <button
+                    disabled={approving || rejecting}
+                    onClick={() => { setRejectMode(true); setReviewError(null); }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2.5 text-xs font-semibold text-text-secondary hover:bg-drop-zone transition-colors disabled:opacity-40 cursor-pointer"
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> Reject
+                  </button>
+                  <button
+                    disabled={approving || rejecting}
+                    onClick={async () => {
+                      setApproving(true); setReviewError(null);
+                      try { await onApprove?.(); }
+                      catch (e) { setReviewError((e as Error).message); setApproving(false); }
+                    }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-accent px-3 py-2.5 text-xs font-semibold text-white hover:bg-accent-hover transition-colors disabled:opacity-40 cursor-pointer"
+                  >
+                    {approving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><CheckCircle2 className="h-3.5 w-3.5" /> Approve</>}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={onReset}
             className="flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer mx-auto"
@@ -366,15 +470,6 @@ export default function VerdictCard({
         </div>
       </div>
 
-      {/* ── Contract Reader ── */}
-      {runId && findings && findings.length > 0 && (
-        <div className="mt-16 pt-10 border-t border-border">
-          <h2 className="text-xs font-semibold uppercase tracking-widest text-text-secondary mb-8">
-            Contract Document
-          </h2>
-          <ContractReader runId={runId} findings={findings} />
-        </div>
-      )}
     </motion.div>
   );
 }

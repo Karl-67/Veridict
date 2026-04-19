@@ -21,6 +21,7 @@ function statusText(c: ContractSummary): string {
       ? `${c.latest_risk.charAt(0).toUpperCase() + c.latest_risk.slice(1)} risk · ${timeAgo(c.updated_at)}`
       : `Analyzed ${timeAgo(c.updated_at)}`,
     awaiting_human_review: "Awaiting review",
+    under_review: "Under review",
     processing: "Processing…",
     pending: "Queued",
     failed: "Analysis failed",
@@ -77,7 +78,7 @@ export default function RecentActivity({ onViewAll, onOpen }: RecentActivityProp
               className={cn(
                 "flex items-center gap-3 py-3 border-b border-border/60 last:border-0 transition-colors -mx-2 px-2",
                 onOpen ? "hover:bg-drop-zone/20 cursor-pointer" : "cursor-default",
-                c.latest_run_state === "awaiting_human_review" && "border-l-2 border-l-accent ml-0 pl-2"
+                (c.latest_run_state === "awaiting_human_review" || c.latest_run_state === "under_review") && "border-l-2 border-l-accent ml-0 pl-2"
               )}
             >
               <FileText className="h-4 w-4 text-text-secondary/60 shrink-0" />

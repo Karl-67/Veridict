@@ -1,4 +1,4 @@
-import { Moon, Sun, Plus, LogOut, Settings } from "lucide-react";
+import { Moon, Sun, LogOut, Settings } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
@@ -6,11 +6,11 @@ import { cn } from "@/lib/utils";
 interface HeaderProps {
   activePage?: "Dashboard" | "History" | "Admin";
   onNavigate?: (page: "Dashboard" | "History") => void;
-  onNewContract?: () => void;
+
   onAdmin?: () => void;
 }
 
-export default function Header({ activePage = "Dashboard", onNavigate, onNewContract, onAdmin }: HeaderProps) {
+export default function Header({ activePage = "Dashboard", onNavigate, onAdmin }: HeaderProps) {
   const { dark, toggle } = useTheme();
   const { user, logout } = useAuth();
 
@@ -48,15 +48,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onNewCont
         </div>
 
         <div className="flex items-center gap-3">
-          {onNewContract && (
-            <button
-              onClick={onNewContract}
-              className="hidden sm:flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Contract
-            </button>
-          )}
+
           <button
             onClick={toggle}
             className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-text-primary cursor-pointer"
@@ -66,9 +58,6 @@ export default function Header({ activePage = "Dashboard", onNavigate, onNewCont
           </button>
           {user && (
             <div className="flex items-center gap-2">
-              <span className="hidden sm:block text-xs font-medium text-text-secondary">
-                {user.display_name}
-              </span>
               {user.org_role === "org_admin" && (
                 <button
                   onClick={onAdmin}

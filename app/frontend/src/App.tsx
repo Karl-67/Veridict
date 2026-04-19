@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import AuthPage from "@/components/AuthPage";
 import { motion, AnimatePresence } from "framer-motion";
@@ -16,11 +16,16 @@ import ContractsDashboard from "@/components/ContractsDashboard";
 import ContractDetail from "@/components/ContractDetail";
 import {
   pollRunUntilDone,
+  type PollSignal,
   verdictToReviewResult,
   createContract,
   addContractVersion,
   getRun,
+  getRunFindings,
+  startRunReview,
   listWorkspaces,
+  retryRun,
+  submitHumanReview,
 } from "@/lib/api";
 import type { Workspace } from "@/types";
 import HumanReviewPanel from "@/components/HumanReviewPanel";
@@ -68,6 +73,9 @@ function AppInner() {
   const [selectedContractId, setSelectedContractId] = useState<number | null>(null);
   const [newContractName, setNewContractName] = useState("");
   const [rawVerdict, setRawVerdict] = useState<FinalVerdict | null>(null);
+  const [isAwaitingReview, setIsAwaitingReview] = useState(false);
+  const [reviewFindings, setReviewFindings] = useState<import("@/types").Finding[]>([]);
+  const pollSignalRef = useRef<PollSignal | null>(null);
 
   useEffect(() => {
     listWorkspaces().then((ws) => {
@@ -115,16 +123,26 @@ function AppInner() {
 
   // ── Shared polling logic ─────────────────────────────────────────────────
 
+  const cancelPoll = useCallback(() => {
+    if (pollSignalRef.current) pollSignalRef.current.cancelled = true;
+  }, []);
+
   const processRun = useCallback(
-    async (runId: string, _contractId: number | null) => {
+    async (runId: string, contractId: number | null) => {
+      const signal: PollSignal = { cancelled: false };
+      pollSignalRef.current = signal;
       try {
-        const run = await pollRunUntilDone(runId, 1500, 5 * 60_000, (r) =>
-          setCurrentRun(r)
+        const run = await pollRunUntilDone(runId, 1500, 30 * 60_000, (r) =>
+          setCurrentRun(r), signal
         );
         setCurrentRun(run);
 
         if (run.state === "awaiting_human_review") {
           setPendingRunId(runId);
+          if (run.verdict) {
+            setResult(verdictToReviewResult(run.verdict));
+            setRawVerdict(run.verdict);
+          }
           setState("human_review");
         } else if (run.state === "finalized" && run.verdict) {
           setResult(verdictToReviewResult(run.verdict));
@@ -136,27 +154,27 @@ function AppInner() {
           );
           setFailureInfo({
             stage: failedStage?.stage_name ?? "unknown",
-            error:
-              failedStage?.error_detail ?? run.blocked_reason ?? "Unknown error",
+            error: failedStage?.error_detail ?? run.blocked_reason ?? "Unknown error",
             runId: run.run_id,
           });
           setState("failed");
-        } else {
-          setFailureInfo({
-            stage: "unknown",
-            error: `Run ended in unexpected state: ${run.state}`,
-            runId: run.run_id,
-          });
-          setState("failed");
+        } else if (run.state === "processing" || run.state === "created") {
+          // Polling window expired but backend is still running — go back to dashboard
+          if (contractId) {
+            navigate("contract_detail", contractId);
+          } else {
+            navigate("dashboard");
+          }
         }
       } catch (err) {
+        if ((err as DOMException)?.name === "AbortError") return;
         setFailureInfo({ stage: "unknown", error: (err as Error).message });
         setState("failed");
       } finally {
         setIsPending(false);
       }
     },
-    []
+    [navigate]
   );
 
   // ── New contract creation ────────────────────────────────────────────────
@@ -216,30 +234,111 @@ function AppInner() {
   const handleViewRun = useCallback(async (runId: string) => {
     try {
       const run = await getRun(runId);
-      if (run.state === "awaiting_human_review") {
+      setFileName(run.filename ?? "");
+      setCurrentRun(run);
+      if (run.state === "awaiting_human_review" || run.state === "under_review") {
         setPendingRunId(runId);
-        setFileName(run.filename ?? "");
-        setCurrentRun(run);
+        if (run.verdict) {
+          setResult(verdictToReviewResult(run.verdict));
+          setRawVerdict(run.verdict);
+        }
+        if (run.state === "under_review") {
+          await handleStartReview();
+          return;
+        }
         setState("human_review");
-      } else if (run.verdict) {
+      } else if (run.state === "finalized" && run.verdict) {
         setResult(verdictToReviewResult(run.verdict));
         setRawVerdict(run.verdict);
-        setFileName(run.filename ?? "");
         setState("verdict");
+      } else if (run.state === "processing" || run.state === "created") {
+        setIsPending(true);
+        setState("processing");
+        await processRun(runId, selectedContractId);
+      } else if (run.state === "failed" || run.state === "blocked") {
+        const failedStage = run.stages.find((s) => s.state === "failed" || s.state === "blocked");
+        setFailureInfo({
+          stage: failedStage?.stage_name ?? "unknown",
+          error: failedStage?.error_detail ?? run.blocked_reason ?? "Unknown error",
+          runId: run.run_id,
+        });
+        setState("failed");
       }
     } catch (err) {
       console.error("Failed to fetch run:", err);
     }
-  }, []);
+  }, [processRun, selectedContractId]);
 
   // ── Human review callbacks ───────────────────────────────────────────────
 
-  const handleHumanApproved = useCallback((verdict: FinalVerdict) => {
-    setResult(verdictToReviewResult(verdict));
-    setRawVerdict(verdict);
+
+  const handleStartReview = useCallback(async () => {
+    cancelPoll();
+    if (!pendingRunId) { setIsAwaitingReview(true); setState("verdict"); return; }
+    try {
+      await startRunReview(pendingRunId);
+    } catch { /* state may already be under_review */ }
+    try {
+      const findings = await getRunFindings(pendingRunId);
+      setReviewFindings(findings);
+      if (!result) {
+        const risk = findings.some((f) => f.severity === "critical" || f.severity === "high")
+          ? "high" : findings.some((f) => f.severity === "medium") ? "medium" : "low";
+        setResult({
+          risk_level: risk,
+          summary: `${findings.length} findings identified.`,
+          recommendations: findings.map((f) => f.recommendation).filter(Boolean),
+          clause_flags: findings.map((f) => ({
+            clause: f.description.split(/[.\n]/)[0]?.slice(0, 80) || f.clause_uid,
+            issue: f.recommendation_detail || f.description,
+            severity: (f.severity === "critical" ? "high" : f.severity) as "low" | "medium" | "high",
+          })),
+        });
+      }
+    } catch { /* proceed */ }
+    setIsAwaitingReview(true);
     setState("verdict");
+  }, [cancelPoll, result, pendingRunId]);
+
+  const handleApproveVerdict = useCallback(async () => {
+    if (!pendingRunId) return;
+    await submitHumanReview(pendingRunId, {
+      run_action: "approved",
+      reviewer_id: "verdict-user",
+      finding_actions: [],
+    });
+    setIsAwaitingReview(false);
     setPendingRunId(null);
-  }, []);
+    if (selectedContractId) navigate("contract_detail", selectedContractId);
+    else navigate("dashboard");
+  }, [pendingRunId, selectedContractId, navigate]);
+
+  const handleRejectVerdict = useCallback(async (reason: string) => {
+    if (!pendingRunId) return;
+    await submitHumanReview(pendingRunId, {
+      run_action: "rejected",
+      reviewer_id: "verdict-user",
+      rejection_reason: reason,
+    });
+    setIsAwaitingReview(false);
+    setPendingRunId(null);
+    if (selectedContractId) navigate("contract_detail", selectedContractId);
+    else navigate("dashboard");
+  }, [pendingRunId, selectedContractId, navigate]);
+
+  const handleRetry = useCallback(async () => {
+    if (!failureInfo?.runId) return;
+    try {
+      await retryRun(failureInfo.runId);
+      setFailureInfo(null);
+      setCurrentRun(null);
+      setIsPending(true);
+      setState("processing");
+      await processRun(failureInfo.runId, selectedContractId);
+    } catch (err) {
+      setFailureInfo((prev) => prev ? { ...prev, error: (err as Error).message } : prev);
+    }
+  }, [failureInfo, processRun, selectedContractId]);
 
   const handleHumanRejected = useCallback(() => {
     if (selectedContractId) {
@@ -291,12 +390,6 @@ function AppInner() {
             setCurrentRun(null);
             setFailureInfo(null);
           }
-        }}
-        onNewContract={() => {
-          if (!activeWorkspaceId && workspaces.length > 0) setActiveWorkspaceId(workspaces[0].workspace_id);
-          setSelectedContractId(null);
-          setNewContractName("");
-          navigate("new_contract");
         }}
         onAdmin={() => navigate("admin")}
       />
@@ -468,8 +561,19 @@ function AppInner() {
                   </span>
                 </div>
                 <p className="mt-2 text-sm italic text-text-secondary">
-                  This usually takes 15–30 seconds. Do not refresh this page.
+                  This can take a few minutes depending on contract length.
                 </p>
+                <button
+                  onClick={() => {
+                    cancelPoll();
+                    setIsPending(false);
+                    if (selectedContractId) navigate("contract_detail", selectedContractId);
+                    else navigate("dashboard");
+                  }}
+                  className="mt-4 text-sm text-text-secondary/50 hover:text-text-secondary transition-colors cursor-pointer underline underline-offset-2"
+                >
+                  Run in background — go to dashboard
+                </button>
               </div>
             </motion.div>
           )}
@@ -538,11 +642,20 @@ function AppInner() {
                 <div className="flex gap-3">
                   <button
                     onClick={handleReset}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-accent px-6 py-3 text-sm font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer"
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border px-6 py-3 text-sm font-semibold text-text-secondary hover:bg-drop-zone transition-colors cursor-pointer"
                   >
-                    <RefreshCw className="h-4 w-4" />
+                    <ArrowLeft className="h-4 w-4" />
                     {selectedContractId ? "Back to Contract" : "Back to Dashboard"}
                   </button>
+                  {failureInfo?.runId && (
+                    <button
+                      onClick={handleRetry}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-text-primary px-6 py-3 text-sm font-semibold text-background hover:opacity-80 transition-opacity cursor-pointer"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      Retry Analysis
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -560,7 +673,8 @@ function AppInner() {
               <HumanReviewPanel
                 runId={pendingRunId}
                 fileName={fileName}
-                onApproved={handleHumanApproved}
+                contractId={selectedContractId}
+                onStartReview={handleStartReview}
                 onRejected={handleHumanRejected}
               />
             </motion.div>
@@ -580,8 +694,12 @@ function AppInner() {
                 fileName={fileName}
                 onReset={handleReset}
                 resetLabel={selectedContractId ? "Back to Contract" : "Back to Dashboard"}
-                runId={rawVerdict?.run_id}
-                findings={rawVerdict?.findings}
+                runId={rawVerdict?.run_id ?? (isAwaitingReview && pendingRunId ? pendingRunId : undefined)}
+                findings={rawVerdict?.findings ?? (isAwaitingReview ? reviewFindings : undefined)}
+                isAwaitingReview={isAwaitingReview}
+                humanAction={!isAwaitingReview ? rawVerdict?.human_action : null}
+                onApprove={handleApproveVerdict}
+                onReject={handleRejectVerdict}
               />
             </motion.div>
           )}

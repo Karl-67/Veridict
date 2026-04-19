@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { FileText, ChevronRight, Plus, Clock, AlertTriangle, ShieldCheck, ShieldAlert, Loader2 } from "lucide-react";
+import {
+  FileText, ChevronRight, Plus, Clock, AlertTriangle,
+  ShieldCheck, ShieldAlert, Loader2, FolderOpen, CircleDot, CheckCircle2,
+} from "lucide-react";
 import { listContracts } from "@/lib/api";
 import type { ContractSummary, Workspace } from "@/types";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/context/AuthContext";
 
 interface ContractsDashboardProps {
   workspaces: Workspace[];
@@ -48,12 +52,24 @@ function stateLabel(state: string | null): { text: string; color: string } {
   const map: Record<string, { text: string; color: string }> = {
     finalized: { text: "Finalized", color: "text-risk-low" },
     awaiting_human_review: { text: "Awaiting Review", color: "text-accent" },
+    under_review: { text: "Under Review", color: "text-risk-medium" },
     processing: { text: "Processing", color: "text-accent" },
     pending: { text: "Queued", color: "text-text-secondary/60" },
     failed: { text: "Failed", color: "text-risk-high" },
     blocked: { text: "Blocked", color: "text-risk-high" },
   };
   return map[state] ?? { text: state, color: "text-text-secondary/60" };
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function firstName(displayName: string): string {
+  return displayName.split(" ")[0];
 }
 
 export default function ContractsDashboard({
@@ -63,12 +79,11 @@ export default function ContractsDashboard({
   onNewContract,
   onOpenContract,
 }: ContractsDashboardProps) {
+  const { user } = useAuth();
   const [contracts, setContracts] = useState<ContractSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // "all" tab is only shown for org_admins (any workspace with role "org_admin")
   const isAdmin = workspaces.some((w) => w.role === "org_admin");
-  // null activeWorkspaceId = "All" view
   const effectiveWsId = activeWorkspaceId;
 
   useEffect(() => {
@@ -79,36 +94,86 @@ export default function ContractsDashboard({
       .finally(() => setLoading(false));
   }, [effectiveWsId]);
 
+  const awaitingReview = contracts.filter((c) => c.latest_run_state === "awaiting_human_review").length;
+  const finalized = contracts.filter((c) => c.latest_run_state === "finalized").length;
+  const inProgress = contracts.filter(
+    (c) => c.latest_run_state && !["finalized", "awaiting_human_review", "failed", "blocked"].includes(c.latest_run_state)
+  ).length;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -10 }}
       transition={{ duration: 0.4 }}
-      className="space-y-10"
+      className="space-y-14"
     >
-      {/* Header */}
-      <div className="flex items-end justify-between">
-        <div>
-          <h1 className="font-serif text-4xl lg:text-5xl font-bold tracking-tight text-text-primary">
-            Contracts
-          </h1>
-          <p className="mt-3 text-lg text-text-secondary">
-            All your contracts and their review history.
-          </p>
-        </div>
-        <button
-          onClick={onNewContract}
-          className="flex items-center gap-2 rounded-xl bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-accent-hover transition-colors cursor-pointer"
-        >
-          <Plus className="h-4 w-4" />
-          New Contract
-        </button>
+      {/* Welcome header */}
+      <div>
+        <p className="font-serif text-2xl text-text-secondary/70 mb-1">{greeting()},</p>
+        <h1 className="font-serif text-5xl lg:text-6xl font-bold tracking-tight text-text-primary">
+          {user ? firstName(user.display_name) : "Welcome"}
+        </h1>
+        <p className="mt-3 text-base text-text-secondary">
+          Here's what's happening with your contracts.
+        </p>
       </div>
 
-      {/* Workspace tabs */}
-      {workspaces.length > 0 && (
-        <div className="flex items-center gap-1 border-b border-border">
+      {/* Stats row */}
+      {!loading && contracts.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {[
+            {
+              label: "Total Contracts",
+              value: contracts.length,
+              icon: <FolderOpen className="h-4 w-4" />,
+              color: "text-text-secondary",
+              bg: "bg-border/30",
+            },
+            {
+              label: "Awaiting Review",
+              value: awaitingReview,
+              icon: <CircleDot className="h-4 w-4" />,
+              color: awaitingReview > 0 ? "text-accent" : "text-text-secondary/40",
+              bg: awaitingReview > 0 ? "bg-accent/8" : "bg-border/30",
+            },
+            {
+              label: "In Progress",
+              value: inProgress,
+              icon: <Loader2 className={cn("h-4 w-4", inProgress > 0 && "animate-spin")} />,
+              color: inProgress > 0 ? "text-text-secondary" : "text-text-secondary/40",
+              bg: "bg-border/30",
+            },
+            {
+              label: "Finalized",
+              value: finalized,
+              icon: <CheckCircle2 className="h-4 w-4" />,
+              color: finalized > 0 ? "text-risk-low" : "text-text-secondary/40",
+              bg: finalized > 0 ? "bg-risk-low/8" : "bg-border/30",
+            },
+          ].map((stat) => (
+            <motion.div
+              key={stat.label}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+              className={cn("rounded-2xl border border-border p-5", stat.bg)}
+            >
+              <div className={cn("flex items-center gap-2 mb-3", stat.color)}>
+                {stat.icon}
+                <span className="text-xs font-semibold uppercase tracking-widest opacity-70">{stat.label}</span>
+              </div>
+              <p className={cn("text-3xl font-bold font-serif tracking-tight", stat.color)}>
+                {stat.value}
+              </p>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
+      {/* Workspace tabs + New Contract */}
+      <div className="flex items-center justify-between border-b border-border">
+        <div className="flex items-center gap-1">
           {isAdmin && (
             <button
               onClick={() => onWorkspaceChange(null)}
@@ -137,7 +202,14 @@ export default function ContractsDashboard({
             </button>
           ))}
         </div>
-      )}
+        <button
+          onClick={onNewContract}
+          className="flex items-center gap-2 rounded-xl bg-text-primary px-4 py-2 text-sm font-semibold text-background hover:opacity-80 transition-opacity cursor-pointer self-center mb-1"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          New Contract
+        </button>
+      </div>
 
       {/* Contract list */}
       {loading ? (
@@ -146,29 +218,35 @@ export default function ContractsDashboard({
         </div>
       ) : contracts.length === 0 ? (
         <div className="py-24 text-center">
-          <FileText className="h-10 w-10 text-text-secondary/20 mx-auto mb-4" />
-          <p className="text-text-secondary">No contracts yet.</p>
+          <div className="inline-flex items-center justify-center h-16 w-16 rounded-2xl border border-border bg-surface mb-5">
+            <FileText className="h-7 w-7 text-text-secondary/30" />
+          </div>
+          <p className="text-base font-medium text-text-primary">No contracts yet</p>
+          <p className="text-sm text-text-secondary mt-1 mb-5">Upload your first contract to get started.</p>
           {activeWorkspaceId && (
             <button
               onClick={onNewContract}
-              className="mt-4 text-sm font-medium text-accent hover:text-accent-hover transition-colors cursor-pointer underline underline-offset-2"
+              className="inline-flex items-center gap-2 rounded-xl bg-text-primary px-5 py-2.5 text-sm font-semibold text-background hover:opacity-80 transition-opacity cursor-pointer"
             >
-              Upload your first contract
+              <Plus className="h-4 w-4" />
+              New Contract
             </button>
           )}
         </div>
       ) : (
         <div>
-          <div className="grid grid-cols-[1fr_80px_160px_120px_40px] gap-4 pb-3 border-b border-border">
-            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Contract</span>
-            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Version</span>
-            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Status</span>
-            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/60">Updated</span>
+          <div className="grid grid-cols-[1fr_80px_160px_120px_120px_40px] gap-4 pb-3 border-b border-border">
+            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/50">Contract</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/50">Version</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/50">Status</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/50">Risk</span>
+            <span className="text-xs font-semibold uppercase tracking-widest text-text-secondary/50">Updated</span>
             <span />
           </div>
 
           {contracts.map((c, i) => {
             const status = stateLabel(c.latest_run_state);
+            const needsAction = c.latest_run_state === "awaiting_human_review" || c.latest_run_state === "under_review";
             return (
               <motion.div
                 key={c.id}
@@ -176,11 +254,21 @@ export default function ContractsDashboard({
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04, duration: 0.25 }}
                 onClick={() => onOpenContract(c)}
-                className="grid grid-cols-[1fr_80px_160px_120px_40px] gap-4 py-4 border-b border-border/60 last:border-0 hover:bg-drop-zone/20 transition-colors cursor-pointer -mx-3 px-3 rounded-lg"
+                className={cn(
+                  "grid grid-cols-[1fr_80px_160px_120px_120px_40px] gap-4 py-4 border-b border-border/60 last:border-0 transition-colors cursor-pointer -mx-3 px-3 rounded-xl",
+                  needsAction
+                    ? "hover:bg-accent/5"
+                    : "hover:bg-drop-zone/20"
+                )}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-text-secondary/50">
-                    <FileText className="h-3.5 w-3.5" />
+                  <div className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border",
+                    needsAction
+                      ? "border-accent/30 bg-accent/8 text-accent"
+                      : "border-border bg-surface text-text-secondary/50"
+                  )}>
+                    <FileText className="h-4 w-4" />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-text-primary truncate">{c.name}</p>
@@ -203,19 +291,33 @@ export default function ContractsDashboard({
                   )}
                 </div>
 
+                {/* Status column */}
                 <div className="flex items-center gap-2">
-                  {riskIcon(c.latest_risk)}
-                  <span className={cn("text-xs font-medium", c.latest_risk ? riskColor(c.latest_risk) : status.color)}>
-                    {c.latest_risk ? riskLabel(c.latest_risk) : status.text}
+                  <span className={cn("text-xs font-medium", status.color)}>
+                    {status.text}
                   </span>
-                  {c.latest_run_state === "awaiting_human_review" && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-accent bg-accent/10 px-1.5 py-0.5 rounded">
-                      Action needed
+                  {needsAction && (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-accent bg-accent/10 px-1.5 py-0.5 rounded-md">
+                      Action
                     </span>
                   )}
                 </div>
 
-                <div className="flex items-center gap-1.5 text-xs text-text-secondary/60">
+                {/* Risk column */}
+                <div className="flex items-center gap-1.5">
+                  {c.latest_risk ? (
+                    <>
+                      {riskIcon(c.latest_risk)}
+                      <span className={cn("text-xs font-medium", riskColor(c.latest_risk))}>
+                        {riskLabel(c.latest_risk)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-xs text-text-secondary/30">—</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 text-xs text-text-secondary/50">
                   <Clock className="h-3 w-3" />
                   {timeAgo(c.updated_at)}
                 </div>

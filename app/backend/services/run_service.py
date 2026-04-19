@@ -290,7 +290,7 @@ async def submit_human_review(session: AsyncSession, run_id: str, payload: Human
     run = await session.get(RunRecord, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
-    if run.status != "awaiting_human_review":
+    if run.status not in ("awaiting_human_review", "under_review"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run is not awaiting human review.")
     if payload.run_action == "edited" and not payload.finding_actions:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Edited reviews require per-finding edits.")

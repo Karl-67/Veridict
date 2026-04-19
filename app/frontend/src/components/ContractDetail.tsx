@@ -55,6 +55,7 @@ function stateLabel(state: string | null): { text: string; color: string } {
   const map: Record<string, { text: string; color: string }> = {
     finalized: { text: "Finalized", color: "text-risk-low" },
     awaiting_human_review: { text: "Awaiting Review", color: "text-accent" },
+    under_review: { text: "Under Review", color: "text-risk-medium" },
     processing: { text: "Processing", color: "text-accent" },
     pending: { text: "Queued", color: "text-text-secondary/60" },
     failed: { text: "Failed", color: "text-risk-high" },
@@ -106,7 +107,7 @@ function VersionRow({
   onBranch?: () => void;
 }) {
   const status = stateLabel(version.run_state);
-  const canView = version.run_id && (version.run_state === "finalized" || version.run_state === "awaiting_human_review");
+  const canView = !!version.run_id && !!version.run_state;
 
   return (
     <div className="flex items-stretch gap-0 group">

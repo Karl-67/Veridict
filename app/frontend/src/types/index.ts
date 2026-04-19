@@ -24,6 +24,7 @@ export type RunState =
   | "created"
   | "processing"
   | "awaiting_human_review"
+  | "under_review"
   | "finalized"
   | "rejected"
   | "blocked"
