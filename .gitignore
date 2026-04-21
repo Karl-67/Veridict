@@ -26,9 +26,6 @@ venv/
 node_modules/
 dist/
 
-# Training outputs (large checkpoints, logs)
-/outputs/
-
 # IDE
 .idea/
 
