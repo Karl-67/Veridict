@@ -25,9 +25,3 @@ venv/
 # Node (if ever used)
 node_modules/
 dist/
-
-# IDE
-.idea/
-
-# Claude Code session data
-.claude/

@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 """
 curate_dataset.py — Data Curation Pipeline
 
 Produces:
   data/curated/dataset_a/reviewer_{train,val,test}.jsonl  — Reviewer SFT (Dataset A)
   data/curated/dataset_b/validator_{train,val,test}.jsonl — Validator SFT (Dataset B)
+  data/curated/dataset_c/maud_{train,val,test}.jsonl      — M&A Reviewer SFT (Dataset C)
+  data/curated/rl_pool.jsonl                              — RL curation pool (no split)
   data/curated/boilerplate_archive.jsonl                  — Preserved for RAG
   data/curated/split_manifest.json                        — Split ledger for curate_golden.py
 
 Phases:
-  A — Load + clean  (CUAD dedup + short filter; LEDGAR label decode)
-  B — Taxonomy projection  (→ 13 unified issue types)
+  A — Load + clean  (CUAD dedup + short filter wc>=10; LEDGAR label decode; MAUD dedup + wc>=10)
+  B — Taxonomy projection  (-> 13 unified issue types; MAUD keeps native categories)
   C — Boilerplate archive  (excluded from SFT, kept for RAG)
   G — Document-level split  (BEFORE weak supervision, prevents leakage)
   D — Weak supervision  (description, recommendation, severity=weak label)
   E — Role augmentation  (3 roles × 1 branch per clause)
   F — Imbalance correction  (class_weight field primary; capped oversampling secondary)
   H — ContractNLI validator dataset  (retain/reject/uncertain + contradiction oversampling)
+  I — MAUD M&A reviewer dataset  (deal-point QA + rare-category oversampling)
+  J — RL pool  (train-split rows from A+B+C combined, no split applied)
 
 Design notes (from review):
   - Branch (harvey/kira) reflects context source, NOT role:
@@ -26,6 +33,8 @@ Design notes (from review):
   - severity is a weak/heuristic label; carries severity_confidence="weak"
   - Oversampling is capped at MAX_COPIES_PER_ROW per unique row; class_weight is the primary signal
   - Boilerplate is archived, not discarded
+  - MAUD splits are official document-level splits — used as-is, no re-splitting
+  - ContractNLI dev split -> renamed val for consistency
 """
 
 import hashlib
@@ -46,8 +55,9 @@ OUT_DIR = DATA_DIR / "curated"
 CUAD_FILE = DATA_DIR / "atticus" / "cuad_clauses.parquet"
 LEDGAR_FILE = DATA_DIR / "legal_clauses" / "ledgar.parquet"
 CNLI_FILE = DATA_DIR / "contractnli" / "contractnli.parquet"
+MAUD_FILE = DATA_DIR / "maud" / "maud.parquet"
 
-for _d in [OUT_DIR, OUT_DIR / "dataset_a", OUT_DIR / "dataset_b", OUT_DIR / "golden"]:
+for _d in [OUT_DIR, OUT_DIR / "dataset_a", OUT_DIR / "dataset_b", OUT_DIR / "dataset_c", OUT_DIR / "golden"]:
     _d.mkdir(parents=True, exist_ok=True)
 
 random.seed(42)
@@ -520,9 +530,24 @@ def load_cuad() -> pd.DataFrame:
     before = len(df)
     df = df.drop_duplicates(subset=["clause_text"])
     after_dedup = len(df)
-    df = df[df["clause_text"].str.split().str.len() >= 3].copy()
+    # wc>=10: removes is_impossible answer fragments (22% of raw CUAD are <10 words)
+    df = df[df["clause_text"].str.split().str.len() >= 10].copy()
     after_short = len(df)
-    print(f"CUAD: {before:,} total → {after_dedup:,} after dedup → {after_short:,} after short-text filter")
+    print(f"CUAD: {before:,} total -> {after_dedup:,} after dedup -> {after_short:,} after short-text filter (wc>=10)")
+    return df.reset_index(drop=True)
+
+
+def load_maud() -> pd.DataFrame:
+    """Load MAUD, deduplicate on passage text, filter very-short rows."""
+    df = pd.read_parquet(MAUD_FILE)
+    before = len(df)
+    df = df.drop_duplicates(subset=["text"])
+    after_dedup = len(df)
+    df = df[df["text"].astype(str).str.split().str.len() >= 10].copy()
+    after_short = len(df)
+    # normalise split names: validation -> val
+    df["split"] = df["split"].str.lower().replace({"validation": "val", "dev": "val"})
+    print(f"MAUD: {before:,} total -> {after_dedup:,} after dedup -> {after_short:,} after short-text filter (wc>=10)")
     return df.reset_index(drop=True)
 
 
@@ -548,7 +573,7 @@ def project_cuad(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["issue_type"] = df["clause_type"].apply(map_cuad_clause_type)
     usable = df[df["issue_type"] != "boilerplate"].copy()
     boilerplate = df[df["issue_type"] == "boilerplate"].copy()
-    print(f"  CUAD → {len(usable):,} usable, {len(boilerplate):,} boilerplate")
+    print(f"  CUAD -> {len(usable):,} usable, {len(boilerplate):,} boilerplate")
     return usable, boilerplate
 
 
@@ -557,7 +582,7 @@ def project_ledgar(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     df["issue_type"] = df["label_name"].apply(map_ledgar_label)
     usable = df[df["issue_type"] != "boilerplate"].copy()
     boilerplate = df[df["issue_type"] == "boilerplate"].copy()
-    print(f"  LEDGAR → {len(usable):,} usable, {len(boilerplate):,} boilerplate")
+    print(f"  LEDGAR -> {len(usable):,} usable, {len(boilerplate):,} boilerplate")
     return usable, boilerplate
 
 
@@ -580,7 +605,7 @@ def save_boilerplate_archive(cuad_bp: pd.DataFrame, ledgar_bp: pd.DataFrame) -> 
     with open(out, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"  Boilerplate archive: {len(rows):,} rows → {out}")
+    print(f"  Boilerplate archive: {len(rows):,} rows -> {out}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -605,7 +630,7 @@ def split_cuad(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
         n_train = max(1, round(n * 0.70))
         n_val   = max(1, round(n * 0.10))
         n_test  = max(1, round(n * 0.10))
-        # remainder → golden
+        # remainder -> golden
         train_c.extend(ct_list[:n_train])
         val_c.extend(ct_list[n_train:n_train + n_val])
         test_c.extend(ct_list[n_train + n_val:n_train + n_val + n_test])
@@ -657,8 +682,9 @@ def split_ledgar(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
 def save_split_manifest(
     cuad_train: pd.DataFrame, cuad_val: pd.DataFrame, cuad_test: pd.DataFrame, cuad_golden: pd.DataFrame,
     ledgar_train: pd.DataFrame, ledgar_val: pd.DataFrame, ledgar_test: pd.DataFrame, ledgar_golden: pd.DataFrame,
+    maud_df: Optional[pd.DataFrame] = None,
 ) -> None:
-    manifest = {
+    manifest: dict = {
         "cuad_contracts": {
             "train":  sorted(cuad_train["contract_title"].unique().tolist()),
             "val":    sorted(cuad_val["contract_title"].unique().tolist()),
@@ -672,10 +698,15 @@ def save_split_manifest(
             "golden": sorted(ledgar_golden.index.tolist()),
         },
     }
+    if maud_df is not None and "contract_name" in maud_df.columns and "split" in maud_df.columns:
+        manifest["maud_contracts"] = {
+            s: sorted(maud_df[maud_df["split"] == s]["contract_name"].unique().tolist())
+            for s in ["train", "val", "test"]
+        }
     out = OUT_DIR / "split_manifest.json"
     with open(out, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-    print(f"  Split manifest → {out}")
+    print(f"  Split manifest -> {out}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -779,12 +810,12 @@ def correct_imbalance(rows: list[dict]) -> list[dict]:
 
         oversampled.extend(type_rows)
         oversampled.extend(extra)
-        print(f"  {issue_type:<28} {cnt:>6} → {cnt + actual_add:>6} (+{actual_add}, cap={MAX_COPIES_PER_ROW}x)")
+        print(f"  {issue_type:<28} {cnt:>6} -> {cnt + actual_add:>6} (+{actual_add}, cap={MAX_COPIES_PER_ROW}x)")
 
     counts_after = Counter(r["issue_type"] for r in oversampled)
     ratio_before = max(counts.values()) / max(min(counts.values()), 1)
     ratio_after  = max(counts_after.values()) / max(min(counts_after.values()), 1)
-    print(f"  Imbalance ratio: {ratio_before:.1f}× → {ratio_after:.1f}×")
+    print(f"  Imbalance ratio: {ratio_before:.1f}× -> {ratio_after:.1f}×")
 
     return oversampled + other
 
@@ -814,7 +845,7 @@ def load_contractnli() -> list[dict]:
         label   = str(row[label_col]).lower().strip()
         verdict = NLI_VERDICT_MAP.get(label, "uncertain")
         split   = str(row.get("split", "train")).lower()
-        if split == "validation":
+        if split in ("validation", "dev"):
             split = "val"
 
         rows.append({
@@ -853,11 +884,111 @@ def oversample_contradiction(rows: list[dict], target_pct: float = 0.35) -> list
         new_train = rest + contra + extra
         random.shuffle(new_train)
         new_pct = sum(1 for r in new_train if r["verdict"] == "reject") / len(new_train)
-        print(f"  Oversampled contradiction: {len(contra)} → {len(contra) + actual} rows")
+        print(f"  Oversampled contradiction: {len(contra)} -> {len(contra) + actual} rows")
         print(f"  New contradiction %: {new_pct:.1%}")
         return new_train + other
 
     return rows
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase I — MAUD M&A reviewer dataset
+# ══════════════════════════════════════════════════════════════════════════════
+
+# MAUD category -> imbalance floor (rows per category in train after oversampling)
+MAUD_CATEGORY_FLOOR = 400
+
+# Map MAUD categories to a rough issue-type label for RL pool tagging
+MAUD_CATEGORY_ISSUE_MAP = {
+    "Material Adverse Effect":                "termination_risk",
+    "Deal Protection and Related Provisions":  "governance_risk",
+    "Conditions to Closing":                  "representation_risk",
+    "Operating and Efforts Covenant":         "compliance_obligation",
+    "Knowledge":                              "representation_risk",
+    "General Information":                    "boilerplate",
+    "Remedies":                               "dispute_resolution",
+}
+
+
+def generate_maud_rows(df: pd.DataFrame) -> list[dict]:
+    """Convert MAUD passages into deal-point QA records for Dataset C."""
+    rows = []
+    for i, row in df.iterrows():
+        text = str(row.get("text", "")).strip()
+        if not text:
+            continue
+        rows.append({
+            "id":          f"maud_{i:06d}",
+            "source":      "maud",
+            "contract_id": str(row.get("contract_name", "")),
+            "passage":     text,
+            "question":    str(row.get("question", "")),
+            "answer":      str(row.get("answer", "")),
+            "category":    str(row.get("category", "")),
+            "text_type":   str(row.get("text_type", "")),
+            "issue_type":  MAUD_CATEGORY_ISSUE_MAP.get(str(row.get("category", "")), "boilerplate"),
+            "split":       str(row.get("split", "train")),
+        })
+    return rows
+
+
+def oversample_maud_categories(rows: list[dict]) -> list[dict]:
+    """Bring rare MAUD categories in the train split up to MAUD_CATEGORY_FLOOR."""
+    train = [r for r in rows if r["split"] == "train"]
+    other = [r for r in rows if r["split"] != "train"]
+
+    by_cat: dict[str, list[dict]] = defaultdict(list)
+    for r in train:
+        by_cat[r["category"]].append(r)
+
+    print(f"\n[Phase I] MAUD category oversampling (floor={MAUD_CATEGORY_FLOOR}):")
+    oversampled: list[dict] = []
+    for cat in sorted(by_cat):
+        cat_rows = by_cat[cat]
+        cnt = len(cat_rows)
+        if cnt >= MAUD_CATEGORY_FLOOR:
+            oversampled.extend(cat_rows)
+            print(f"  {cat[:45]:<45} {cnt:>5}  (no oversampling)")
+            continue
+        needed   = MAUD_CATEGORY_FLOOR - cnt
+        max_add  = cnt * MAX_COPIES_PER_ROW
+        actual   = min(needed, max_add)
+        pool = cat_rows * (MAX_COPIES_PER_ROW + 1)
+        random.shuffle(pool)
+        extra = [dict(r) | {"oversampled": True} for r in pool[:actual]]
+        oversampled.extend(cat_rows)
+        oversampled.extend(extra)
+        print(f"  {cat[:45]:<45} {cnt:>5} -> {cnt + actual:>5} (+{actual})")
+
+    return oversampled + other
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase J — RL pool (train rows from A + B + C, no split)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def build_rl_pool(
+    reviewer_rows: list[dict],
+    cnli_rows: list[dict],
+    maud_rows: list[dict],
+) -> list[dict]:
+    """Combine train-split rows from all three datasets into a single RL pool."""
+    pool: list[dict] = []
+    for r in reviewer_rows:
+        if r["split"] == "train":
+            pool.append(dict(r) | {"split": "rl_pool", "rl_source": "reviewer_sft"})
+    for r in cnli_rows:
+        if r["split"] == "train":
+            pool.append(dict(r) | {"split": "rl_pool", "rl_source": "validator_sft"})
+    for r in maud_rows:
+        if r["split"] == "train":
+            pool.append(dict(r) | {"split": "rl_pool", "rl_source": "maud_sft"})
+    random.shuffle(pool)
+    print(f"\n[Phase J] RL pool: {len(pool):,} rows (reviewer={sum(1 for r in pool if r['rl_source']=='reviewer_sft'):,}"
+          f"  validator={sum(1 for r in pool if r['rl_source']=='validator_sft'):,}"
+          f"  maud={sum(1 for r in pool if r['rl_source']=='maud_sft'):,})")
+    return pool
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -871,7 +1002,7 @@ def write_jsonl(rows: list[dict], path: Path) -> None:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-def print_final_stats(reviewer_rows: list[dict], cnli_rows: list[dict]) -> None:
+def print_final_stats(reviewer_rows: list[dict], cnli_rows: list[dict], maud_rows: list[dict]) -> None:
     print("\n" + "=" * 60)
     print("FINAL STATS")
     print("=" * 60)
@@ -883,7 +1014,7 @@ def print_final_stats(reviewer_rows: list[dict], cnli_rows: list[dict]) -> None:
         by_src = Counter(r["source"] for r in sub)
         print(f"  {split:6}: {len(sub):>7,}  ({dict(by_src)})")
 
-    print("\nDataset A — Issue type distribution (train, before imbalance correction applied at read time):")
+    print("\nDataset A — Issue type distribution (train):")
     train_rows = [r for r in reviewer_rows if r["split"] == "train"]
     counts = Counter(r["issue_type"] for r in train_rows)
     for it, cnt in sorted(counts.items(), key=lambda x: -x[1]):
@@ -895,6 +1026,15 @@ def print_final_stats(reviewer_rows: list[dict], cnli_rows: list[dict]) -> None:
         sub = [r for r in cnli_rows if r["split"] == split]
         by_v = Counter(r["verdict"] for r in sub)
         print(f"  {split:6}: {len(sub):>7,}  ({dict(by_v)})")
+
+    # MAUD dataset
+    print("\nDataset C — M&A Reviewer SFT (per split, per category):")
+    for split in ["train", "val", "test"]:
+        sub = [r for r in maud_rows if r["split"] == split]
+        by_cat = Counter(r["category"] for r in sub)
+        print(f"  {split:6}: {len(sub):>7,}")
+        for cat, cnt in sorted(by_cat.items(), key=lambda x: -x[1]):
+            print(f"    {cat[:45]:<45} {cnt:>6,}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -911,6 +1051,7 @@ def main() -> None:
     print("\n[Phase A] Loading + cleaning...")
     cuad_raw   = load_cuad()
     ledgar_raw = load_ledgar()
+    maud_raw   = load_maud()
 
     # ── Phase B+C ─────────────────────────────────────────────────────────────
     print("\n[Phase B+C] Taxonomy projection + boilerplate archive...")
@@ -920,11 +1061,17 @@ def main() -> None:
 
     # ── Phase G ───────────────────────────────────────────────────────────────
     print("\n[Phase G] Document-level splits...")
-    cuad_train, cuad_val, cuad_test, cuad_golden       = split_cuad(cuad_usable)
+    cuad_train, cuad_val, cuad_test, cuad_golden         = split_cuad(cuad_usable)
     ledgar_train, ledgar_val, ledgar_test, ledgar_golden = split_ledgar(ledgar_usable)
+    # MAUD: use official document-level splits as-is
+    maud_train = maud_raw[maud_raw["split"] == "train"].copy()
+    maud_val   = maud_raw[maud_raw["split"] == "val"].copy()
+    maud_test  = maud_raw[maud_raw["split"] == "test"].copy()
+    print(f"  MAUD splits (official): train={len(maud_train):,} val={len(maud_val):,} test={len(maud_test):,}")
     save_split_manifest(
         cuad_train, cuad_val, cuad_test, cuad_golden,
         ledgar_train, ledgar_val, ledgar_test, ledgar_golden,
+        maud_df=maud_raw,
     )
 
     # ── Phase D+E ─────────────────────────────────────────────────────────────
@@ -962,8 +1109,27 @@ def main() -> None:
         write_jsonl(split_rows, out)
         print(f"  {out.name}: {len(split_rows):,} rows")
 
+    # ── Phase I ───────────────────────────────────────────────────────────────
+    print("\n[Phase I] MAUD M&A reviewer dataset...")
+    maud_sft = pd.concat([maud_train, maud_val, maud_test], ignore_index=True)
+    maud_rows = generate_maud_rows(maud_sft)
+    maud_rows = oversample_maud_categories(maud_rows)
+
+    print("\nWriting Dataset C (M&A reviewer SFT)...")
+    for split in ["train", "val", "test"]:
+        split_rows = [r for r in maud_rows if r["split"] == split]
+        out = OUT_DIR / "dataset_c" / f"maud_{split}.jsonl"
+        write_jsonl(split_rows, out)
+        print(f"  {out.name}: {len(split_rows):,} rows")
+
+    # ── Phase J — RL pool ─────────────────────────────────────────────────────
+    rl_pool = build_rl_pool(reviewer_rows, cnli_rows, maud_rows)
+    out = OUT_DIR / "rl_pool.jsonl"
+    write_jsonl(rl_pool, out)
+    print(f"  rl_pool.jsonl: {len(rl_pool):,} rows -> {out}")
+
     # ── Stats ─────────────────────────────────────────────────────────────────
-    print_final_stats(reviewer_rows, cnli_rows)
+    print_final_stats(reviewer_rows, cnli_rows, maud_rows)
 
     # ── Golden candidate counts ───────────────────────────────────────────────
     print("\nGolden candidates reserved (not in SFT — use curate_golden.py):")

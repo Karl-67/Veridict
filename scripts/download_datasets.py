@@ -221,21 +221,22 @@ def download_contract_nli():
     print(f"[ContractNLI] Saved {len(df)} rows to {out_file}")
 
 
-def download_material_contracts():
-    """Download the SEC Material Contracts QA dataset.
+def download_maud():
+    """Download the MAUD (Merger Agreement Understanding Dataset).
 
-    Source: chenghao/sec-material-contracts-qa
-    804 SEC EDGAR contracts with full text and extracted metadata.
-    We skip the images column to keep download manageable.
+    Source: theatticusproject/maud
+    152 merger agreements, ~47,000 expert-annotated QA rows across 92 questions.
+    Covers deal points such as MAE definitions, termination fees, fiduciary-out
+    provisions, and representation survival — high-value for contract-review SFT.
     """
-    out_dir = DATA_DIR / "material"
-    out_file = out_dir / "sec_contracts.parquet"
+    out_dir = DATA_DIR / "maud"
+    out_file = out_dir / "maud.parquet"
     if out_file.exists():
-        print(f"[Material Contracts] Already cached at {out_file}")
+        print(f"[MAUD] Already cached at {out_file}")
         return
 
-    print("[Material Contracts] Downloading from HuggingFace (chenghao/sec-material-contracts-qa)...")
-    ds = load_dataset("chenghao/sec-material-contracts-qa")
+    print("[MAUD] Downloading from HuggingFace (theatticusproject/maud)...")
+    ds = load_dataset("theatticusproject/maud")
 
     dfs = []
     for split_name in ds:
@@ -244,69 +245,9 @@ def download_material_contracts():
         dfs.append(split_df)
 
     df = pd.concat(dfs, ignore_index=True)
-
-    # Drop heavy columns we don't need for EDA
-    drop_cols = [c for c in ["images", "html_content", "page_text"] if c in df.columns]
-    if drop_cols:
-        df = df.drop(columns=drop_cols)
-        print(f"[Material Contracts] Dropped heavy columns: {drop_cols}")
-
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_file, index=False)
-    print(f"[Material Contracts] Saved {len(df)} rows to {out_file}")
-
-
-def download_riscbac():
-    """Download the RISCBAC dataset (synthetic insurance contracts, English).
-
-    Source: https://graal.ift.ulaval.ca/public/datasets/riscbac.zip
-    10,000 synthetic automobile insurance contracts in English.
-    The HuggingFace repo uses a deprecated custom script; we download directly.
-    """
-    import urllib.request
-    import zipfile
-
-    out_dir = DATA_DIR / "riscbac"
-    out_file = out_dir / "riscbac.parquet"
-    if out_file.exists():
-        print(f"[RISCBAC] Already cached at {out_file}")
-        return
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / "riscbac.zip"
-
-    if not zip_path.exists():
-        url = "https://graal.ift.ulaval.ca/public/datasets/riscbac.zip"
-        print(f"[RISCBAC] Downloading from {url} ...")
-        try:
-            urllib.request.urlretrieve(url, zip_path)
-            print(f"[RISCBAC] Downloaded to {zip_path}")
-        except Exception as e:
-            print(f"[RISCBAC] WARNING: Download failed ({e})")
-            print(f"[RISCBAC] The GRAAL server may be temporarily unavailable.")
-            print(f"[RISCBAC] Manual download: visit {url} and save to {zip_path}")
-            print(f"[RISCBAC] Skipping RISCBAC for now. Other datasets are unaffected.")
-            return
-    else:
-        print(f"[RISCBAC] Zip already cached at {zip_path}")
-
-    print("[RISCBAC] Parsing en.jsonl from zip...")
-    rows = []
-    with zipfile.ZipFile(zip_path) as zf:
-        with zf.open("en.jsonl") as f:
-            import io
-            for line in io.TextIOWrapper(f, encoding="utf-8", errors="ignore"):
-                line = line.strip()
-                if line:
-                    try:
-                        rows.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-
-    df = pd.DataFrame(rows)
-    df["split"] = "full_en"
-    df.to_parquet(out_file, index=False)
-    print(f"[RISCBAC] Saved {len(df)} rows to {out_file}")
+    print(f"[MAUD] Saved {len(df)} rows to {out_file}")
 
 
 def main():
@@ -318,9 +259,7 @@ def main():
     print()
     download_contract_nli()
     print()
-    download_material_contracts()
-    print()
-    download_riscbac()
+    download_maud()
 
     print("\nDone! All datasets saved to", DATA_DIR)
 
