@@ -37,6 +37,7 @@ Design notes (from review):
   - ContractNLI dev split -> renamed val for consistency
 """
 
+import argparse
 import hashlib
 import json
 import random
@@ -538,16 +539,24 @@ def load_cuad() -> pd.DataFrame:
 
 
 def load_maud() -> pd.DataFrame:
-    """Load MAUD, deduplicate on passage text, filter very-short rows."""
+    """Load MAUD, keeping all (text, question, answer) rows.
+
+    No passage-level dedup: MAUD reuses each passage across many deal-point
+    questions by design (avg ~5 questions per passage).  Deduplication for
+    LLM-labeling cost happens later in build_batches.py, not here.
+
+    Filters applied:
+      - word count >= 10  (drops near-empty / truncated rows)
+      - word count <= 600 (LLM-budget ceiling; ~45 % of passages fit in 512 tok)
+    """
     df = pd.read_parquet(MAUD_FILE)
     before = len(df)
-    df = df.drop_duplicates(subset=["text"])
-    after_dedup = len(df)
-    df = df[df["text"].astype(str).str.split().str.len() >= 10].copy()
-    after_short = len(df)
+    wc = df["text"].astype(str).str.split().str.len()
+    df = df[(wc >= 10) & (wc <= 600)].copy()
+    after_filter = len(df)
     # normalise split names: validation -> val
     df["split"] = df["split"].str.lower().replace({"validation": "val", "dev": "val"})
-    print(f"MAUD: {before:,} total -> {after_dedup:,} after dedup -> {after_short:,} after short-text filter (wc>=10)")
+    print(f"MAUD: {before:,} total -> {after_filter:,} after word-count filter (10–600 words)")
     return df.reset_index(drop=True)
 
 
@@ -905,7 +914,7 @@ MAUD_CATEGORY_ISSUE_MAP = {
     "Conditions to Closing":                  "representation_risk",
     "Operating and Efforts Covenant":         "compliance_obligation",
     "Knowledge":                              "representation_risk",
-    "General Information":                    "boilerplate",
+    "General Information":                    "financial_obligation",
     "Remedies":                               "dispute_resolution",
 }
 
@@ -992,6 +1001,87 @@ def build_rl_pool(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Sharding — deterministic label-shard assignment for OAuth GPT labeling
+#
+#   label_shard = (stable_hash(group_key) % num_shards) + 1
+#
+#   Group keys (all fields joined with NUL to avoid collisions):
+#     reviewer  → source, contract_id, clause_text
+#     validator → source, premise, hypothesis
+#     maud      → source, contract_id, passage, question
+#
+#   All roles / oversampled copies of the same atomic unit share one shard.
+#   The RL pool is NOT sharded — it is a post-merge artifact.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def stable_hash(key: str) -> int:
+    return int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16)
+
+
+def _reviewer_key(r: dict) -> str:
+    return "\x00".join([r.get("source", ""), r.get("contract_id", ""), r.get("clause_text", "")])
+
+
+def _validator_key(r: dict) -> str:
+    return "\x00".join([r.get("source", ""), r.get("premise", ""), r.get("hypothesis", "")])
+
+
+def _maud_key(r: dict) -> str:
+    return "\x00".join([r.get("source", ""), r.get("contract_id", ""), r.get("passage", ""), r.get("question", "")])
+
+
+def assign_label_shards(rows: list[dict], key_fn, num_shards: int) -> None:
+    """Attach label_shard (1-based) in-place to every row."""
+    for r in rows:
+        r["label_shard"] = (stable_hash(key_fn(r)) % num_shards) + 1
+
+
+def write_shard_outputs(
+    shard_n: int,
+    num_shards: int,
+    reviewer_rows: list[dict],
+    cnli_rows: list[dict],
+    maud_rows: list[dict],
+) -> None:
+    """Write label-bearing splits (train/val/test) for the requested shard."""
+    if not (1 <= shard_n <= num_shards):
+        raise ValueError(f"--shard must be between 1 and {num_shards}, got {shard_n}")
+
+    shard_dir = OUT_DIR / "shards" / f"shard_{shard_n}"
+    for sub in ("dataset_a", "dataset_b", "dataset_c", "golden"):
+        (shard_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[Shard {shard_n}/{num_shards}] Writing -> {shard_dir}")
+
+    # Dataset A — reviewer SFT
+    assign_label_shards(reviewer_rows, _reviewer_key, num_shards)
+    for split in ("train", "val", "test"):
+        rows = [r for r in reviewer_rows if r["split"] == split and r["label_shard"] == shard_n]
+        out = shard_dir / "dataset_a" / f"reviewer_{split}.jsonl"
+        write_jsonl(rows, out)
+        print(f"  {out.parent.name}/{out.name}: {len(rows):,}")
+
+    # Dataset B — validator SFT
+    assign_label_shards(cnli_rows, _validator_key, num_shards)
+    for split in ("train", "val", "test"):
+        rows = [r for r in cnli_rows if r["split"] == split and r["label_shard"] == shard_n]
+        out = shard_dir / "dataset_b" / f"validator_{split}.jsonl"
+        write_jsonl(rows, out)
+        print(f"  {out.parent.name}/{out.name}: {len(rows):,}")
+
+    # Dataset C — MAUD SFT
+    assign_label_shards(maud_rows, _maud_key, num_shards)
+    for split in ("train", "val", "test"):
+        rows = [r for r in maud_rows if r["split"] == split and r["label_shard"] == shard_n]
+        out = shard_dir / "dataset_c" / f"maud_{split}.jsonl"
+        write_jsonl(rows, out)
+        print(f"  {out.parent.name}/{out.name}: {len(rows):,}")
+
+    print(f"  golden/ placeholder created (run curate_golden.py --shard {shard_n} to populate)")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Stats + output
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1042,7 +1132,22 @@ def print_final_stats(reviewer_rows: list[dict], cnli_rows: list[dict], maud_row
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Data Curation Pipeline")
+    grp = p.add_mutually_exclusive_group()
+    grp.add_argument("--shard", type=int, metavar="N",
+                     help="Write shard N of all label-bearing splits to data/curated/shards/shard_N/")
+    grp.add_argument("--shard1", dest="shard", action="store_const", const=1)
+    grp.add_argument("--shard2", dest="shard", action="store_const", const=2)
+    grp.add_argument("--shard3", dest="shard", action="store_const", const=3)
+    p.add_argument("--num-shards", type=int, default=3,
+                   help="Total number of shards (default 3)")
+    return p.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+
     print("=" * 60)
     print("Data Curation Pipeline")
     print("=" * 60)
@@ -1135,7 +1240,14 @@ def main() -> None:
     print("\nGolden candidates reserved (not in SFT — use curate_golden.py):")
     print(f"  CUAD contracts: {cuad_golden['contract_title'].nunique()} contracts, {len(cuad_golden):,} clauses")
     print(f"  LEDGAR rows:    {len(ledgar_golden):,}")
-    print("\nDone. Run `python scripts/curate_golden.py` next.")
+
+    # ── Shard output ──────────────────────────────────────────────────────────
+    if args.shard is not None:
+        write_shard_outputs(args.shard, args.num_shards, reviewer_rows, cnli_rows, maud_rows)
+        print(f"\nDone. Shard {args.shard}/{args.num_shards} written.")
+        print("Run `python scripts/curate_golden.py` next, then re-run with --shard N to populate golden/.")
+    else:
+        print("\nDone. Run `python scripts/curate_golden.py` next.")
 
 
 if __name__ == "__main__":
