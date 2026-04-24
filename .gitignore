@@ -25,5 +25,12 @@ venv/
 # Node (if ever used)
 node_modules/
 dist/
-<<<<<<< HEAD
-=======
+
+# Training outputs (large checkpoints, logs)
+/outputs/
+
+# IDE
+.idea/
+
+# Claude Code session data
+.claude/
