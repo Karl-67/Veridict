@@ -14,6 +14,23 @@ Writes:
   data/distillation/annotated/validator_annotated.jsonl
   data/distillation/annotated/sec_annotated.jsonl
   data/distillation/annotated/parse_report.json
+
+Schema versions
+---------------
+v1 (old, isolation-only):
+  GPT returns: score (0-5), reason, action, issue_type, confidence
+v2 (context-aware, current):
+  GPT returns: contract_type, risk_score (1-10), legal_analysis,
+               inconsistencies, severity, severity_confidence, recommendations
+
+Both are handled transparently. Detection: presence of "risk_score" key → v2.
+
+Mapping from v2 → fields that export_gemma.py expects (unchanged):
+  gpt_score      = round((risk_score - 1) * 5 / 9)   [0-5]
+  gpt_reason     = legal_analysis
+  gpt_action     = derived from severity
+  gpt_issue_type = original row's issue_type (teacher does not return this)
+  gpt_confidence = "high" if severity_confidence=="strong" else "low"
 """
 
 import json
@@ -31,6 +48,20 @@ SEC_CHUNK_MAP_FILE = BATCHES_DIR / "sec_chunk_map.jsonl"
 VALID_ACTIONS = {"accept", "note", "flag", "redline", "reject"}
 VALID_VERDICTS = {"retain", "reject", "uncertain"}
 VALID_CONFIDENCE = {"high", "medium", "low"}
+
+# v2 schema constants
+_V2_SEVERITY_TO_ACTION = {
+    "critical": "reject",
+    "high":     "redline",
+    "medium":   "flag",
+    "low":      "note",
+}
+_V2_SEVERITY_CONFIDENCE_TO_GPT = {
+    "strong": "high",
+    "weak":   "low",
+}
+_V2_VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+_V2_VALID_SEVERITY_CONF = {"strong", "weak"}
 
 
 # ── Result loading ────────────────────────────────────────────────────────────
@@ -51,7 +82,6 @@ def load_batch_results(result_files: list[Path]) -> dict[str, dict]:
                 custom_id = obj.get("custom_id", "")
                 if not custom_id:
                     continue
-                # Extract the assistant message content
                 try:
                     content = (
                         obj["response"]["body"]["choices"][0]["message"]["content"]
@@ -92,19 +122,90 @@ def safe_score(val) -> int | None:
         return None
 
 
+def safe_risk_score(val) -> int | None:
+    try:
+        s = int(val)
+        return s if 1 <= s <= 10 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _risk_score_to_gpt_score(risk_score: int) -> int:
+    """Map teacher's 1-10 risk_score to the 0-5 gpt_score used by export_gemma.py."""
+    return min(5, round((risk_score - 1) * 5 / 9))
+
+
 def annotate_clause(row: dict, gpt: dict, model: str) -> dict:
+    """Dispatch to the correct schema handler based on GPT response content."""
+    if "risk_score" in gpt:
+        return _annotate_clause_v2(row, gpt, model)
+    return _annotate_clause_v1(row, gpt, model)
+
+
+def _annotate_clause_v1(row: dict, gpt: dict, model: str) -> dict:
+    """Handle old (isolation-only) GPT schema: score/reason/action/issue_type/confidence."""
     score = safe_score(gpt.get("score"))
     action = gpt.get("action", "").lower()
     confidence = gpt.get("confidence", "").lower()
     return {
         **row,
-        "gpt_score": score,
-        "gpt_reason": str(gpt.get("reason", "")).strip(),
-        "gpt_action": action if action in VALID_ACTIONS else None,
-        "gpt_issue_type": str(gpt.get("issue_type", row.get("issue_type", ""))).strip(),
-        "gpt_confidence": confidence if confidence in VALID_CONFIDENCE else None,
-        "gpt_model": model,
-        "gpt_ts": datetime.now(timezone.utc).isoformat(),
+        "gpt_score":       score,
+        "gpt_reason":      str(gpt.get("reason", "")).strip(),
+        "gpt_action":      action if action in VALID_ACTIONS else None,
+        "gpt_issue_type":  str(gpt.get("issue_type", row.get("issue_type", ""))).strip(),
+        "gpt_confidence":  confidence if confidence in VALID_CONFIDENCE else None,
+        "gpt_model":       model,
+        "gpt_ts":          datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _annotate_clause_v2(row: dict, gpt: dict, model: str) -> dict:
+    """Handle new (context-aware) GPT schema:
+    contract_type / risk_score / legal_analysis / inconsistencies /
+    severity / severity_confidence / recommendations.
+
+    Populates all fields that export_gemma.py expects (gpt_score, gpt_reason,
+    gpt_action, gpt_issue_type, gpt_confidence) plus new v2-only columns.
+    Also overrides the row's heuristic severity and severity_confidence with
+    the teacher model's output.
+    """
+    risk_score = safe_risk_score(gpt.get("risk_score"))
+    gpt_score = _risk_score_to_gpt_score(risk_score) if risk_score is not None else None
+
+    severity = str(gpt.get("severity", "")).lower().strip()
+    severity_confidence = str(gpt.get("severity_confidence", "")).lower().strip()
+    legal_analysis = str(gpt.get("legal_analysis", "")).strip()
+
+    inconsistencies = gpt.get("inconsistencies", [])
+    if not isinstance(inconsistencies, list):
+        inconsistencies = [str(inconsistencies)] if inconsistencies else []
+
+    # Derive action from severity for export_gemma compatibility
+    gpt_action = _V2_SEVERITY_TO_ACTION.get(severity, "flag")
+
+    # Map severity_confidence → gpt_confidence vocabulary (high/medium/low)
+    gpt_confidence = _V2_SEVERITY_CONFIDENCE_TO_GPT.get(severity_confidence)
+
+    return {
+        **row,
+        # ── Fields read by export_gemma.py (must remain populated) ───────────
+        "gpt_score":            gpt_score,
+        "gpt_reason":           legal_analysis,
+        "gpt_action":           gpt_action,
+        # Preserve original issue_type — teacher schema does not return this
+        "gpt_issue_type":       str(row.get("issue_type", "")).strip(),
+        "gpt_confidence":       gpt_confidence,
+        # ── v2-only columns ───────────────────────────────────────────────────
+        "gpt_risk_score":       risk_score,
+        "gpt_legal_analysis":   legal_analysis,
+        "gpt_inconsistencies":  inconsistencies,
+        "gpt_contract_type":    str(gpt.get("contract_type", "")).strip(),
+        "gpt_recommendations":  str(gpt.get("recommendations", "")).strip(),
+        # Override heuristic severity labels with teacher output
+        "severity":             severity if severity in _V2_VALID_SEVERITIES else row.get("severity"),
+        "severity_confidence":  severity_confidence if severity_confidence in _V2_VALID_SEVERITY_CONF else row.get("severity_confidence"),
+        "gpt_model":            model,
+        "gpt_ts":               datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -114,12 +215,12 @@ def annotate_nli(row: dict, gpt: dict, model: str) -> dict:
     confidence = gpt.get("confidence", "").lower()
     return {
         **row,
-        "gpt_score": score,
-        "gpt_verdict": verdict if verdict in VALID_VERDICTS else None,
-        "gpt_reason": str(gpt.get("reason", "")).strip(),
+        "gpt_score":      score,
+        "gpt_verdict":    verdict if verdict in VALID_VERDICTS else None,
+        "gpt_reason":     str(gpt.get("reason", "")).strip(),
         "gpt_confidence": confidence if confidence in VALID_CONFIDENCE else None,
-        "gpt_model": model,
-        "gpt_ts": datetime.now(timezone.utc).isoformat(),
+        "gpt_model":      model,
+        "gpt_ts":         datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -131,18 +232,18 @@ def annotate_sec(custom_id: str, gpt: dict, model: str) -> dict:
     action = gpt.get("action", "").lower()
     confidence = gpt.get("confidence", "").lower()
     return {
-        "custom_id": custom_id,
-        "source": "sec",
-        "row_idx": row_idx,
-        "chunk_idx": chunk_idx,
-        "gpt_score": score,
+        "custom_id":      custom_id,
+        "source":         "sec",
+        "row_idx":        row_idx,
+        "chunk_idx":      chunk_idx,
+        "gpt_score":      score,
         "gpt_issue_type": str(gpt.get("issue_type", "")).strip(),
         "gpt_key_clause": str(gpt.get("key_clause", "")).strip(),
-        "gpt_reason": str(gpt.get("reason", "")).strip(),
-        "gpt_action": action if action in VALID_ACTIONS else None,
+        "gpt_reason":     str(gpt.get("reason", "")).strip(),
+        "gpt_action":     action if action in VALID_ACTIONS else None,
         "gpt_confidence": confidence if confidence in VALID_CONFIDENCE else None,
-        "gpt_model": model,
-        "gpt_ts": datetime.now(timezone.utc).isoformat(),
+        "gpt_model":      model,
+        "gpt_ts":         datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -162,7 +263,9 @@ def parse_reviewer(results: dict[str, dict], model: str) -> tuple[list[dict], di
 
     for row in all_rows:
         clause = str(row.get("clause_text", "")).strip()
-        h = text_hash(clause)
+        contract_id = str(row.get("contract_id", "")).strip()
+        # Hash must match build_batches.py: sha256(clause_text + contract_id)
+        h = text_hash(clause + contract_id)
         custom_id = f"rev_{h}"
         result = results.get(custom_id)
 
@@ -262,10 +365,9 @@ def main() -> None:
     with open(MANIFEST_FILE) as f:
         manifest = json.load(f)
 
-    # Collect all result files
     all_result_files = list(RESULTS_DIR.glob("*_results.jsonl"))
     if not all_result_files:
-        print(f"No result files in {RESULTS_DIR}. Run poll_batches.py first.")
+        print(f"No result files in {RESULTS_DIR}. Run run_calls.py first.")
         return
 
     print(f"\nLoading {len(all_result_files)} result file(s)...")
@@ -304,12 +406,11 @@ def main() -> None:
         print(f"  {out.name}: {len(sec_rows):,} rows  {sec_stats}")
         report["sec"] = sec_stats
 
-    # Save report
     report_path = ANNOTATED_DIR / "parse_report.json"
     with open(report_path, "w") as f:
         json.dump(report, f, indent=2)
     print(f"\nParse report → {report_path}")
-    print("Next: python -m scripts.distill.export_gemma")
+    print("Next: python -m scripts.run_distill export")
 
 
 if __name__ == "__main__":

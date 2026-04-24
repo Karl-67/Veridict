@@ -17,6 +17,11 @@ from pathlib import Path
 import httpx
 
 AUTH_FILE = Path.home() / ".codex" / "auth.json"
+
+def _auth_file(override: str | None = None) -> Path:
+    if override:
+        return Path(override).expanduser()
+    return AUTH_FILE
 REFRESH_URL = "https://auth.openai.com/oauth/token"
 # Buffer — refresh if token expires within 5 minutes
 EXPIRY_BUFFER_SECS = 300
@@ -77,34 +82,35 @@ def _refresh(auth: dict) -> dict:
     return auth
 
 
-def get_access_token() -> str:
+def get_access_token(auth_file: str | None = None) -> str:
     """
-    Return a valid access_token from ~/.codex/auth.json.
+    Return a valid access_token from ~/.codex/auth.json (or override path).
     Automatically refreshes if expired. Saves updated tokens back to disk.
     """
-    if not AUTH_FILE.exists():
+    path = _auth_file(auth_file)
+    if not path.exists():
         sys.exit(
-            f"Codex auth file not found at {AUTH_FILE}.\n"
+            f"Codex auth file not found at {path}.\n"
             "Run `codex` once to complete OAuth login, then retry."
         )
 
-    with open(AUTH_FILE) as f:
+    with open(path) as f:
         auth = json.load(f)
 
     if auth.get("auth_mode") != "chatgpt":
         sys.exit(
-            f"Unexpected auth_mode '{auth.get('auth_mode')}' in auth.json. "
+            f"Unexpected auth_mode '{auth.get('auth_mode')}' in {path}. "
             "Expected 'chatgpt' OAuth mode."
         )
 
     access_token = auth.get("tokens", {}).get("access_token")
     if not access_token:
-        sys.exit("No access_token in auth.json. Re-login to Codex.")
+        sys.exit(f"No access_token in {path}. Re-login to Codex.")
 
     if _is_expired(access_token):
         print("  OAuth token expired — refreshing...")
         auth = _refresh(auth)
-        with open(AUTH_FILE, "w") as f:
+        with open(path, "w") as f:
             json.dump(auth, f, indent=2)
         print("  Token refreshed and saved.")
         access_token = auth["tokens"]["access_token"]

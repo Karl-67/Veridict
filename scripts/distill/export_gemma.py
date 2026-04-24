@@ -15,6 +15,7 @@ fine-tuning set with trivial negatives (boilerplate).
 
 import json
 import random
+from collections import Counter
 from pathlib import Path
 
 from .config import ANNOTATED_DIR, GEMMA_DIR, ISSUE_TYPE_DISPLAY, SCORE_LABELS
