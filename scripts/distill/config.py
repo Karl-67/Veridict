@@ -13,6 +13,13 @@ TEACHER_CONTRACT = "gpt-5.4"
 MAX_OUTPUT_TOKENS = 280
 BATCH_MAX_REQUESTS = 45_000   # OpenAI hard cap is 50k; stay under
 
+# Contracts whose estimated input token count exceeds this threshold are written
+# to separate  *_large_batch_*.jsonl  files and processed last.  This preserves
+# the per-session rate-limit budget for smaller contracts (faster throughput per
+# token spent) while still labeling large contracts when limits reset.
+# ~3,500 input tokens ≈ 2,600 words ≈ a medium-to-large commercial contract.
+LARGE_CONTRACT_TOKENS = 3_500
+
 # SEC chunking — word-based (~1.35 tokens/word → 380 words ≈ 512 tokens)
 SEC_CHUNK_WORDS = 380
 SEC_CHUNK_OVERLAP_WORDS = 100

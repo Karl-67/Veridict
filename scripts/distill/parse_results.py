@@ -224,6 +224,69 @@ def annotate_nli(row: dict, gpt: dict, model: str) -> dict:
     }
 
 
+def annotate_clause_finding(row: dict, gpt: dict, model: str) -> dict:
+    """Handle multi-clause reviewer finding schema (from USER_MULTI_CLAUSE prompt).
+
+    Fields: clause_index, contract_type, risk_score (1-10), risk_analysis,
+            false_positive_note, exploitability, severity, severity_confidence,
+            recommendation.
+    """
+    risk_score = safe_risk_score(gpt.get("risk_score"))
+    gpt_score = _risk_score_to_gpt_score(risk_score) if risk_score is not None else None
+
+    severity = str(gpt.get("severity", "")).lower().strip()
+    severity_confidence = str(gpt.get("severity_confidence", "")).lower().strip()
+    risk_analysis = str(gpt.get("risk_analysis", "")).strip()
+    false_positive_note = str(gpt.get("false_positive_note", "")).strip()
+    exploitability = str(gpt.get("exploitability", "")).strip()
+    recommendation = str(gpt.get("recommendation", "")).strip()
+    contract_type = str(gpt.get("contract_type", "")).strip()
+
+    gpt_action = _V2_SEVERITY_TO_ACTION.get(severity, "flag")
+    gpt_confidence = _V2_SEVERITY_CONFIDENCE_TO_GPT.get(severity_confidence)
+
+    return {
+        **row,
+        # Fields read by export_gemma.py (backward-compat names)
+        "gpt_score":               gpt_score,
+        "gpt_reason":              risk_analysis,
+        "gpt_action":              gpt_action,
+        "gpt_issue_type":          str(row.get("issue_type", "")).strip(),
+        "gpt_confidence":          gpt_confidence,
+        # Rich v3 fields
+        "gpt_risk_score":          risk_score,
+        "gpt_risk_analysis":       risk_analysis,
+        "gpt_false_positive_note": false_positive_note,
+        "gpt_exploitability":      exploitability,
+        "gpt_contract_type":       contract_type,
+        "gpt_recommendation":      recommendation,
+        # Override heuristic severity with teacher output
+        "severity":                severity if severity in _V2_VALID_SEVERITIES else row.get("severity"),
+        "severity_confidence":     severity_confidence if severity_confidence in _V2_VALID_SEVERITY_CONF else row.get("severity_confidence"),
+        "gpt_model":               model,
+        "gpt_ts":                  datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def annotate_maud(row: dict, gpt: dict, model: str) -> dict:
+    """Annotate a MAUD row with GPT risk analysis."""
+    risk_score = safe_risk_score(gpt.get("risk_score"))
+    severity = str(gpt.get("severity", "")).lower().strip()
+    confidence = str(gpt.get("confidence", "")).lower().strip()
+    return {
+        **row,
+        "gpt_risk_owner":    str(gpt.get("risk_owner", "")).strip(),
+        "gpt_risk_score":    risk_score,
+        "gpt_risk_analysis": str(gpt.get("risk_analysis", "")).strip(),
+        "gpt_exploitability":str(gpt.get("exploitability", "")).strip(),
+        "gpt_severity":      severity if severity in _V2_VALID_SEVERITIES else None,
+        "gpt_recommendation":str(gpt.get("recommendation", "")).strip(),
+        "gpt_confidence":    confidence if confidence in VALID_CONFIDENCE else None,
+        "gpt_model":         model,
+        "gpt_ts":            datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def annotate_sec(custom_id: str, gpt: dict, model: str) -> dict:
     parts = custom_id.split("_")
     row_idx = int(parts[1]) if len(parts) > 1 else -1
@@ -250,13 +313,42 @@ def annotate_sec(custom_id: str, gpt: dict, model: str) -> dict:
 # ── Per-dataset parsers ───────────────────────────────────────────────────────
 
 
-def parse_reviewer(results: dict[str, dict], model: str) -> tuple[list[dict], dict]:
+def parse_reviewer(results: dict[str, dict], manifest: dict, model: str) -> tuple[list[dict], dict]:
+    """Parse reviewer results using the contract_clause_map from the manifest.
+
+    build_batches creates one request per full contract (custom_id =
+    rev_contract_{hash(contract_id)}) whose response is a JSON array of findings
+    ordered to match the manifest's clause list for that contract.  We expand
+    the array back to individual clause rows here.
+    """
     all_rows: list[dict] = []
     for split in ("train", "val", "test"):
         all_rows.extend(load_jsonl(CURATED_DIR / "dataset_a" / f"reviewer_{split}.jsonl"))
 
     if not all_rows:
         return [], {"skipped": "no curated data"}
+
+    # Build clause_hash → finding dict from contract-level results
+    contract_clause_map: dict[str, list[dict]] = manifest.get("reviewer", {}).get("contract_clause_map", {})
+    clause_finding: dict[str, dict] = {}
+    contracts_found = contracts_missing = 0
+
+    for custom_id, clause_list in contract_clause_map.items():
+        result = results.get(custom_id)
+        if result is None or result.get("error") or result.get("raw") is None:
+            contracts_missing += 1
+            continue
+        findings = result["raw"]
+        if not isinstance(findings, list):
+            # Unexpected scalar response — skip
+            contracts_missing += 1
+            continue
+        contracts_found += 1
+        for i, clause_meta in enumerate(clause_list):
+            if i < len(findings):
+                clause_finding[clause_meta["clause_hash"]] = findings[i]
+
+    print(f"    contract results: {contracts_found} found, {contracts_missing} missing")
 
     annotated = []
     stats = {"total": len(all_rows), "annotated": 0, "missing": 0, "parse_error": 0}
@@ -266,19 +358,18 @@ def parse_reviewer(results: dict[str, dict], model: str) -> tuple[list[dict], di
         contract_id = str(row.get("contract_id", "")).strip()
         # Hash must match build_batches.py: sha256(clause_text + contract_id)
         h = text_hash(clause + contract_id)
-        custom_id = f"rev_{h}"
-        result = results.get(custom_id)
+        finding = clause_finding.get(h)
 
-        if result is None:
+        if finding is None:
             stats["missing"] += 1
             annotated.append(row)
             continue
-        if result["error"] or result["raw"] is None:
+        if not isinstance(finding, dict):
             stats["parse_error"] += 1
             annotated.append(row)
             continue
 
-        annotated.append(annotate_clause(row, result["raw"], model))
+        annotated.append(annotate_clause_finding(row, finding, model))
         stats["annotated"] += 1
 
     return annotated, stats
@@ -350,6 +441,40 @@ def parse_sec(results: dict[str, dict], model: str) -> tuple[list[dict], dict]:
     return rows, stats
 
 
+def parse_maud(results: dict[str, dict], model: str) -> tuple[list[dict], dict]:
+    """Parse MAUD results: one GPT response per unique (passage, question) pair."""
+    all_rows: list[dict] = []
+    for split in ("train", "val", "test"):
+        all_rows.extend(load_jsonl(CURATED_DIR / "dataset_c" / f"maud_{split}.jsonl"))
+
+    if not all_rows:
+        return [], {"skipped": "no curated data"}
+
+    annotated = []
+    stats = {"total": len(all_rows), "annotated": 0, "missing": 0, "parse_error": 0}
+
+    for row in all_rows:
+        passage  = str(row.get("passage",  "")).strip()
+        question = str(row.get("question", "")).strip()
+        key = text_hash(passage + question)
+        custom_id = f"maud_{key}"
+        result = results.get(custom_id)
+
+        if result is None:
+            stats["missing"] += 1
+            annotated.append(row)
+            continue
+        if result["error"] or result["raw"] is None:
+            stats["parse_error"] += 1
+            annotated.append(row)
+            continue
+
+        annotated.append(annotate_maud(row, result["raw"], model))
+        stats["annotated"] += 1
+
+    return annotated, stats
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -379,7 +504,7 @@ def main() -> None:
     # Reviewer
     print("\n[Reviewer]")
     rev_model = manifest.get("reviewer", {}).get("model", TEACHER_CLAUSE)
-    rev_rows, rev_stats = parse_reviewer(results, rev_model)
+    rev_rows, rev_stats = parse_reviewer(results, manifest, rev_model)
     if rev_rows:
         out = ANNOTATED_DIR / "reviewer_annotated.jsonl"
         write_jsonl(rev_rows, out)
@@ -395,6 +520,16 @@ def main() -> None:
         write_jsonl(val_rows, out)
         print(f"  {out.name}: {len(val_rows):,} rows  {val_stats}")
         report["validator"] = val_stats
+
+    # MAUD
+    print("\n[MAUD]")
+    maud_model = manifest.get("maud", {}).get("model", TEACHER_CLAUSE)
+    maud_rows, maud_stats = parse_maud(results, maud_model)
+    if maud_rows:
+        out = ANNOTATED_DIR / "maud_annotated.jsonl"
+        write_jsonl(maud_rows, out)
+        print(f"  {out.name}: {len(maud_rows):,} rows  {maud_stats}")
+        report["maud"] = maud_stats
 
     # SEC
     print("\n[SEC]")

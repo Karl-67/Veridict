@@ -3,13 +3,23 @@
 run_distill.py — Knowledge distillation pipeline runner.
 
 Usage:
-  python -m scripts.run_distill build            # Build batch input files
-  python -m scripts.run_distill calls            # Run all calls via Codex OAuth (no API key)
-  python -m scripts.run_distill calls --dry-run 5  # Test with 5 requests first
-  python -m scripts.run_distill parse            # Merge GPT annotations into curated rows
-  python -m scripts.run_distill export           # Export Gemma 4 fine-tuning JSONL
-  python -m scripts.run_distill train            # Fine-tune Gemma 4 on distillation data
-  python -m scripts.run_distill all              # build → calls → parse → export
+  python -m scripts.run_distill build                    # Build batch input files (sorted small→large)
+  python -m scripts.run_distill calls                    # Run all calls via Codex OAuth (no API key)
+  python -m scripts.run_distill calls --max-new 200      # Label at most 200 requests, then stop
+  python -m scripts.run_distill calls --status           # Print progress without making any calls
+  python -m scripts.run_distill calls --dry-run 5        # Test with 5 requests first
+  python -m scripts.run_distill parse                    # Merge GPT annotations into curated rows
+  python -m scripts.run_distill export                   # Export Gemma 4 fine-tuning JSONL
+  python -m scripts.run_distill train                    # Fine-tune Gemma 4 on distillation data
+  python -m scripts.run_distill all                      # build → calls → parse → export
+
+Resume workflow (when rate limit resets):
+  # First run — labels as many small contracts as possible
+  python -m scripts.run_distill calls --max-new 500
+  # Check what is left
+  python -m scripts.run_distill calls --status
+  # Next session — picks up exactly where it left off
+  python -m scripts.run_distill calls --max-new 500
 
 Prerequisites:
   1. Run scripts/curate_dataset.py to generate data/curated/

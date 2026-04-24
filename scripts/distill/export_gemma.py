@@ -33,6 +33,12 @@ SYSTEM_PROMPT_VALIDATOR = (
     "the finding is supported by the clause text."
 )
 
+SYSTEM_PROMPT_MAUD = (
+    "You are Veridict, a specialized AI legal contract reviewer focused on M&A due diligence. "
+    "Given a merger agreement passage and a deal-point question, analyze the legal risk "
+    "and provide negotiation guidance to protect the disadvantaged party."
+)
+
 
 # ── Format helpers ────────────────────────────────────────────────────────────
 
@@ -42,23 +48,38 @@ def format_issue_type(raw: str) -> str:
 
 
 def reviewer_turn(row: dict) -> dict | None:
-    score = row.get("gpt_score")
-    if score is None:
-        return None
-    reason = str(row.get("gpt_reason", "")).strip()
-    action = str(row.get("gpt_action") or "").strip() or _action_from_score(score)
-    issue_type = format_issue_type(str(row.get("gpt_issue_type") or row.get("issue_type", "")))
-    clause_text = str(row.get("clause_text", "")).strip()
-    if not clause_text:
+    # Prefer rich v3 fields; fall back to v1/v2 fields for old annotated files
+    risk_score  = row.get("gpt_risk_score")   # 1-10 from multi-clause schema
+    gpt_score   = row.get("gpt_score")         # 0-5 normalised
+    if risk_score is None and gpt_score is None:
         return None
 
-    user_content = f"Review this contract clause:\n\n{clause_text}"
-    assistant_content = (
-        f"Risk Score: {score}/5 — {SCORE_LABELS[score]}\n"
-        f"Category: {issue_type}\n"
-        f"Assessment: {reason}\n"
-        f"Recommended Action: {action}"
-    )
+    risk_analysis      = str(row.get("gpt_risk_analysis") or row.get("gpt_reason", "")).strip()
+    false_positive_note= str(row.get("gpt_false_positive_note", "")).strip()
+    exploitability     = str(row.get("gpt_exploitability", "")).strip()
+    recommendation     = str(row.get("gpt_recommendation", "")).strip()
+    action             = str(row.get("gpt_action") or "").strip() or _action_from_score(gpt_score or 0)
+    issue_type         = format_issue_type(str(row.get("gpt_issue_type") or row.get("issue_type", "")))
+    clause_text        = str(row.get("clause_text", "")).strip()
+    severity           = str(row.get("severity", "")).strip()
+
+    if not clause_text or not risk_analysis:
+        return None
+
+    score_line = f"{risk_score}/10" if risk_score is not None else f"{gpt_score}/5 — {SCORE_LABELS.get(gpt_score, '')}"
+
+    user_content = f"Review this contract window and return clause-level findings:\n\n{clause_text}"
+
+    assistant_parts = [
+        f"Risk Score: {score_line}",
+        f"Severity: {severity.capitalize()}" if severity else None,
+        f"Category: {issue_type}",
+        f"Risk Analysis: {risk_analysis}",
+        f"False Positive Check: {false_positive_note}" if false_positive_note else None,
+        f"Exploitability: {exploitability}" if exploitability else None,
+        f"Recommendation: {recommendation}" if recommendation else f"Action: {action}",
+    ]
+    assistant_content = "\n".join(p for p in assistant_parts if p)
     return _chat(SYSTEM_PROMPT, user_content, assistant_content)
 
 
@@ -79,6 +100,42 @@ def validator_turn(row: dict) -> dict | None:
         f"Reasoning: {reason}"
     ).strip()
     return _chat(SYSTEM_PROMPT_VALIDATOR, user_content, assistant_content)
+
+
+def maud_turn(row: dict) -> dict | None:
+    risk_analysis = str(row.get("gpt_risk_analysis", "")).strip()
+    if not risk_analysis:
+        return None
+    passage      = str(row.get("passage",  "")).strip()
+    question     = str(row.get("question", "")).strip()
+    answer       = str(row.get("answer",   "")).strip()
+    category     = str(row.get("category", "")).strip()
+    if not passage or not question:
+        return None
+
+    risk_score   = row.get("gpt_risk_score")
+    risk_owner   = str(row.get("gpt_risk_owner",    "")).strip()
+    severity     = str(row.get("gpt_severity",      "")).strip()
+    exploitability = str(row.get("gpt_exploitability", "")).strip()
+    recommendation = str(row.get("gpt_recommendation", "")).strip()
+
+    user_content = (
+        f"Analyze this merger agreement deal point:\n\n"
+        f"Category: {category}\n"
+        f"Question: {question}\n"
+        f"Passage: {passage}\n"
+        f"Confirmed Answer: {answer}"
+    )
+    assistant_parts = [
+        f"Risk Owner: {risk_owner.capitalize()}" if risk_owner else None,
+        f"Risk Score: {risk_score}/10" if risk_score is not None else None,
+        f"Severity: {severity.capitalize()}" if severity else None,
+        f"Analysis: {risk_analysis}",
+        f"Exploitability: {exploitability}" if exploitability else None,
+        f"Recommendation: {recommendation}" if recommendation else None,
+    ]
+    assistant_content = "\n".join(p for p in assistant_parts if p)
+    return _chat(SYSTEM_PROMPT_MAUD, user_content, assistant_content)
 
 
 def sec_turn(row: dict) -> dict | None:
@@ -198,6 +255,24 @@ def main() -> None:
 
     print(f"[Validator] {len(val_rows):,} rows → {val_converted:,} turns  (skipped {val_skipped})")
     report["validator"] = {"input": len(val_rows), "exported": val_converted}
+
+    # ── MAUD ──────────────────────────────────────────────────────────────────
+    maud_rows = load_jsonl(ANNOTATED_DIR / "maud_annotated.jsonl")
+    maud_converted = maud_skipped = 0
+
+    for row in maud_rows:
+        turn = maud_turn(row)
+        if turn is None:
+            maud_skipped += 1
+            continue
+        split = row.get("split", "train")
+        if split not in by_split:
+            split = "train"
+        by_split[split].append(turn)
+        maud_converted += 1
+
+    print(f"[MAUD]      {len(maud_rows):,} rows → {maud_converted:,} turns  (skipped {maud_skipped})")
+    report["maud"] = {"input": len(maud_rows), "exported": maud_converted}
 
     # ── SEC ───────────────────────────────────────────────────────────────────
     sec_rows = load_jsonl(ANNOTATED_DIR / "sec_annotated.jsonl")

@@ -23,12 +23,15 @@ import asyncio
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
 from .config import BATCHES_DIR, RESULTS_DIR
 from .oauth import get_access_token
+
+PROGRESS_FILE = RESULTS_DIR / "progress.json"
 
 CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 CONCURRENCY = 3      # simultaneous requests
@@ -63,6 +66,87 @@ def _estimate_avg_tokens(batch_file: Path) -> int:
     if count == 0:
         return 0
     return (total_chars // 4) // count
+
+
+# ── Progress tracking ─────────────────────────────────────────────────────────
+
+
+def _count_done_in_file(out_file: Path) -> tuple[int, int]:
+    """Return (done_ok, done_err) from an existing results file."""
+    ok = err = 0
+    if not out_file.exists():
+        return 0, 0
+    with open(out_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if obj.get("error"):
+                    err += 1
+                else:
+                    ok += 1
+            except json.JSONDecodeError:
+                pass
+    return ok, err
+
+
+def write_progress(file_stats: dict[str, dict]) -> None:
+    """Write overall progress summary to data/distillation/results/progress.json.
+
+    file_stats: {batch_filename: {total, done, errors}}
+    """
+    total  = sum(s["total"]  for s in file_stats.values())
+    done   = sum(s["done"]   for s in file_stats.values())
+    errors = sum(s.get("errors", 0) for s in file_stats.values())
+    pending = total - done
+    out = {
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "files": file_stats,
+        "overall": {
+            "total":   total,
+            "done":    done,
+            "pending": pending,
+            "errors":  errors,
+            "pct_done": f"{done / max(total, 1) * 100:.1f}%",
+        },
+    }
+    with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+
+
+def print_status() -> None:
+    """Print progress summary without running any calls."""
+    if not PROGRESS_FILE.exists():
+        # Build from scratch by scanning batch + result files
+        all_files = sorted(BATCHES_DIR.glob("*_batch_*.jsonl"))
+        if not all_files:
+            print("No batch files found. Run 'build' first.")
+            return
+        file_stats: dict[str, dict] = {}
+        for bf in all_files:
+            total = sum(1 for line in open(bf, encoding="utf-8") if line.strip())
+            out_file = RESULTS_DIR / f"{bf.stem}_results.jsonl"
+            done_ok, done_err = _count_done_in_file(out_file)
+            file_stats[bf.name] = {"total": total, "done": done_ok, "errors": done_err}
+        write_progress(file_stats)
+
+    with open(PROGRESS_FILE, encoding="utf-8") as f:
+        p = json.load(f)
+
+    ov = p.get("overall", {})
+    print(f"  Last updated : {p.get('last_updated', 'unknown')}")
+    print(f"  Overall      : {ov.get('done',0):>6,} / {ov.get('total',0):>6,} done"
+          f"  ({ov.get('pct_done','?')})  pending={ov.get('pending',0):,}"
+          f"  errors={ov.get('errors',0)}")
+    print()
+    # Group by type (reviewer / reviewer_large / validator / sec …)
+    for fname, stats in sorted(p.get("files", {}).items()):
+        pct = stats["done"] / max(stats["total"], 1) * 100
+        bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+        print(f"  {fname:<42}  [{bar}] {pct:5.1f}%"
+              f"  {stats['done']:>5,}/{stats['total']:>5,}  err={stats.get('errors',0)}")
 
 
 # ── Request conversion ────────────────────────────────────────────────────────
@@ -293,21 +377,45 @@ async def run_all(max_new: int | None, account: int | None, auth_file: str | Non
     token = get_access_token(auth_file)
     print("  OK\n")
 
+    # Normal batch files first, then _large files (sorted within each group)
     all_files = sorted(BATCHES_DIR.glob("*_batch_*.jsonl"))
+    normal_files = [f for f in all_files if "_large_" not in f.name]
+    large_files  = [f for f in all_files if "_large_" in f.name]
+    all_files_ordered = normal_files + large_files
 
     if account is not None:
-        batch_files = [f for f in all_files if f.name.startswith(f"account{account}_")]
+        batch_files = [f for f in all_files_ordered if f.name.startswith(f"account{account}_")]
         if not batch_files:
             sys.exit(f"No batch files matching account{account}_batch_*.jsonl in {BATCHES_DIR}.")
         print(f"Account {account} mode — processing {len(batch_files)} file(s)\n")
     else:
-        batch_files = [f for f in all_files if not f.name.startswith("account")]
+        batch_files = [f for f in all_files_ordered if not f.name.startswith("account")]
 
     if not batch_files:
         sys.exit(f"No batch files in {BATCHES_DIR}. Run build_batches first.")
 
+    # ── Build initial progress state from disk ──────────────────────────────
+    file_stats: dict[str, dict] = {}
+    total_pending_before = 0
+    for bf in batch_files:
+        total = sum(1 for line in open(bf, encoding="utf-8") if line.strip())
+        out_file = RESULTS_DIR / f"{bf.stem}_results.jsonl"
+        done_ok, done_err = _count_done_in_file(out_file)
+        pending = total - done_ok
+        file_stats[bf.name] = {"total": total, "done": done_ok, "errors": done_err}
+        total_pending_before += pending
+
+    write_progress(file_stats)
+
+    total_done_before = sum(s["done"] for s in file_stats.values())
+    total_all = sum(s["total"] for s in file_stats.values())
+    print(f"Resume state: {total_done_before:,} / {total_all:,} already done"
+          f"  ({total_pending_before:,} pending across {len(batch_files)} file(s))")
     if max_new is not None:
-        print(f"Max-new mode: will process at most {max_new} pending requests then stop.\n")
+        print(f"Max-new mode: will process at most {max_new} pending requests then stop.")
+    if large_files:
+        print(f"Large-contract files queued last: {[f.name for f in large_files]}")
+    print()
 
     total_stats = {"total": 0, "new": 0, "errors": 0}
     remaining_budget = [max_new if max_new is not None else 0]
@@ -315,7 +423,8 @@ async def run_all(max_new: int | None, account: int | None, auth_file: str | Non
     for batch_file in batch_files:
         out_file = RESULTS_DIR / f"{batch_file.stem}_results.jsonl"
         avg_tokens = _estimate_avg_tokens(batch_file)
-        print(f"[{batch_file.name}]  avg input tokens/call: ~{avg_tokens:,}")
+        size_tag = " [LARGE — runs last]" if "_large_" in batch_file.name else ""
+        print(f"[{batch_file.name}]{size_tag}  avg input tokens/call: ~{avg_tokens:,}")
         stats = await run_batch_file(batch_file, out_file, token, max_new, remaining_budget)
         print(
             f"  Done — new={stats['new']}  errors={stats['errors']}  → {out_file.name}\n"
@@ -324,13 +433,24 @@ async def run_all(max_new: int | None, account: int | None, auth_file: str | Non
         total_stats["new"]    += stats["new"]
         total_stats["errors"] += stats["errors"]
 
+        # Update progress file after every batch file so --status always reflects reality
+        done_ok, done_err = _count_done_in_file(out_file)
+        file_stats[batch_file.name] = {
+            "total":  file_stats[batch_file.name]["total"],
+            "done":   done_ok,
+            "errors": done_err,
+        }
+        write_progress(file_stats)
+
         if max_new is not None and remaining_budget[0] <= 0:
             print("Max-new budget reached — stopping early.")
+            print(f"  Run again with --max-new N when your limit resets to continue.")
+            print(f"  Current progress saved to {PROGRESS_FILE}")
             break
 
     print("=" * 40)
     print(f"Total: {total_stats['total']}  new={total_stats['new']}  errors={total_stats['errors']}")
-    if total_stats["errors"] == 0:
+    if total_stats["errors"] == 0 and (max_new is None or remaining_budget[0] > 0):
         print("\nAll done. Next: python -m scripts.run_distill parse")
 
 
@@ -343,12 +463,18 @@ def main() -> None:
                         help="Run only account N's batch files (account1_batch_*.jsonl etc.)")
     parser.add_argument("--auth-file", metavar="PATH",
                         help="Path to auth.json (default: ~/.codex/auth.json)")
+    parser.add_argument("--status", action="store_true",
+                        help="Print progress summary and exit without making any calls.")
     args, _ = parser.parse_known_args()
 
     print("=" * 60)
     print("Run Calls (ChatGPT OAuth backend)")
     print("=" * 60)
     print()
+
+    if args.status:
+        print_status()
+        return
 
     asyncio.run(run_all(args.max_new, args.account, args.auth_file))
 
