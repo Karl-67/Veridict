@@ -49,8 +49,46 @@ def check_deps() -> None:
         )
 
 
+ROLES = ("harvey", "kira", "validator")
+
+
+def resolve_role_paths(role: str | None, cfg: object) -> tuple:
+    """Return (train_file, val_file, output_dir, checkpoints_dir) for the given role."""
+    if role == "harvey":
+        return (
+            cfg.HARVEY_FT_DIR / "train.jsonl",
+            cfg.HARVEY_FT_DIR / "val.jsonl",
+            cfg.HARVEY_OUTPUT_DIR,
+            cfg.HARVEY_CHECKPOINTS,
+        )
+    elif role == "kira":
+        return (
+            cfg.KIRA_FT_DIR / "train.jsonl",
+            cfg.KIRA_FT_DIR / "val.jsonl",
+            cfg.KIRA_OUTPUT_DIR,
+            cfg.KIRA_CHECKPOINTS,
+        )
+    elif role == "validator":
+        return (
+            cfg.VALIDATOR_FT_DIR / "train.jsonl",
+            cfg.VALIDATOR_FT_DIR / "val.jsonl",
+            cfg.VALIDATOR_OUTPUT_DIR,
+            cfg.VALIDATOR_CHECKPOINTS,
+        )
+    else:
+        # Legacy single-model path
+        return (
+            cfg.GEMMA_DIR / "train.jsonl",
+            cfg.GEMMA_DIR / "val.jsonl",
+            cfg.GEMMA_OUTPUT_DIR,
+            cfg.GEMMA_CHECKPOINTS,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--role",    choices=[*ROLES, "legacy"], default=None,
+                        help="Which model to train: harvey | kira | validator | legacy")
     parser.add_argument("--model",   default=None, help="HuggingFace model ID (overrides config)")
     parser.add_argument("--epochs",  type=int, default=None)
     parser.add_argument("--batch",   type=int, default=None)
@@ -62,11 +100,8 @@ def main() -> None:
 
     check_deps()
 
+    from . import config as cfg
     from .config import (
-        GEMMA_CHECKPOINTS,
-        GEMMA_MODEL_ID,
-        GEMMA_OUTPUT_DIR,
-        GEMMA_DIR,
         GRAD_ACCUM_STEPS,
         LEARNING_RATE,
         LORA_ALPHA,
@@ -74,6 +109,7 @@ def main() -> None:
         MAX_SEQ_LENGTH,
         TRAIN_BATCH_SIZE,
         TRAIN_EPOCHS,
+        GEMMA_MODEL_ID,
     )
 
     import torch
@@ -82,27 +118,34 @@ def main() -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     from trl import SFTConfig, SFTTrainer
 
-    model_id    = args.model  or GEMMA_MODEL_ID
-    epochs      = args.epochs or TRAIN_EPOCHS
-    batch_size  = args.batch  or TRAIN_BATCH_SIZE
-    lr          = args.lr     or LEARNING_RATE
-    lora_rank   = args.lora_rank or LORA_RANK
+    role       = args.role if args.role != "legacy" else None
+    model_id   = args.model  or GEMMA_MODEL_ID
+    epochs     = args.epochs or TRAIN_EPOCHS
+    batch_size = args.batch  or TRAIN_BATCH_SIZE
+    lr         = args.lr     or LEARNING_RATE
+    lora_rank  = args.lora_rank or LORA_RANK
 
-    train_file = GEMMA_DIR / "train.jsonl"
-    val_file   = GEMMA_DIR / "val.jsonl"
+    train_file, val_file, output_dir, checkpoints_dir = resolve_role_paths(role, cfg)
 
     if not train_file.exists():
-        sys.exit(f"Training data not found at {train_file}. Run export_gemma.py first.")
+        sys.exit(
+            f"Training data not found at {train_file}.\n"
+            f"Run export_branch.py --role {role or 'legacy'} first."
+        )
 
+    role_label = role.upper() if role else "LEGACY"
     print("=" * 60)
-    print("Train Gemma 4")
+    print(f"Train Gemma 4  [{role_label}]")
     print("=" * 60)
-    print(f"\n  Model:       {model_id}")
+    print(f"\n  Role:        {role_label}")
+    print(f"  Model:       {model_id}")
     print(f"  Epochs:      {epochs}")
     print(f"  Batch size:  {batch_size}  (grad accum: {GRAD_ACCUM_STEPS})")
     print(f"  LR:          {lr}")
     print(f"  LoRA:        {'disabled' if args.no_lora else f'rank={lora_rank} alpha={LORA_ALPHA}'}")
     print(f"  4-bit:       {args.load_4bit}")
+    print(f"  Train file:  {train_file}")
+    print(f"  Output:      {output_dir}")
 
     # ── Load datasets ─────────────────────────────────────────────────────────
     print("\nLoading datasets...")
@@ -156,7 +199,7 @@ def main() -> None:
 
     # ── Training config ───────────────────────────────────────────────────────
     sft_config = SFTConfig(
-        output_dir=str(GEMMA_CHECKPOINTS),
+        output_dir=str(checkpoints_dir),
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
@@ -190,16 +233,16 @@ def main() -> None:
     trainer.train()
 
     # ── Save final model ──────────────────────────────────────────────────────
-    print(f"\nSaving final model → {GEMMA_OUTPUT_DIR}")
+    print(f"\nSaving final model → {output_dir}")
     if not args.no_lora:
         merged = trainer.model.merge_and_unload()
-        merged.save_pretrained(str(GEMMA_OUTPUT_DIR))
+        merged.save_pretrained(str(output_dir))
     else:
-        trainer.model.save_pretrained(str(GEMMA_OUTPUT_DIR))
-    tokenizer.save_pretrained(str(GEMMA_OUTPUT_DIR))
+        trainer.model.save_pretrained(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
 
-    print(f"\nDone. Fine-tuned model saved to {GEMMA_OUTPUT_DIR}")
-    print("Load it with: AutoModelForCausalLM.from_pretrained(str(GEMMA_OUTPUT_DIR))")
+    print(f"\nDone. Fine-tuned model [{role_label}] saved to {output_dir}")
+    print(f"Load it with: AutoModelForCausalLM.from_pretrained('{output_dir}')")
 
 
 if __name__ == "__main__":

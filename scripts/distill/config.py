@@ -49,23 +49,62 @@ ISSUE_TYPE_DISPLAY = {
     "third_party_risk":      "Third Party Risk",
 }
 
-# Gemma 4 fine-tuning
-GEMMA_MODEL_ID      = "google/gemma-4-E4B"   # 4B MoE — swap to 26B-A4B-it for more capacity
+# ── Gemma 4 26B — three-checkpoint training pipeline ─────────────────────────
+# Use the 26B MoE instruction-tuned variant for production.
+# Swap to "google/gemma-4-E4B" for fast dev iterations.
+GEMMA_MODEL_ID = "google/gemma-4-26B-A4B-it"
+
+# Sequence lengths — default for Harvey/Kira clause+context; long for MAUD passages
+MAX_SEQ_LENGTH      = 1024
+MAX_SEQ_LENGTH_MAUD = 1536
+
+# LoRA / training hyperparameters
+LORA_RANK        = 16
+LORA_ALPHA       = 32
+TRAIN_EPOCHS     = 3
+TRAIN_BATCH_SIZE = 2
+GRAD_ACCUM_STEPS = 8     # effective batch = 16
+LEARNING_RATE    = 2e-4
+
+# ── Branch-specific directories ───────────────────────────────────────────────
+# Raw (pre-export) training sets — written by build_branch_datasets.py
+HARVEY_DIR    = DISTILL_DIR / "harvey"
+KIRA_DIR      = DISTILL_DIR / "kira"
+VALIDATOR_DIR = DISTILL_DIR / "validator"
+MAUD_DIR      = DISTILL_DIR / "maud"
+
+# Exported fine-tuning sets — written by export_branch.py
+HARVEY_FT_DIR    = DISTILL_DIR / "harvey_ft"
+KIRA_FT_DIR      = DISTILL_DIR / "kira_ft"
+VALIDATOR_FT_DIR = DISTILL_DIR / "validator_ft"
+
+# Fine-tuned model output directories
+HARVEY_OUTPUT_DIR    = DISTILL_DIR / "model_harvey"
+KIRA_OUTPUT_DIR      = DISTILL_DIR / "model_kira"
+VALIDATOR_OUTPUT_DIR = DISTILL_DIR / "model_validator"
+
+# Checkpoint directories
+HARVEY_CHECKPOINTS    = DISTILL_DIR / "checkpoints_harvey"
+KIRA_CHECKPOINTS      = DISTILL_DIR / "checkpoints_kira"
+VALIDATOR_CHECKPOINTS = DISTILL_DIR / "checkpoints_validator"
+
+# Legacy single-model paths (kept for backward compatibility with export_gemma.py)
+GEMMA_MODEL_ID_4B   = "google/gemma-4-E4B"
 GEMMA_CHECKPOINTS   = DISTILL_DIR / "checkpoints"
 GEMMA_OUTPUT_DIR    = DISTILL_DIR / "model"
-LORA_RANK           = 16
-LORA_ALPHA          = 32
-TRAIN_EPOCHS        = 3
-TRAIN_BATCH_SIZE    = 2
-GRAD_ACCUM_STEPS    = 8     # effective batch = 16
-LEARNING_RATE       = 2e-4
-MAX_SEQ_LENGTH      = 1024
+GEMMA_DIR           = DISTILL_DIR / "gemma"
 
 BATCHES_DIR   = DISTILL_DIR / "batches"
 RESULTS_DIR   = DISTILL_DIR / "results"
 ANNOTATED_DIR = DISTILL_DIR / "annotated"
-GEMMA_DIR     = DISTILL_DIR / "gemma"
 
-for _d in [DISTILL_DIR, BATCHES_DIR, RESULTS_DIR, ANNOTATED_DIR, GEMMA_DIR,
-           GEMMA_CHECKPOINTS, GEMMA_OUTPUT_DIR]:
+for _d in [
+    DISTILL_DIR,
+    BATCHES_DIR, RESULTS_DIR, ANNOTATED_DIR,
+    GEMMA_DIR, GEMMA_CHECKPOINTS, GEMMA_OUTPUT_DIR,
+    HARVEY_DIR, KIRA_DIR, VALIDATOR_DIR, MAUD_DIR,
+    HARVEY_FT_DIR, KIRA_FT_DIR, VALIDATOR_FT_DIR,
+    HARVEY_OUTPUT_DIR, KIRA_OUTPUT_DIR, VALIDATOR_OUTPUT_DIR,
+    HARVEY_CHECKPOINTS, KIRA_CHECKPOINTS, VALIDATOR_CHECKPOINTS,
+]:
     _d.mkdir(parents=True, exist_ok=True)
