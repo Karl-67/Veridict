@@ -16,19 +16,24 @@ function Write-Green  { param($msg) Write-Host $msg -ForegroundColor Green }
 function Write-Yellow { param($msg) Write-Host $msg -ForegroundColor Yellow }
 function Write-Red    { param($msg) Write-Host $msg -ForegroundColor Red }
 
-function Wait-ForPort {
-    param([int]$Port, [string]$Label, [int]$Retries = 20)
+function Wait-ForHttp {
+    param([string]$Url, [string]$Label, [int]$Retries = 20)
     while ($Retries -gt 0) {
-        $tc = Test-NetConnection -ComputerName "localhost" -Port $Port -InformationLevel Quiet -WarningAction SilentlyContinue 2>$null
-        if ($tc) {
-            Write-Green "✓ $Label is up on :$Port"
-            return
+        try {
+            $null = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+            Write-Green "✓ $Label is reachable at $Url"
+            return $true
+        } catch {
+            $Retries--
+            Start-Sleep -Seconds 1
         }
-        $Retries--
-        Start-Sleep -Seconds 1
     }
-    Write-Red "✗ $Label did not come up on :$Port"
+    Write-Red "✗ $Label did not become reachable at $Url"
+    return $false
 }
+
+$backendReady = $false
+$frontendReady = $NoFrontend
 
 # ── 1. PostgreSQL ─────────────────────────────────────────────────────────────
 
@@ -59,7 +64,17 @@ try {
         -WorkingDirectory $ProjectRoot `
         -PassThru -NoNewWindow
     $backendProc.Id | Set-Content "$LogDir\backend.pid"
-    Wait-ForPort -Port 8000 -Label "Backend"
+    $backendReady = Wait-ForHttp -Url "http://127.0.0.1:8000/api/health" -Label "Backend"
+    if (-not $backendReady) {
+        Write-Yellow "  Last backend log lines:"
+        Get-Content -Path $backendLog -Tail 25 -ErrorAction SilentlyContinue
+    }
+}
+if (-not $backendReady) {
+    try {
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        $backendReady = $true
+    } catch {}
 }
 
 # ── 3. Worker ────────────────────────────────────────────────────────────────
@@ -80,27 +95,47 @@ if (-not $NoFrontend) {
     Write-Host ""
     Write-Yellow "── Frontend (Vite :5173) ───────────────────────────────────────"
     try {
-        $null = Invoke-WebRequest -Uri "http://localhost:5173" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        $null = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
         Write-Green "✓ Frontend already running"
+        $frontendReady = $true
     } catch {
         $frontendLog = "$LogDir\frontend.log"
+        "" | Set-Content $frontendLog
         $frontendProc = Start-Process -FilePath "cmd.exe" `
-            -ArgumentList "/c", "cd /d `"$ProjectRoot\app\frontend`" && npm run dev >> `"$frontendLog`" 2>&1" `
+            -ArgumentList "/c", "cd /d `"$ProjectRoot\app\frontend`" && .\node_modules\.bin\vite.cmd --host 127.0.0.1 --port 5173 >> `"$frontendLog`" 2>&1" `
             -WorkingDirectory "$ProjectRoot\app\frontend" `
             -PassThru -NoNewWindow
         $frontendProc.Id | Set-Content "$LogDir\frontend.pid"
-        Wait-ForPort -Port 5173 -Label "Frontend"
+        $frontendReady = Wait-ForHttp -Url "http://127.0.0.1:5173" -Label "Frontend"
+        if (-not $frontendReady) {
+            Write-Yellow "  Last frontend log lines:"
+            Get-Content -Path $frontendLog -Tail 25 -ErrorAction SilentlyContinue
+        }
     }
 }
 
 # ── summary ──────────────────────────────────────────────────────────────────
 
 Write-Host ""
-Write-Green "══════════════════════════════════════════════════════════════"
-Write-Green "  Verdict is running"
-Write-Green "  Frontend : http://localhost:5173"
-Write-Green "  Backend  : http://localhost:8000"
-Write-Green "  Logs     : backend.log  worker.log  frontend.log"
-Write-Green "  Failures : logs\failures.jsonl"
-Write-Green "  Stop all : .\stop.ps1"
-Write-Green "══════════════════════════════════════════════════════════════"
+if ($backendReady -and $frontendReady) {
+    Write-Green "══════════════════════════════════════════════════════════════"
+    Write-Green "  Verdict is running"
+    if (-not $NoFrontend) {
+        Write-Green "  Frontend : http://127.0.0.1:5173"
+    }
+    Write-Green "  Backend  : http://127.0.0.1:8000"
+    Write-Green "  Logs     : backend.log  worker.log  frontend.log"
+    Write-Green "  Failures : logs\failures.jsonl"
+    Write-Green "  Stop all : .\stop.ps1"
+    Write-Green "══════════════════════════════════════════════════════════════"
+} else {
+    Write-Red "══════════════════════════════════════════════════════════════"
+    Write-Red "  Verdict did not fully start"
+    Write-Red "  Backend ready : $backendReady"
+    if (-not $NoFrontend) {
+        Write-Red "  Frontend ready: $frontendReady"
+    }
+    Write-Red "  Check logs in : $LogDir"
+    Write-Red "══════════════════════════════════════════════════════════════"
+    exit 1
+}

@@ -1,17 +1,10 @@
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { Loader2, Building2, LogIn } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import type { AuthUser } from "@/types";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
 
 type Mode = "login" | "create-org" | "register-invite";
-
-function parseInviteToken(): string | null {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("invite");
-}
 
 interface InvitePreview {
   email: string;
@@ -20,6 +13,10 @@ interface InvitePreview {
   workspace_name: string | null;
   workspace_role: string;
   account_exists: boolean;
+}
+
+function parseInviteToken(): string | null {
+  return new URLSearchParams(window.location.search).get("invite");
 }
 
 function mapResponse(data: Record<string, unknown>): AuthUser {
@@ -43,15 +40,12 @@ export default function AuthPage() {
   const [mode, setMode] = useState<Mode>(inviteToken ? "register-invite" : "login");
   const [invitePreview, setInvitePreview] = useState<InvitePreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
-
-  // Fields
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [jobTitle, setJobTitle] = useState("");
   const [department, setDepartment] = useState("");
   const [orgName, setOrgName] = useState("");
-
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -61,7 +55,10 @@ export default function AuthPage() {
     fetch(`${API_BASE}/auth/invite-preview/${inviteToken}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.detail) { setError(data.detail); return; }
+        if (data.detail) {
+          setError(data.detail);
+          return;
+        }
         setInvitePreview(data);
         setEmail(data.email);
       })
@@ -87,23 +84,39 @@ export default function AuthPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ org_name: orgName, display_name: displayName, job_title: jobTitle || null, department: department || null, email, password }),
+          body: JSON.stringify({
+            org_name: orgName,
+            display_name: displayName,
+            job_title: jobTitle || null,
+            department: department || null,
+            email,
+            password,
+          }),
         });
       } else {
         res = await fetch(`${API_BASE}/auth/register`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ token: inviteToken, display_name: displayName, job_title: jobTitle || null, department: department || null, password }),
+          body: JSON.stringify({
+            token: inviteToken,
+            display_name: displayName,
+            job_title: jobTitle || null,
+            department: department || null,
+            password,
+          }),
         });
       }
+
       const data = await res.json();
-      if (!res.ok) { setError(data.detail || "Something went wrong"); return; }
+      if (!res.ok) {
+        setError(data.detail || "Something went wrong");
+        return;
+      }
       login(mapResponse(data));
-      // Clear invite param from URL
       if (inviteToken) window.history.replaceState({}, "", "/");
     } catch {
-      setError("Network error — please try again");
+      setError("Network error. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -111,62 +124,116 @@ export default function AuthPage() {
 
   if (loadingPreview) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-6 w-6 animate-spin text-text-secondary/40" />
+      <div className="min-h-screen bg-background flex items-center justify-center text-sm text-text-secondary">
+        Loading invite...
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="text-center mb-10">
-          <span className="font-serif text-3xl font-bold text-text-primary tracking-tight">Veridict</span>
-          <p className="text-sm text-text-secondary mt-1">AI Contract Review Platform</p>
+    <div className="min-h-screen grid bg-background text-text-primary transition-colors lg:grid-cols-2">
+      <section className="relative hidden overflow-hidden bg-text-primary px-16 py-12 text-background lg:flex lg:flex-col lg:justify-between">
+        <div className="pointer-events-none absolute inset-0 opacity-30 [background-image:repeating-linear-gradient(0deg,transparent,transparent_60px,rgba(255,255,255,0.06)_60px,rgba(255,255,255,0.06)_61px)]" />
+        <div className="relative">
+          <p className="font-serif text-[22px] font-bold tracking-tight text-white/95">Veridict</p>
+          <p className="mt-1 text-xs font-semibold uppercase tracking-[0.16em] text-white/35">Contract Intelligence</p>
         </div>
 
-        {/* Mode tabs — only show when not coming from invite */}
-        {!inviteToken && (
-          <div className="flex rounded-xl border border-border bg-surface overflow-hidden mb-6">
-            {([
-              { m: "login" as Mode, label: "Sign In", icon: LogIn },
-              { m: "create-org" as Mode, label: "New Firm", icon: Building2 },
-            ] as const).map(({ m, label, icon: Icon }) => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setError(null); }}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer ${mode === m ? "bg-accent text-white" : "text-text-secondary hover:text-text-primary"}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
+        <div className="relative max-w-md">
+          <h1 className="font-serif text-[34px] font-bold leading-tight tracking-tight text-white/90">
+            Legal intelligence for firms that move fast.
+          </h1>
+          <div className="mt-10 space-y-4">
+            {[
+              "Clause extraction across a wide range of contract types",
+              "Policy alignment scoring against your firm's standards",
+              "Human-in-the-loop review and sign-off workflows",
+              "Full audit trail, version history, and team comments",
+            ].map((feature) => (
+              <div key={feature} className="flex items-start gap-3">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-[2px] bg-accent" />
+                <p className="text-[13.5px] leading-relaxed text-white/55">{feature}</p>
+              </div>
             ))}
           </div>
-        )}
+        </div>
 
-        {/* Invite banner */}
-        {invitePreview && (
-          <div className="mb-5 rounded-xl border border-accent/30 bg-accent/5 px-4 py-3">
-            <p className="text-xs font-semibold text-accent mb-0.5">You've been invited</p>
-            <p className="text-xs text-text-secondary">
-              <span className="font-medium text-text-primary">{invitePreview.invited_by}</span> invited you to{" "}
-              <span className="font-medium text-text-primary">{invitePreview.org_name}</span>
-              {invitePreview.workspace_name && (
-                <> · <span className="italic">{invitePreview.workspace_name}</span> as <span className="font-medium">{invitePreview.workspace_role}</span></>
-              )}
+        <p className="relative text-xs text-white/25">© 2026 Veridict — Legal Intelligence Platform</p>
+      </section>
+
+      <main className="flex min-h-screen items-center justify-center px-6 py-14 sm:px-10 lg:px-[72px]">
+        <div className="w-full max-w-[360px]">
+          {!inviteToken && (
+            <div className="mb-10 flex border-b border-border">
+              {[
+                { key: "login" as Mode, label: "Sign In" },
+                { key: "create-org" as Mode, label: "Create Organisation" },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setMode(item.key);
+                    setError(null);
+                  }}
+                  className={`-mb-px flex-1 border-b-2 py-2.5 text-sm font-medium transition-colors ${
+                    mode === item.key
+                      ? "border-text-primary text-text-primary"
+                      : "border-transparent text-text-secondary hover:text-text-primary"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="mb-7">
+            <h2 className="font-serif text-[26px] font-bold tracking-tight text-text-primary">
+              {mode === "login"
+                ? "Welcome back"
+                : mode === "create-org"
+                  ? "Get started"
+                  : invitePreview?.account_exists
+                    ? "Accept your invite"
+                    : "Complete your account"}
+            </h2>
+            <p className="mt-1.5 text-[13.5px] text-text-secondary">
+              {mode === "login"
+                ? "Sign in to your workspace."
+                : mode === "create-org"
+                  ? "Create your organisation account."
+                  : `Join ${invitePreview?.org_name ?? "your workspace"}.`}
             </p>
           </div>
-        )}
 
-        <div className="rounded-2xl border border-border bg-surface p-8">
-          <h2 className="text-base font-semibold text-text-primary mb-6">
-            {mode === "login" ? "Sign in to your account" : mode === "create-org" ? "Set up your firm" : invitePreview?.account_exists ? "Sign in to accept invite" : "Complete your account"}
-          </h2>
+          {invitePreview && (
+            <div className="mb-5 rounded-lg border border-accent/25 bg-accent/5 px-4 py-3 text-xs text-text-secondary">
+              <p className="font-semibold text-accent">You've been invited</p>
+              <p className="mt-1 leading-relaxed">
+                <span className="font-medium text-text-primary">{invitePreview.invited_by}</span> invited you to{" "}
+                <span className="font-medium text-text-primary">{invitePreview.org_name}</span>
+                {invitePreview.workspace_name ? ` · ${invitePreview.workspace_name} as ${invitePreview.workspace_role}` : ""}
+              </p>
+            </div>
+          )}
 
-          <form onSubmit={submit} className="space-y-4">
+          <form onSubmit={submit} className="space-y-[18px]">
             {mode === "create-org" && (
-              <Field label="Firm Name" value={orgName} onChange={setOrgName} placeholder="Meridian Legal Partners" required />
+              <>
+                <Field label="Organisation Name" value={orgName} onChange={setOrgName} placeholder="e.g. Meridian Law LLP" required />
+                <Field label="Your Full Name" value={displayName} onChange={setDisplayName} placeholder="e.g. Sarah Johnson" required />
+                <Field label="Job Title" value={jobTitle} onChange={setJobTitle} placeholder="e.g. Senior Associate" />
+                <Field label="Department" value={department} onChange={setDepartment} placeholder="e.g. Corporate M&A" />
+              </>
+            )}
+
+            {mode === "register-invite" && !invitePreview?.account_exists && (
+              <>
+                <Field label="Your Full Name" value={displayName} onChange={setDisplayName} placeholder="e.g. Sarah Johnson" required />
+                <Field label="Job Title" value={jobTitle} onChange={setJobTitle} placeholder="e.g. Senior Associate" />
+                <Field label="Department" value={department} onChange={setDepartment} placeholder="e.g. Corporate M&A" />
+              </>
             )}
 
             <Field
@@ -177,78 +244,83 @@ export default function AuthPage() {
               placeholder="you@firm.com"
               required
               disabled={mode === "register-invite"}
+              autoComplete="email"
+            />
+            <Field
+              label="Password"
+              type="password"
+              value={password}
+              onChange={setPassword}
+              placeholder="••••••••"
+              required
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
             />
 
-            {mode !== "login" && !invitePreview?.account_exists && (
-              <>
-                <Field label="Display Name" value={displayName} onChange={setDisplayName} placeholder="J. Sterling" required />
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Job Title" value={jobTitle} onChange={setJobTitle} placeholder="Partner" />
-                  <Field label="Department" value={department} onChange={setDepartment} placeholder="M&A" />
-                </div>
-              </>
+            {error && (
+              <div className="rounded-lg border border-risk-high/20 bg-risk-high/10 px-3.5 py-2.5 text-xs text-risk-high">
+                {error}
+              </div>
             )}
-
-            <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1.5 uppercase tracking-wider">Password</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-border bg-transparent px-4 py-2.5 text-sm text-text-primary placeholder:text-text-secondary/40 focus:border-accent focus:outline-none transition-colors"
-                placeholder="••••••••"
-              />
-              {mode !== "login" && !invitePreview?.account_exists && (
-                <p className="mt-1 text-[10px] text-text-secondary/50">Min 8 chars, one uppercase, one number</p>
-              )}
-            </div>
-
-            {error && <p className="text-xs text-risk-high">{error}</p>}
 
             <button
               type="submit"
               disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-white hover:bg-accent-hover disabled:opacity-50 transition-colors cursor-pointer disabled:cursor-not-allowed mt-2"
+              className="mt-1 w-full rounded-lg bg-text-primary px-6 py-3 text-sm font-semibold text-background transition-opacity hover:opacity-85 disabled:cursor-wait disabled:opacity-70"
             >
-              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mode === "login" ? "Sign In" : mode === "create-org" ? "Create Firm & Account" : invitePreview?.account_exists ? "Sign In & Accept Invite" : "Complete Registration"}
+              {loading
+                ? "Working..."
+                : mode === "login"
+                  ? "Sign In"
+                  : mode === "create-org"
+                    ? "Create Account"
+                    : invitePreview?.account_exists
+                      ? "Sign In & Accept Invite"
+                      : "Complete Registration"}
             </button>
+
+            {mode === "login" && (
+              <p className="text-center text-xs text-text-secondary/70">
+                Joining via invite link? Open the invite URL your admin sent you.
+              </p>
+            )}
           </form>
-
-          {!inviteToken && mode !== "login" && (
-            <p className="mt-5 text-center text-xs text-text-secondary/60">
-              Already have an account?{" "}
-              <button onClick={() => { setMode("login"); setError(null); }} className="text-accent hover:underline cursor-pointer">Sign in</button>
-            </p>
-          )}
         </div>
-
-        {mode === "create-org" && (
-          <p className="mt-4 text-center text-[10px] text-text-secondary/40">
-            To join an existing firm, ask your admin to send you an invite link.
-          </p>
-        )}
-      </motion.div>
+      </main>
     </div>
   );
 }
 
-function Field({ label, value, onChange, placeholder, type = "text", required = false, disabled = false }: {
-  label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; type?: string; required?: boolean; disabled?: boolean;
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+  required = false,
+  disabled = false,
+  autoComplete,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  placeholder?: string;
+  required?: boolean;
+  disabled?: boolean;
+  autoComplete?: string;
 }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-text-secondary mb-1.5 uppercase tracking-wider">{label}</label>
+      <label className="mb-2 block text-[10px] font-bold uppercase tracking-[0.12em] text-text-secondary/70">{label}</label>
       <input
         type={type}
+        value={value}
         required={required}
         disabled={disabled}
-        value={value}
+        autoComplete={autoComplete}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-border bg-transparent px-4 py-2.5 text-sm text-text-primary placeholder:text-text-secondary/40 focus:border-accent focus:outline-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full rounded-lg border border-border bg-surface px-3.5 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-secondary/40 focus:border-text-secondary disabled:cursor-not-allowed disabled:opacity-60"
       />
     </div>
   );

@@ -139,6 +139,8 @@ export interface RagDocumentResponse {
   document_id: string;
   doc_type: RagDocType;
   source_path: string;
+  original_filename?: string | null;
+  label?: string | null;
   version: string;
   tenant_id: string;
   workspace_id?: string | null;

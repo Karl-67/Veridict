@@ -17,7 +17,7 @@ import type {
   Workspace,
 } from "@/types";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
 
 // ----------------------------------------------------------------------------
 // Default run metadata. The backend's POST /api/runs requires these form
@@ -78,7 +78,7 @@ export async function createRun(
 }
 
 export async function getRun(runId: string): Promise<RunDetail> {
-  const response = await fetch(`${API_BASE}/runs/${runId}`);
+  const response = await fetch(`${API_BASE}/runs/${runId}`, { headers: authHeaders() });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Failed to fetch run" }));
     throw new Error(error.detail || "Failed to fetch run");
@@ -137,7 +137,7 @@ export async function submitHumanReview(
 ): Promise<HumanReviewResult> {
   const response = await fetch(`${API_BASE}/runs/${runId}/human-review`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
@@ -152,7 +152,10 @@ export function getRunFileUrl(runId: string): string {
 }
 
 export async function retryRun(runId: string): Promise<{ run_id: string; state: string }> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/retry`, { method: "POST" });
+  const response = await fetch(`${API_BASE}/runs/${runId}/retry`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Retry failed" }));
     throw new Error(error.detail || "Retry failed");
@@ -161,7 +164,10 @@ export async function retryRun(runId: string): Promise<{ run_id: string; state: 
 }
 
 export async function startRunReview(runId: string): Promise<{ run_id: string; state: string }> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/start-review`, { method: "POST" });
+  const response = await fetch(`${API_BASE}/runs/${runId}/start-review`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Failed to start review" }));
     throw new Error(error.detail || "Failed to start review");
@@ -170,7 +176,7 @@ export async function startRunReview(runId: string): Promise<{ run_id: string; s
 }
 
 export async function getRunFindings(runId: string): Promise<Finding[]> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/findings`);
+  const response = await fetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
   if (!response.ok) throw new Error("Failed to fetch findings");
   return response.json();
 }
@@ -237,6 +243,19 @@ export interface AuthResponse {
   display_name: string;
 }
 
+interface BackendAuthResponse extends Omit<AuthResponse, "token"> {
+  access_token: string;
+}
+
+function mapAuthResponse(data: BackendAuthResponse): AuthResponse {
+  return {
+    token: data.access_token,
+    user_id: data.user_id,
+    email: data.email,
+    display_name: data.display_name,
+  };
+}
+
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("veridict_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -246,26 +265,28 @@ export async function registerUser(email: string, display_name: string, password
   const res = await fetch(`${API_BASE}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ email, display_name, password }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Registration failed" }));
     throw new Error(err.detail || "Registration failed");
   }
-  return res.json();
+  return mapAuthResponse(await res.json());
 }
 
 export async function loginUser(email: string, password: string): Promise<AuthResponse> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Login failed" }));
     throw new Error(err.detail || "Login failed");
   }
-  return res.json();
+  return mapAuthResponse(await res.json());
 }
 
 // ----------------------------------------------------------------------------
@@ -275,7 +296,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 import type { Comment } from "@/types";
 
 export async function listContractComments(runId: string): Promise<Comment[]> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/comments`);
+  const res = await fetch(`${API_BASE}/runs/${runId}/comments`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Failed to fetch comments");
   return res.json();
 }
@@ -298,7 +319,9 @@ export async function deleteContractComment(runId: string, commentId: string): P
 }
 
 export async function listFindingComments(runId: string, findingId: string): Promise<Comment[]> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/comments`);
+  const res = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/comments`, {
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to fetch finding comments");
   return res.json();
 }

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.backend.db.models import OrgInviteRecord, OrganizationRecord, UserRecord, WorkspaceMemberRecord
+from app.backend.db.models import OrgInviteRecord, OrganizationRecord, PolicyVersionRecord, UserRecord, WorkspaceMemberRecord
 from app.backend.db.session import DbSession
 from app.backend.services.auth_service import (
     check_account_lockout,
@@ -147,6 +147,18 @@ async def create_org(body: CreateOrgRequest, response: Response, db: DbSession) 
         avatar_color=color,
     )
     db.add(user)
+    await db.flush()
+
+    # Seed a default Harvey policy version so new orgs can submit contracts immediately.
+    default_policy = PolicyVersionRecord(
+        id=str(uuid.uuid4()),
+        tenant_id=org.id,
+        policy_family_id="default",
+        version_number=1,
+        policy_name="Default Review Policy",
+        rules_payload={"rules": []},
+    )
+    db.add(default_policy)
     await db.flush()
 
     refresh = await create_refresh_token(db, user.id)

@@ -9,11 +9,11 @@ function Write-Yellow { param($msg) Write-Host $msg -ForegroundColor Yellow }
 function Stop-PidFile {
     param([string]$Label, [string]$File)
     if (Test-Path $File) {
-        $pid = Get-Content $File
-        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        $procId = Get-Content $File
+        $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
         if ($proc) {
-            Stop-Process -Id $pid -Force
-            Write-Green "✓ $Label stopped (PID $pid)"
+            Stop-Process -Id $procId -Force
+            Write-Green "✓ $Label stopped (PID $procId)"
         } else {
             Write-Yellow "  $Label was not running"
         }

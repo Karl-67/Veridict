@@ -65,12 +65,12 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
   }
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-surface/90 backdrop-blur-md">
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between px-6 sm:px-10 lg:px-14 py-4">
+    <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur-md">
+      <div className="mx-auto flex h-[52px] max-w-[1400px] items-center justify-between px-6 sm:px-10 lg:px-[52px]">
         <div className="flex items-center gap-8">
           <button
             onClick={() => onNavigate?.("Dashboard")}
-            className="font-serif text-xl font-bold italic tracking-tight text-accent cursor-pointer hover:opacity-80 transition-opacity"
+            className="font-serif text-[17px] font-bold tracking-tight text-text-primary cursor-pointer hover:opacity-80 transition-opacity"
           >
             Veridict
           </button>
@@ -79,11 +79,11 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
               <button
                 key={page}
                 onClick={() => onNavigate?.(page)}
-                className={cn(
-                  "text-sm font-medium transition-colors pb-0.5 cursor-pointer",
+              className={cn(
+                  "rounded-md px-3 py-1 text-[13px] font-medium transition-colors cursor-pointer",
                   page === activePage
-                    ? "text-text-primary border-b-2 border-accent"
-                    : "text-text-secondary hover:text-text-primary"
+                    ? "bg-drop-zone text-text-primary"
+                    : "text-text-secondary hover:text-text-primary hover:bg-drop-zone/60"
                 )}
               >
                 {label}
@@ -96,7 +96,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
           {/* Search */}
           <button
             onClick={onSearchOpen}
-            className="hidden sm:flex items-center gap-2 rounded-lg border border-border/60 bg-surface/50 px-3 py-1.5 text-xs text-text-secondary/50 hover:text-text-secondary hover:border-border transition-colors cursor-pointer"
+            className="hidden sm:flex items-center gap-2 rounded-[7px] border border-border bg-transparent px-3 py-1.5 text-xs text-text-secondary/70 hover:text-text-secondary hover:border-text-secondary/50 transition-colors cursor-pointer"
           >
             <Search className="h-3.5 w-3.5" />
             <span>Search</span>
@@ -107,7 +107,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
           <div className="relative" ref={panelRef}>
             <button
               onClick={handleOpen}
-              className="relative flex h-9 w-9 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-text-primary cursor-pointer"
+            className="relative flex h-[34px] w-[34px] items-center justify-center rounded-[7px] text-text-secondary transition-colors hover:bg-drop-zone hover:text-text-primary cursor-pointer"
               aria-label="Notifications"
             >
               <Bell className="h-4 w-4" />
@@ -192,7 +192,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
 
           <button
             onClick={toggle}
-            className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-text-primary cursor-pointer"
+            className="flex h-[34px] w-[34px] items-center justify-center rounded-[7px] text-text-secondary transition-colors hover:bg-drop-zone hover:text-text-primary cursor-pointer"
             aria-label="Toggle theme"
           >
             {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -205,7 +205,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
                   onClick={onAdmin}
                   title="Admin Panel"
                   className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full transition-colors cursor-pointer",
+                    "flex h-[34px] w-[34px] items-center justify-center rounded-[7px] transition-colors cursor-pointer hover:bg-drop-zone",
                     activePage === "Admin"
                       ? "text-accent"
                       : "text-text-secondary hover:text-text-primary"
@@ -219,7 +219,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
                 onClick={onProfile}
                 title="Your profile"
                 className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-bold text-white transition-opacity hover:opacity-80 cursor-pointer shrink-0",
+                  "flex h-7 w-7 items-center justify-center rounded-full text-[10px] font-bold text-white transition-opacity hover:opacity-80 cursor-pointer shrink-0",
                   activePage === "Profile" && "ring-2 ring-accent ring-offset-1 ring-offset-background"
                 )}
                 style={{ backgroundColor: user?.avatar_color ?? "#6366f1" }}
@@ -230,7 +230,7 @@ export default function Header({ activePage = "Dashboard", onNavigate, onAdmin, 
               <button
                 onClick={logout}
                 title="Sign out"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-text-secondary transition-colors hover:text-risk-high cursor-pointer"
+                className="flex h-[34px] w-[34px] items-center justify-center rounded-[7px] text-text-secondary transition-colors hover:bg-drop-zone hover:text-risk-high cursor-pointer"
               >
                 <LogOut className="h-4 w-4" />
               </button>

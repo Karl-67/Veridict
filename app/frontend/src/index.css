@@ -48,3 +48,66 @@ body {
 h1, h2, h3, h4 {
   font-family: var(--font-serif);
 }
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #F8F6F1;
+  --surface: #FFFFFF;
+  --hover-bg: #F2EFE9;
+  --accent: #C8973E;
+  --accent-hover: #B5862F;
+  --text: #1C1917;
+  --text-2: #78716C;
+  --text-3: #A8A29E;
+  --border: #E7E3DC;
+  --border-light: #F0EDE8;
+  --risk-high: #C4432B;
+  --risk-medium: #C8973E;
+  --risk-low: #3D8B5E;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --h-font: var(--font-serif);
+  --density-pad: 60px;
+  --density-gap: 48px;
+}
+
+.dark {
+  --bg: #1A1815;
+  --surface: #242220;
+  --hover-bg: #2A2825;
+  --accent: #C8973E;
+  --accent-hover: #D9A84F;
+  --text: #F5F3EE;
+  --text-2: #9A9490;
+  --text-3: #6B6560;
+  --border: #38342F;
+  --border-light: #2E2B27;
+  --risk-high: #E05A43;
+  --risk-medium: #D9A84F;
+  --risk-low: #4EA872;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@keyframes slideWidth {
+  from { width: 0; }
+}
+
+.pulse {
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+button {
+  font: inherit;
+}

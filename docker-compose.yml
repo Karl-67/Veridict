@@ -22,6 +22,8 @@ services:
     env_file: .env
     environment:
       POSTGRES_DSN: postgresql://verdict:verdict@postgres:5432/verdict
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      ALLOWED_FRONTEND_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173","http://localhost:8080","http://127.0.0.1:8080"]'
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,6 +42,7 @@ services:
     env_file: .env
     environment:
       POSTGRES_DSN: postgresql://verdict:verdict@postgres:5432/verdict
+      OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     depends_on:
       postgres:
         condition: service_healthy

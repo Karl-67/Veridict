@@ -586,6 +586,8 @@ class RagDocumentResponse(BaseModel):
     document_id: str
     doc_type: RagDocType
     source_path: str
+    original_filename: Optional[str] = None
+    label: Optional[str] = None
     version: str
     tenant_id: str
     workspace_id: Optional[str] = None

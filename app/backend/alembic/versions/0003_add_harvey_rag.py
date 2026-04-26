@@ -16,7 +16,11 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    op.execute(
+        "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS vector; "
+        "EXCEPTION WHEN OTHERS THEN "
+        "RAISE WARNING 'pgvector not available, skipping: %', SQLERRM; END $$"
+    )
 
     op.create_table(
         "rag_source_documents",
@@ -78,11 +82,19 @@ def upgrade() -> None:
         sa.Column("model_name", sa.String(128), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
-    op.execute("ALTER TABLE rag_embeddings ALTER COLUMN embedding TYPE vector(1536) USING embedding::vector")
+    op.execute(
+        "DO $$ BEGIN "
+        "ALTER TABLE rag_embeddings ALTER COLUMN embedding TYPE vector(1536) USING embedding::vector; "
+        "EXCEPTION WHEN OTHERS THEN "
+        "RAISE WARNING 'vector type cast skipped: %', SQLERRM; END $$"
+    )
     op.create_index("ix_rag_embeddings_chunk_id", "rag_embeddings", ["chunk_id"])
     op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_rag_embeddings_hnsw ON rag_embeddings "
-        "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+        "DO $$ BEGIN "
+        "EXECUTE 'CREATE INDEX IF NOT EXISTS ix_rag_embeddings_hnsw ON rag_embeddings "
+        "USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)'; "
+        "EXCEPTION WHEN OTHERS THEN "
+        "RAISE WARNING 'hnsw index skipped: %', SQLERRM; END $$"
     )
 
     op.create_table(

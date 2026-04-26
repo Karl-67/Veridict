@@ -47,6 +47,8 @@ async def _document_response(db: DbSession, document: RagSourceDocument) -> RagD
         document_id=document.id,
         doc_type=document.doc_type,
         source_path=document.source_path,
+        original_filename=document.original_filename,
+        label=(active.version_label if active else None),
         version=(active.version_label if active else None) or "pending",
         tenant_id=document.tenant_id,
         workspace_id=document.workspace_id,
