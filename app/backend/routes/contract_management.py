@@ -185,7 +185,7 @@ async def create_contract(
     now = datetime.utcnow()
     contract = ContractRecord(
         name=payload.name,
-        tenant_id="org",
+        tenant_id=str(token.get("org_id") or token.get("sub")),
         org_id=token.get("org_id"),
         workspace_id=payload.workspace_id,
         created_at=now,
@@ -334,7 +334,7 @@ async def add_version(
     run_response = await create_run(
         db, settings,
         file=file,
-        tenant_id="org",
+        tenant_id=str(token.get("org_id") or token.get("sub")),
         policy_family_id=policy_family_id,
         policy_version=policy_version,
         jurisdiction=jurisdiction,

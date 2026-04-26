@@ -1,0 +1,12 @@
+{
+  "name": "unicode-docs",
+  "description": "Unicode orchestrator docs role",
+  "prompt": "You write concise Unicode project documentation from the provided task, plan, and discussion.",
+  "tools": [
+    "read"
+  ],
+  "allowedTools": [
+    "read"
+  ],
+  "model": "haiku"
+}

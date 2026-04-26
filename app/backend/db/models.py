@@ -8,6 +8,8 @@ ORM models backing:
   - human-review-gate        (HumanReviewRecord with per-finding edit provenance)
   - auth                     (UserRecord)
   - collaboration            (ContractCommentRecord, FindingCommentRecord)
+  - rag-storage-contract     (RagSourceDocument, RagDocumentVersion, RagChunk,
+                               RagEmbedding, RagIngestionJob, RagRetrievalTrace)
 """
 
 from __future__ import annotations
@@ -23,14 +25,20 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    def Vector(dimensions: int):  # type: ignore[no-redef]
+        return ARRAY(Float)
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +56,9 @@ def _uuid() -> str:
 
 def _now() -> datetime:
     return datetime.utcnow()
+
+
+_RAG_EMBEDDING_DIM: int = 1536
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +225,17 @@ class FindingRecord(Base):
     is_disputed: bool = Column(Boolean, nullable=False, default=False)
     dispute_reason: str = Column(Text, nullable=True)
     is_confirmed: bool = Column(Boolean, nullable=False, default=False)
+
+    # evidence-schema: structured evidence attached to this finding
+    # contract_evidence: list of {clause_uid, excerpt, page, bbox} dicts (Kira ≥1 required)
+    contract_evidence: list = Column(JSON, nullable=True)
+    # rag_citations: list of {chunk_id, source_doc, page, score, excerpt} (Harvey ≥1 required)
+    rag_citations: list = Column(JSON, nullable=True)
+    # consensus_state: confirmed | disputed | unresolved
+    consensus_state: str = Column(String(32), nullable=True)
+    business_impact: str = Column(Text, nullable=True)
+    exploitability: str = Column(Text, nullable=True)
+    unresolved_by_consensus: bool = Column(Boolean, nullable=False, default=False)
 
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
@@ -658,3 +680,204 @@ class FindingCommentRecord(Base):
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
 
     author = relationship("UserRecord", back_populates="finding_comments")
+
+
+# ---------------------------------------------------------------------------
+# RAG — rag-storage-contract
+# RagSourceDocument → RagDocumentVersion → RagChunk → RagEmbedding
+# RagIngestionJob tracks the async ingest pipeline per document upload.
+# RagRetrievalTrace records every Harvey retrieval for audit / citation validation.
+# ---------------------------------------------------------------------------
+
+
+class RagSourceDocument(Base):
+    __tablename__ = "rag_source_documents"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+
+    # auth-derived-tenancy: always from JWT, never from request body
+    tenant_id: str = Column(String(255), nullable=False, index=True)
+    workspace_id: str = Column(
+        String(36), ForeignKey("workspaces.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # rag-storage-contract metadata
+    doc_type: str = Column(String(64), nullable=False)          # contract | policy | playbook
+    policy_family_id: str = Column(String(255), nullable=True)
+    jurisdiction: str = Column(String(128), nullable=True)
+
+    original_filename: str = Column(String(512), nullable=False)
+    source_path: str = Column(String(1024), nullable=False)
+    file_hash: str = Column(String(64), nullable=False)         # SHA-256 of raw bytes
+    is_deleted: bool = Column(Boolean, nullable=False, default=False)
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    versions = relationship(
+        "RagDocumentVersion", back_populates="document", cascade="all, delete-orphan"
+    )
+    ingestion_jobs = relationship(
+        "RagIngestionJob", back_populates="source_document", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_rag_source_doc_tenant_scope",
+            "tenant_id", "workspace_id", "policy_family_id", "doc_type",
+        ),
+    )
+
+
+class RagDocumentVersion(Base):
+    __tablename__ = "rag_document_versions"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    document_id: str = Column(
+        String(36),
+        ForeignKey("rag_source_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    version: int = Column(Integer, nullable=False)
+    version_label: str = Column(String(128), nullable=True)     # e.g. "2024-Q1"
+    is_active: bool = Column(Boolean, nullable=False, default=False)
+    activated_at: datetime = Column(DateTime, nullable=True)
+    deleted_at: datetime = Column(DateTime, nullable=True)
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    document = relationship("RagSourceDocument", back_populates="versions")
+    chunks = relationship(
+        "RagChunk", back_populates="version", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "version", name="uq_rag_doc_version"),
+    )
+
+
+class RagChunk(Base):
+    __tablename__ = "rag_chunks"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    version_id: str = Column(
+        String(36),
+        ForeignKey("rag_document_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    chunk_index: int = Column(Integer, nullable=False)
+    text: str = Column(Text, nullable=False)
+    chunk_hash: str = Column(String(64), nullable=False)        # SHA-256 of chunk text
+
+    # rag-storage-contract chunk metadata
+    page_number: int = Column(Integer, nullable=True)
+    chunk_metadata: dict = Column(JSON, nullable=True)          # {source_path, page, bbox, …}
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    version = relationship("RagDocumentVersion", back_populates="chunks")
+    embedding = relationship(
+        "RagEmbedding", back_populates="chunk", uselist=False, cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("version_id", "chunk_hash", name="uq_rag_chunk_hash"),
+    )
+
+
+class RagEmbedding(Base):
+    __tablename__ = "rag_embeddings"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    chunk_id: str = Column(
+        String(36),
+        ForeignKey("rag_chunks.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    embedding: list = Column(Vector(_RAG_EMBEDDING_DIM), nullable=False)
+    model_name: str = Column(String(128), nullable=False)       # embedding model identifier
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    chunk = relationship("RagChunk", back_populates="embedding")
+
+    __table_args__ = (
+        Index(
+            "ix_rag_embeddings_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": "16", "ef_construction": "64"},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+
+class RagIngestionJob(Base):
+    __tablename__ = "rag_ingestion_jobs"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+
+    # auth-derived-tenancy
+    tenant_id: str = Column(String(255), nullable=False, index=True)
+    workspace_id: str = Column(String(36), nullable=True, index=True)
+
+    # rag-storage-contract intake metadata
+    doc_type: str = Column(String(64), nullable=False)
+    policy_family_id: str = Column(String(255), nullable=True)
+    jurisdiction: str = Column(String(128), nullable=True)
+    version_label: str = Column(String(128), nullable=True)
+
+    source_document_id: str = Column(
+        String(36),
+        ForeignKey("rag_source_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    version_id: str = Column(
+        String(36),
+        ForeignKey("rag_document_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    status: str = Column(
+        String(32),
+        nullable=False,
+        default="pending",
+        # pending | running | completed | failed
+    )
+    error: str = Column(Text, nullable=True)
+    started_at: datetime = Column(DateTime, nullable=True)
+    finished_at: datetime = Column(DateTime, nullable=True)
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    source_document = relationship("RagSourceDocument", back_populates="ingestion_jobs")
+
+
+class RagRetrievalTrace(Base):
+    __tablename__ = "rag_retrieval_traces"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    run_id: str = Column(
+        String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    clause_id: str = Column(String(128), nullable=False, index=True)
+
+    # Parallel arrays: chunk_ids[i] corresponds to scores[i]
+    chunk_ids: list = Column(ARRAY(String), nullable=False, default=list)
+    scores: list = Column(ARRAY(Float), nullable=False, default=list)
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+
+    __table_args__ = (
+        Index("ix_rag_retrieval_trace_run_clause", "run_id", "clause_id"),
+    )

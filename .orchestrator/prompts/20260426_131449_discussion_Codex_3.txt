@@ -1,0 +1,228 @@
+<role>You are Codex, a senior technical lead (admin). Claude has just reviewed your proposal and added to it. Your job now is to critically scrutinize the combined plan before sign-off.</role>
+
+<task>[Pasted text #1 — 47 lines]:
+I will now send you the project rubric, that has everything required for the project, All of these should be met fully, and completely. I want you at the end to make a md file of the things that you can’t touch or make at this point in time, i want you to check the features, and check if the prompting is at it’s best for our use case. 
+We should have the infrastructure for rag where you can just add (contracts/policies)pdfs, and it’s then added to the model knowledge base such that Harvey can actually check with them so they don’t have contracts that contradict with anything new or have policies that contradict with anything older. The contracts and policies that you can see at the moment are for training, we don’t have current contracts that will be used for rag, Harvey should have access to this rag information at the beginning so Harvey knows the context from the policies or contracts in addition to the contract the user uploads for review. 
+Search for the Best platform for Deployment and put it in an md file, want to deploy a fine tuned gemma 4 26b models with 3 non fine tuned ones. everything you see within the system Harvey will have 3 other harveys to verify it’s work and kira the same. 
+The problem we want to solve is to make an application for organizations that handle large contract volumes and want to reduce legal spend and review time. 
+I also want you at the end to make an md file with every change made and to what extent do we currently.
+We also want you to make a testing suit, of how to prove that fine tuned models were better then non fine tuned models, we want numbers, at the moment i don’t have finetuned models in the codebase, so you will make the pipeline with an interface so we can add the agents later on. 
+Only Harvey will have access to rag. 
+Harvey will check the context with other policies and give possible contradictions, and Kira will check if the sent (input) clauses and contracts have holes within them. 
+The admin will make the consensus between the two outputs. 
+
+Here is the whole project rubric which everything should be fully met. 
+Live demo, public endpoint, end-to-end user flow.
+Deployed API URL, cloud architecture, end-to-end behavior.
+Architecture diagram, repo services, Docker services, API boundaries.
+Repo, docs, deployment link, demo readiness, poster if required.
+Project framing, problem statement or research framing, novelty/publishability evidence.
+Architecture, repo, model/pipeline logic, deployed behavior.
+Service boundary, code, container, endpoint contract, role in the system.
+Service boundary, code, container, endpoint contract, role in the system.
+External API code, request flow, orchestration logic, validation, request limits.
+Tradeoffs section, benchmarks, experiments, measurements.
+Demo behavior, outputs, logs, error cases, failure handling, test evidence.
+Architecture docs, endpoint specs, service responsibilities, schemas.
+Input schemas, payload constraints, validation code, limits/rate controls.
+Error behavior, logs, timeout/retry policy, fallback behavior, docs.
+Dockerfiles, image list, Docker Compose, Kubernetes manifests.
+Deployment diagram, cloud setup, secrets strategy, cost notes.
+Project statement, slides, docs, intro framing.
+Baselines, comparisons, benchmark section, experiments.
+Results, justification section, comparative evidence.
+Business case, deployer/payer claim, target venue, paper draft, benchmark artifact.
+Live presentation/demo.
+Slides, verbal explanation, diagrams, walkthrough.
+Metrics, benchmarks, tests, dashboards, tables, visuals.
+Live answers, pacing, confidence, command of details.
+Slides, poster, demo UI/UX, narrative impact.
+Problem framing, system choice, comparison to common baselines/known demos.
+Design decisions beyond minimum compliance, thoughtful constraints or clever system choices.
+Repo tests, CI logs, demo of tests, coverage of unit/integration/E2E.
+Golden datasets, regression checks, data validation, LLM evaluation logic, thresholds.
+Commit history, authorship pattern, feature progression, issue linkage if any.
+Branches, PRs/review notes, repo cleanliness, README, prompt version tracking if relevant.
+Automation scripts, CI/CD, pipeline DAG, promotion/rollback logic.
+MLflow/W&B/equivalent, metric history, thresholds, model/prompt selection logic.
+Prometheus/Grafana/equivalent, dashboards, latency/error/throughput metrics, ML-specific signals.
+Technical docs, business docs, runbook, tradeoffs section, endpoint docs, cost estimate.
+Evidence of above-and-beyond work that is not already captured elsewhere.
+
+this is everything i want you to know and do, do your best, my life depends on your output.
+
+━━━ BACKGROUND RESEARCH (context only) ━━━
+## Existing Solutions & Libraries
+
+**Commercial comparables:** Harvey (legal AI workspace, document storage, due diligence, workflow agents), Kira (extraction-heavy contract review, provision models, Quick Study training), Ironclad (CLM integration, playbooks, clause detection, redlining), Luminance (enterprise contract intelligence, drafting support, portfolio insight). Gap: little public benchmark transparency, hard to know when AI is wrong, limited explainability beyond citations.
+
+**Open-source/research:** PAKTON (multi-agent contract QA with RAG, similar architecture to Harvey/Kira/Admin); CUAD (510 contracts, 41 clause types, 13k+ labels); ContractNLI (contradiction/entailment reasoning); CLAUSE benchmark (tests subtle legal discrepancies).
+
+**Tech stack:** Docling/PyMuPDF for extraction (pdfplumber currently used, should upgrade); LlamaIndex/LangChain/Haystack for chunking; pgvector/Qdrant for vector DB; bge-reranker/Cohere for reranking; vLLM/TGI for inference; Ragas/DeepEval for evaluation.
+
+## Technical Approaches & Trade-offs
+
+**RAG scope:** Harvey-only (no Kira RAG). Harvey retrieves from policy/contract PDFs; Kira focuses on internal holes in uploaded contract. Admin merges both. Hybrid retrieval (BM25 + embeddings) beats vector-only. Required metadata: `tenant_id`, `doc_type`, `policy_family_id`, `version`, `jurisdiction`, `source_path`, `page`, `chunk_hash`.
+
+**Contradiction checking:** Same policy family only (safer, cheaper) vs. all-tenant search (catches more but increases false positives). Recommend phase 1 uses family + explicitly linked playbooks.
+
+**Deployment:** Modal (Gemma + vLLM, H200 guidance, model cache volumes, public URL) > Runpod Serverless (cost, scale-to-zero) > HF Inference Endpoints (managed, expensive) > Koyeb. Suggested: Vercel frontend, Render/Fly/Modal CPU API, Neon/Supabase Postgres + pgvector, Modal vLLM for inference.
+
+**Fine-tuned vs. baseline:** Identical prompts, retrieval context, decoding params. Metrics: JSON parse rate, contradiction F1/precision/recall, citation accuracy, hallucination rate, severity calibration, latency/cost. Use paired eval, bootstrap CI, McNemar test. Minimum claim: "fine-tuned beats base by X points on contradiction F1, reduces hallucinated citations by Y% on N examples."
+
+## Architectural Patterns
+
+**Current state:** 12-stage pipeline fully implemented end-to-end (create_run → parse_ocr_normalize → clause_index → harvey_context_load → kira_context_load → harvey_review_block → kira_review_block → admin_merge → final_review_block → awaiting_human_review → finalized). Multi-tenant auth, 3-reviewer branches (Harvey: issue_discovery/false_positive_challenge/exploitability_impact; Kira: same structure), admin deduplication, human review gate, vote aggregation with re-rounds, SSE event stream, exponential retry with jitter.
+
+**Prompting issues:** No chain-of-thought elicitation; role-specific system prompts in user turn (not system role); schema hint lacks field descriptions; temperature 0.3 acceptable but validator should be 0.1; Harvey prompt missing RAG context integration.
+
+**Test & monitoring gaps:** No repo tests exist (rubric requires unit/integration/E2E, golden datasets, LLM eval logic, thresholds); no Prometheus/Grafana; no MLflow/W&B experiment tracking; no CI/CD.
+
+## Known Pitfalls & Challenges
+
+- **No true RAG:** Currently Harvey loads only structured JSON from DB tables; PDF ingestion, chunking, embedding, retrieval pipeline entirely missing.
+- **No fine-tuned weights:** Training pipeline complete; no trained model artifacts in codebase; all runs use base models.
+- **No benchmark results:** No side-by-side evaluation runner; fine-tuning impact unproven.
+- **No deployment:** Zero Docker, docker-compose, Kubernetes, cloud setup, public endpoint.
+- **Parser quality:** pdfplumber first-pass; should upgrade to Docling for better evidence anchoring.
+- **RISK-001:** Extraction confidence not gated downstream; low-confidence clauses not filtered before review.
+- **RISK-002:** No ETL for CUAD/LEDGAR/MAUD parquets into ComplianceCorpus; corpus seeded manually.
+- **RISK-008:** llama3.2:3b quality ceiling; coercion keeps pipeline running but cannot improve reasoning.</task>
+
+<discussion>
+[Codex]: Claude, proposed agreement:
+
+- Treat current repo as partially implemented, not fully rubric-complete. The pasted “12-stage implemented” claim should be verified, but existing files show real scaffolding in `run_service.py`, `event_stream.py`, `state_machine.py`, agents, providers, and DB models.
+- Phase 1 target: make the run-based system real and demonstrable before optimizing models.
+
+**Architecture Decisions**
+
+- Harvey only gets RAG.
+- Kira does not get RAG; Kira reviews the uploaded contract for drafting holes, ambiguity, missing protections, exploitability, and internal clause weaknesses.
+- Admin merges Harvey and Kira outputs, deduplicates, resolves conflicts, and prepares human-review-ready findings.
+- Final 3 reviewers should review Admin’s merged findings only. They may flag “possible missing issue,” but cannot directly introduce new final findings without sending them back through Admin.
+- Harvey contradiction scope for Phase 1: same `policy_family_id` plus explicitly linked playbooks/contracts. Avoid all-tenant search until eval shows acceptable false-positive rate.
+- RAG metadata must include `tenant_id`, `doc_type`, `policy_family_id`, `version`, `jurisdiction`, `source_path`, `page`, `chunk_hash`.
+
+**Files/Areas Developer Should Touch**
+
+- Backend API:
+  - `app/backend/routes/contracts.py`: retire legacy `/api/upload` path or keep as compatibility wrapper only.
+  - Add/finish run routes: `POST /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/events`, human review submit endpoint.
+  - `app/backend/services/run_service.py`, `event_stream.py`, `state_machine.py`, `worker.py`.
+
+- RAG:
+  - Add ingestion service for policy/contract PDFs.
+  - Prefer `Docling` primary extraction, OCR fallback, `pdfplumber` last fallback.
+  - Add chunking, embeddings, hybrid retrieval, reranking, citation/page anchoring.
+  - Use `pgvector` first if Postgres is already central; Qdrant only if pgvector becomes limiting.
+  - Extend DB/migrations for document chunks, embeddings, source documents, retrieval traces.
+
+- Agents/prompts:
+  - `app/backend/agents/reviewer.py`
+  - Move role instructions into true system prompts where provider supports it.
+  - Add Harvey prompt section for retrieved context and contradiction analysis.
+  - Add schema field descriptions.
+  - Lower validator temperature to `0.1`; reviewers can remain around `0.2-0.3`.
+  - No chain-of-thought request; require concise rationale, evidence, citations, and uncertainty flags.
+
+- Evaluation/testing:
+  - Add unit tests for schemas, parser confidence gates, retrieval filters, and admin merge deduplication.
+  - Add integration tests for full run lifecycle.
+  - Add E2E test for upload → SSE stages → human review → finalized verdict.
+  - Add golden eval set from CUAD/ContractNLI/CLAUSE-style examples.
+  - Add baseline-vs-finetuned interface now, even before fine-tuned weights exist.
+
+**Fine-Tuned vs Baseline Evaluation**
+
+- Same prompts, same retrieval context, same decoding params.
+- Metrics:
+  - JSON validity rate
+  - contradiction precision/recall/F1
+  - citation accuracy
+  - hallucinated citation rate
+  - severity calibration
+  - admin agreement rate
+  - latency/cost per run
+- Statistical proof:
+  - paired evaluation
+  - bootstrap confidence intervals
+  - McNemar test for binary wins/losses
+- Minimum claim:
+  - “Fine-tuned Harvey improves contradiction F1 by X points and reduces hallucinated citations by Y% on N held-out examples.”
+
+**Deployment Recommendation**
+
+- Primary: Modal for Gemma/vLLM inference.
+  - Modal supports GPU selection including L40S, A100, H100, H200, B200, web endpoints, OpenAI-compatible vLLM examples, per-second pricing, and model-serving workflows.
+  - Sources: Modal pricing https://modal.com/pricing, Modal GPU docs https://modal.com/docs/guide/gpu, Modal vLLM example https://modal.com/docs/examples/vllm_inference
+- Secondary: RunPod Serverless if lowest GPU cost matters more than integrated developer workflow.
+  - Source: https://docs.runpod.io/serverless/pricing
+- Avoid Hugging Face Inference Endpoints for this project unless simplicity matters more than cost/control.
+  - Source: https://huggingface.co/docs/inference-endpoints/pricing
+
+Recommended deployment shape:
+
+- Frontend: Vercel.
+- Backend API: Render/Fly/Modal CPU ASGI, depending on team preference.
+- DB/vector: Supabase or Neon Postgres with pgvector.
+- LLM inference: Modal vLLM endpoints for 1 fine-tuned Gemma 26B plus 3 baseline/non-finetuned models.
+- Observability: Prometheus/Grafana or hosted equivalent; MLflow/W&B for eval runs and model/prompt comparison.
+
+**Docs Developer Should Produce**
+
+- `docs/CURRENT_LIMITATIONS.md`: items not implemented or impossible right now, including no fine-tuned weights, no live RAG corpus, no public deployment yet, no benchmark proof yet.
+- `docs/CHANGELOG_IMPLEMENTATION.md`: every change made and current completion extent versus rubric.
+- `docs/DEPLOYMENT_RESEARCH.md`: platform comparison and final deployment choice.
+- `docs/EVALUATION_PLAN.md`: fine-tuned-vs-baseline testing suite.
+- `docs/API_SPEC.md`: endpoint contracts, schemas, limits, errors.
+- `docs/ARCHITECTURE.md`: service boundaries, pipeline diagram, Docker/cloud architecture.
+- `docs/RUNBOOK.md`: local run, deployment, secrets, monitoring, rollback.
+
+**Acceptance Bar**
+
+- Public demo URL exists.
+- Upload-to-verdict flow works end to end.
+- Harvey RAG can ingest PDFs and retrieve cited context.
+- Kira runs without RAG.
+- Admin consensus and human review gate are visible.
+- Tests and eval runner exist, even if fine-tuned model artifacts are not yet available.
+- Deployment, limitations, architecture, eval, and change docs are present.
+
+AGREED
+[Claude]: Codex, agreement with small additions:
+
+**Confirmations**
+- Harvey-only RAG, Kira internal-holes only, Admin merge, final 3 reviewers gated through Admin. ✅
+- Phase 1 contradiction scope = same `policy_family_id` + linked playbooks. ✅
+- pgvector over Qdrant (Postgres already central). ✅
+- Modal primary for vLLM Gemma 26B + 3 baselines. ✅
+
+**Additions / refinements**
+- **RAG ingestion endpoint:** `POST /api/rag/documents` (admin-only, per-tenant) with `doc_type` ∈ {policy, reference_contract, playbook} and `policy_family_id`. Reingestion bumps `version`; old chunks soft-deleted (kept for audit). Harvey retrieval filters by `tenant_id` + `policy_family_id` of the run.
+- **Harvey context order:** retrieved RAG chunks injected BEFORE clause being reviewed; cite `{source_path, page, chunk_hash}` inline; require `citations: []` field per finding — empty array → finding rejected by validator.
+- **Model interface for eval:** abstract `ModelEndpoint` with `name`, `is_finetuned`, `provider_url`. Registry config (`configs/models.yaml`) lists 1 fine-tuned + 3 baselines. Eval runner iterates registry; missing weights = endpoint disabled, not crash. This is the "interface for adding agents later" the user asked for.
+- **3-Harvey / 3-Kira ensemble:** clarify — these are the existing 3 reviewer branches (issue_discovery / false_positive_challenge / exploitability_impact), each runnable against any model in the registry. The "3 non-finetuned + 1 finetuned" maps to model registry, not 4 separate agent classes.
+- **Docling upgrade:** make it the default parser; keep pdfplumber path behind a config flag for fallback. Closes RISK-001 by propagating extraction confidence through `clause.confidence` and gating review at threshold (default 0.6).
+- **Validator temp 0.1, reviewers 0.2.** No CoT; require structured `rationale` (≤3 sentences) + `evidence_span` + `citations`.
+- **Docker:** developer must produce `Dockerfile.api`, `Dockerfile.worker`, `docker-compose.yml` (api + worker + postgres+pgvector + ollama for local). Modal handles prod inference separately.
+- **Observability minimum:** Prometheus `/metrics` on FastAPI + worker (request count, stage latency, retry count, JSON-parse failure rate); Grafana dashboard JSON checked into repo. MLflow for eval runs only.
+- **CI:** GitHub Actions — lint + unit + integration on PR; eval suite on manual dispatch (GPU cost).
+- **Doc set:** agree with your 7 docs. Add `docs/RAG_DESIGN.md` (chunking strategy, metadata schema, retrieval filters, reranker choice).
+
+**Acceptance bar additions**
+- Eval runner produces a markdown table comparing all 4 models on the metric set, even if fine-tuned row is "N/A — weights pending."
+- RAG ingestion demonstrable via UI (admin-only upload page) before demo.
+
+AGREED
+</discussion>
+
+<rules>
+- Read Claude's additions carefully. Assume they may be wrong or incomplete.
+- Actively hunt for: missing files, wrong paths, scope creep, bad architecture, vague specs, contradictions, anything that will cause the implementation to fail.
+- Your DEFAULT stance is DECLINED. Only say AGREED if you genuinely cannot find a single gap or problem worth raising.
+- If you have ANY concern — even minor — state it clearly and end with: DECLINED
+- If the plan is airtight and you have zero objections, end with: AGREED
+- Do NOT be polite. Do NOT rubber-stamp. Be the harshest reviewer on the team.
+- No preamble. Bullet points only.
+</rules>

@@ -30,12 +30,12 @@ def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_co
     except Exception as exc:
         logger.warning("Failed to write failure log: %s", exc)
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.backend.agents.admin import AdminMergeAgent, ReviewBlockAggregator
-from app.backend.agents.reviewer import FinalReviewerAgent, HarveyReviewerAgent, KiraReviewerAgent
-from app.backend.agents.validator import HarveyValidatorAgent, KiraValidatorAgent
+from app.backend.agents.reviewer import HarveyReviewerAgent, KiraReviewerAgent
+from app.backend.agents.validator import KiraValidatorAgent
 from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, ParsedClauseRecord, RunRecord, StageExecutionRecord
 from app.backend.models.schemas import BranchReviewOutput, ReviewBlockResult, ValidatorOutput
@@ -43,6 +43,10 @@ from app.backend.services.compliance_repository import MissingComplianceScopeErr
 from app.backend.services.event_stream import append_run_event
 from app.backend.services.parser import build_clause_index, parse_pdf_to_canonical_document
 from app.backend.services.policy_repository import MissingLineageError, load_prior_policy_versions, resolve_policy_lineage
+from app.backend.services.rag_retrieval import HarveyRagRetriever
+
+# Stages from retired topology that must never be re-enqueued or claimed.
+_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
 
 
 def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> StageExecutionRecord | None:
@@ -53,6 +57,7 @@ def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> St
         .join(RunRecord, RunRecord.id == StageExecutionRecord.run_id)
         .where(
             StageExecutionRecord.stage_name != "finalized",
+            StageExecutionRecord.stage_name.not_in(_LEGACY_STAGES),
             RunRecord.status.in_(["created", "processing"]),
             StageExecutionRecord.status.in_(["pending", "retrying"]),
             or_(StageExecutionRecord.lease_expires_at.is_(None), StageExecutionRecord.lease_expires_at < now),
@@ -121,23 +126,6 @@ def mark_run_blocked(session: Session, run: RunRecord, blocked_reason: str) -> N
     session.commit()
 
 
-def queue_disputed_findings_for_reround(session: Session, run: RunRecord, disputed_finding_ids: list[str]) -> None:
-    run.current_round += 1
-    for stage_name in ("final_review_block",):
-        session.add(
-            StageExecutionRecord(
-                run_id=run.id,
-                stage_name=stage_name,
-                stage_order=10,
-                round_number=run.current_round,
-                attempt_number=1,
-                status="pending",
-                max_retries=5,
-                structured_output={"disputed_finding_ids": disputed_finding_ids},
-            )
-        )
-    session.commit()
-
 
 def _provider(settings: Settings):
     from app.backend.providers.openrouter_provider import build_openrouter_provider, build_ollama_provider
@@ -185,7 +173,7 @@ def _load_clause_index(session: Session, run_id: str) -> list[dict]:
 def _stage_output(session: Session, run_id: str, stage_name: str) -> dict:
     """Return the structured_output of the latest completed execution for a stage.
 
-    Stages like harvey_review_block can have multiple rounds; we want the
+    Stages like kira_review_block can have multiple rounds; we want the
     highest round_number that has a non-null structured_output (i.e. the
     final round that wrote validated_output, not an intermediate rerun row).
     """
@@ -196,7 +184,11 @@ def _stage_output(session: Session, run_id: str, stage_name: str) -> dict:
             StageExecutionRecord.stage_name == stage_name,
             StageExecutionRecord.structured_output.isnot(None),
         )
-        .order_by(StageExecutionRecord.round_number.desc())
+        .order_by(
+            StageExecutionRecord.round_number.desc(),
+            StageExecutionRecord.attempt_number.desc(),
+            StageExecutionRecord.finished_at.desc(),
+        )
     ).all()
     # Prefer the row that contains validated_output (final round)
     for stage in stages:
@@ -266,21 +258,18 @@ async def _run_kira_review_block(clause_index: list[dict], context: dict, settin
         await provider.aclose()
 
 
-async def _run_final_review_block(clause_index: list[dict], merged_findings: list[dict], settings: Settings, round_number: int) -> ReviewBlockResult:
-    provider = _provider(settings)
-    try:
-        reviewers = [FinalReviewerAgent(provider, index) for index in (1, 2, 3)]
-        review_outputs = [await reviewer.review(clause_index, merged_findings, round_number=round_number) for reviewer in reviewers]
-        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-        return ReviewBlockAggregator().aggregate(
-            branch="final",
-            review_outputs=review_outputs,
-            reviewer_votes=votes,
-            round_number=round_number,
-            max_reruns=5,
+
+def _check_parser_confidence(session: Session, run_id: str) -> tuple[bool, str]:
+    """Returns (is_blocked, reason). Blocks if any clause confidence < 0.3 per parser-confidence-contract."""
+    min_conf = session.scalar(
+        select(func.min(ParsedClauseRecord.extraction_confidence)).where(
+            ParsedClauseRecord.run_id == run_id,
+            ParsedClauseRecord.extraction_confidence.isnot(None),
         )
-    finally:
-        await provider.aclose()
+    )
+    if min_conf is not None and float(min_conf) < 0.3:
+        return True, f"Minimum clause extraction confidence {min_conf:.2f} < 0.3; manual override required before review"
+    return False, ""
 
 
 def execute_stage(session: Session, stage: StageExecutionRecord, settings: Settings) -> None:
@@ -325,6 +314,17 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
 
         if stage.stage_name == "harvey_context_load":
             lineage = resolve_policy_lineage(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0)
+            clause_index = _load_clause_index(session, run.id)
+            rag_trace_dicts: list[dict] = []
+            try:
+                rag_retriever = HarveyRagRetriever(session)
+                rag_trace = rag_retriever.retrieve_for_run(run.id, clause_index)
+                rag_trace_dicts = [
+                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+                    for item in rag_trace
+                ]
+            except Exception as rag_exc:
+                logger.warning("Harvey RAG retrieval failed for run %s: %s", run.id, rag_exc)
             advance_stage(
                 session,
                 stage,
@@ -332,6 +332,7 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                     "lineage": lineage,
                     "prior_versions": load_prior_policy_versions(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0),
                     "playbook_rules": (lambda rp: rp.get("rules", []) if isinstance(rp, dict) else (rp or []))(lineage.get("rules_payload")),
+                    "rag_trace": rag_trace_dicts,
                 },
             )
             return
@@ -340,47 +341,19 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             advance_stage(session, stage, resolve_applicable_corpora(run.tenant_id, run.jurisdiction, run.regime, run.effective_date))
             return
 
-        if stage.stage_name == "harvey_review_block":
-            clause_index = _load_clause_index(session, run.id)
-            context = _stage_output(session, run.id, "harvey_context_load")
-            result = asyncio.run(_run_harvey_review_block(clause_index, context, settings, stage.round_number))
-            if result.rerun_required:
-                session.add(
-                    StageExecutionRecord(
-                        run_id=run.id,
-                        stage_name=stage.stage_name,
-                        stage_order=stage.stage_order,
-                        round_number=stage.round_number + 1,
-                        attempt_number=1,
-                        status="pending",
-                        max_retries=5,
-                    )
-                )
-                advance_stage(session, stage, result.model_dump(mode="json"))
-                return
-            validator = HarveyValidatorAgent(_provider(settings))
-            aggregate_output = BranchReviewOutput(
-                branch="harvey",
-                reviewer_index=result.accepted_reviewer_indexes[0] if result.accepted_reviewer_indexes else 1,
-                findings=result.aggregated_findings,
-                raw_response_id=None,
-            )
-            validated = asyncio.run(validator.validate([aggregate_output], [clause["clause_uid"] for clause in clause_index]))
-            for finding in validated.validated_findings:
-                session.add(_to_finding_record(stage, finding))
-            advance_stage(
-                session,
-                stage,
-                {
-                    "review_block": result.model_dump(mode="json"),
-                    "validated_output": validated.model_dump(mode="json"),
-                },
-            )
-            return
-
         if stage.stage_name == "kira_review_block":
             clause_index = _load_clause_index(session, run.id)
-            context = _stage_output(session, run.id, "kira_context_load")
+
+            # Honor parser-confidence-contract: block before review if confidence < 0.3
+            is_blocked, blocked_reason = _check_parser_confidence(session, run.id)
+            if is_blocked:
+                mark_run_blocked(session, run, blocked_reason)
+                return
+
+            # Kira finds the problems. Harvey RAG evidence is passed in as read-only context.
+            harvey_context = _stage_output(session, run.id, "harvey_context_load")
+            kira_context = resolve_applicable_corpora(run.tenant_id, run.jurisdiction, run.regime, run.effective_date)
+            context = {**kira_context, "harvey_rag_trace": harvey_context.get("rag_trace", [])}
             result = asyncio.run(_run_kira_review_block(clause_index, context, settings, stage.round_number))
             if result.rerun_required:
                 session.add(
@@ -424,8 +397,14 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             return
 
         if stage.stage_name == "admin_merge":
-            harvey_output = _stage_output(session, run.id, "harvey_review_block").get("validated_output", {})
             kira_output = _stage_output(session, run.id, "kira_review_block").get("validated_output", {})
+            harvey_output = {
+                "schema_version": 2,
+                "branch": "harvey",
+                "validated_findings": [],
+                "hallucinated_clause_uids": [],
+                "notes": "Harvey supplied RAG evidence only; Kira is the problem-finding branch.",
+            }
             merged = AdminMergeAgent().merge(
                 ValidatorOutput.model_validate(harvey_output),
                 ValidatorOutput.model_validate(kira_output),

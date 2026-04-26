@@ -7,6 +7,9 @@ import type {
   HistoryEntry,
   HumanReviewPayload,
   HumanReviewResult,
+  RagDocType,
+  RagDocumentResponse,
+  RagIngestionStatus,
   ReviewResult,
   RunCreateResponse,
   RunDetail,
@@ -23,7 +26,6 @@ const API_BASE = "http://localhost:8000/api";
 // backend will return MissingLineageError.
 // ----------------------------------------------------------------------------
 const DEFAULT_RUN_PARAMS = {
-  tenant_id: "demo-tenant",
   policy_family_id: "default",
   policy_version: "1",
   jurisdiction: "US",
@@ -31,7 +33,6 @@ const DEFAULT_RUN_PARAMS = {
 };
 
 export interface CreateRunOptions {
-  tenant_id?: string;
   policy_family_id?: string;
   policy_version?: number | string;
   jurisdiction?: string;
@@ -45,7 +46,6 @@ export async function createRun(
 ): Promise<RunCreateResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("tenant_id", options.tenant_id ?? DEFAULT_RUN_PARAMS.tenant_id);
   formData.append(
     "policy_family_id",
     options.policy_family_id ?? DEFAULT_RUN_PARAMS.policy_family_id
@@ -65,6 +65,7 @@ export async function createRun(
 
   const response = await fetch(`${API_BASE}/runs`, {
     method: "POST",
+    headers: authHeaders(),
     body: formData,
   });
 
@@ -172,6 +173,57 @@ export async function getRunFindings(runId: string): Promise<Finding[]> {
   const response = await fetch(`${API_BASE}/runs/${runId}/findings`);
   if (!response.ok) throw new Error("Failed to fetch findings");
   return response.json();
+}
+
+export async function uploadRagDocument(payload: {
+  file: File;
+  doc_type: RagDocType;
+  policy_family_id?: string;
+  jurisdiction?: string;
+  version_label?: string;
+}): Promise<{ job_id: string; document_id: string; state: string }> {
+  const formData = new FormData();
+  formData.append("file", payload.file);
+  formData.append("doc_type", payload.doc_type);
+  if (payload.policy_family_id) formData.append("policy_family_id", payload.policy_family_id);
+  if (payload.jurisdiction) formData.append("jurisdiction", payload.jurisdiction);
+  if (payload.version_label) formData.append("version_label", payload.version_label);
+  const response = await fetch(`${API_BASE}/rag/documents`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData,
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "RAG upload failed" }));
+    throw new Error(error.detail || "RAG upload failed");
+  }
+  return response.json();
+}
+
+export async function listRagDocuments(): Promise<RagDocumentResponse[]> {
+  const response = await fetch(`${API_BASE}/rag/documents`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to fetch RAG documents");
+  return response.json();
+}
+
+export async function getRagDocument(documentId: string): Promise<RagDocumentResponse> {
+  const response = await fetch(`${API_BASE}/rag/documents/${documentId}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to fetch RAG document");
+  return response.json();
+}
+
+export async function getRagIngestionStatus(jobId: string): Promise<RagIngestionStatus> {
+  const response = await fetch(`${API_BASE}/rag/ingestions/${jobId}`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to fetch ingestion status");
+  return response.json();
+}
+
+export async function deleteRagDocument(documentId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/rag/documents/${documentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok && response.status !== 204) throw new Error("Failed to delete RAG document");
 }
 
 // ----------------------------------------------------------------------------

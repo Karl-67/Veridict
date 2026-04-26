@@ -1,5 +1,8 @@
 """
 Application service for run lifecycle operations.
+
+Tenant derivation: tenant_id must be derived from the JWT membership claims by
+the caller (route handler) — never from request body (auth-derived-tenancy).
 """
 
 from __future__ import annotations
@@ -13,22 +16,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, HumanReviewRecord, RunRecord, StageExecutionRecord
-from app.backend.models.schemas import EvidenceRef, Finding, FinalVerdict, HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail, StageStatus
+from app.backend.models.schemas import (
+    AdminMergeOutput,
+    EvidenceRef,
+    Finding,
+    FinalVerdict,
+    HumanReviewPayload,
+    HumanReviewResult,
+    ReviewBlockResult,
+    RunCreateResponse,
+    RunDetail,
+    StageStatus,
+)
 
+# Active stage topology — final_review_block removed (stage-topology contract).
 STAGE_SEQUENCE = [
     "create_run",
     "ingest_pdf",
     "parse_ocr_normalize",
     "clause_index",
     "harvey_context_load",
-    "kira_context_load",
-    "harvey_review_block",
     "kira_review_block",
     "admin_merge",
-    "final_review_block",
     "awaiting_human_review",
     "finalized",
 ]
+
+# Stages that exist only in legacy runs and must never be re-enqueued.
+_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
 
 
 def _parse_effective_date(value: str | None):
@@ -37,6 +52,292 @@ def _parse_effective_date(value: str | None):
     from datetime import date
 
     return date.fromisoformat(value)
+
+
+def _is_legacy_run(stage_names: list[str]) -> bool:
+    """Return True when this run contains stages from the old topology."""
+    return bool(_LEGACY_STAGES & set(stage_names))
+
+
+def _source_priority(source_agent: str | None) -> int:
+    """Lower value = higher priority. final_reviewer is excluded (returns 9)."""
+    agent = source_agent or ""
+    if agent.startswith("admin"):
+        return 0
+    if agent.startswith("harvey"):
+        return 1
+    if agent.startswith("kira"):
+        return 2
+    return 9
+
+
+def _map_stage_state(record: StageExecutionRecord) -> str:
+    mapping = {
+        "pending": "pending",
+        "claimed": "running",
+        "running": "running",
+        "completed": "done",
+        "failed": "failed",
+        "retrying": "retrying",
+        "blocked": "blocked",
+    }
+    return mapping.get(record.status, "pending")
+
+
+def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
+    """Convert a FindingRecord DB row into a Finding schema object."""
+    try:
+        clause_text = fr.clause_text or fr.issue or ""
+        clause_uid = fr.clause_uid or "unknown"
+        agent = fr.source_agent or "unknown"
+        branch = "kira" if agent.startswith("kira") else "harvey"
+        return Finding.model_construct(
+            finding_id=str(fr.id),
+            clause_uid=clause_uid,
+            issue_type="liability_exposure",
+            severity=fr.severity,  # type: ignore[arg-type]
+            exploitability="medium",
+            business_impact="medium",
+            description=fr.issue,
+            recommendation="negotiate",
+            recommendation_detail=fr.recommendation or "",
+            evidence=[
+                EvidenceRef.model_construct(
+                    schema_version=1,
+                    document_hash="",
+                    parser_version="",
+                    clause_uid=clause_uid,
+                    page=1,
+                    bbox=[0.0, 0.0, 0.0, 0.0],
+                    normalized_text=clause_text,
+                    extraction_confidence=1.0,
+                )
+            ],
+            branch=branch,
+            agent_role=agent,
+            round_number=fr.round_number or 1,
+            consensus_status=None,
+            unresolved_by_consensus=False,
+            human_edited=False,
+            human_edit_delta=None,
+        )
+    except Exception:
+        return None
+
+
+async def _load_branch_stage_outputs(
+    session: AsyncSession,
+    run_id: str,
+) -> tuple[ReviewBlockResult | None, ReviewBlockResult | None, AdminMergeOutput | None]:
+    """Load structured outputs from legacy Harvey, active Kira, and Admin stages.
+
+    For multi-round stages the latest completed round is used.
+    """
+    result = await session.execute(
+        select(StageExecutionRecord).where(
+            StageExecutionRecord.run_id == run_id,
+            StageExecutionRecord.stage_name.in_(["harvey_review_block", "kira_review_block", "admin_merge"]),
+            StageExecutionRecord.status == "completed",
+        )
+    )
+    # Keep the highest round_number per stage_name.
+    stages_by_name: dict[str, StageExecutionRecord] = {}
+    for stage in result.scalars().all():
+        existing = stages_by_name.get(stage.stage_name)
+        if existing is None or (stage.round_number or 0) > (existing.round_number or 0):
+            stages_by_name[stage.stage_name] = stage
+
+    harvey_block: ReviewBlockResult | None = None
+    kira_block: ReviewBlockResult | None = None
+    admin_out: AdminMergeOutput | None = None
+
+    if (s := stages_by_name.get("harvey_review_block")) and s.structured_output:
+        try:
+            harvey_block = ReviewBlockResult.model_validate(s.structured_output)
+        except Exception:
+            pass
+
+    if (s := stages_by_name.get("kira_review_block")) and s.structured_output:
+        try:
+            kira_block = ReviewBlockResult.model_validate(s.structured_output)
+        except Exception:
+            pass
+
+    if (s := stages_by_name.get("admin_merge")) and s.structured_output:
+        try:
+            admin_out = AdminMergeOutput.model_validate(s.structured_output)
+        except Exception:
+            pass
+
+    return harvey_block, kira_block, admin_out
+
+
+async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Finding]:
+    """Load Finding objects with source priority admin > harvey > kira.
+
+    final_reviewer is no longer a valid source and is skipped.
+    """
+    # 1. Primary: admin_merge structured output (latest round).
+    stage_result = await session.execute(
+        select(StageExecutionRecord)
+        .where(
+            StageExecutionRecord.run_id == run_id,
+            StageExecutionRecord.stage_name == "admin_merge",
+            StageExecutionRecord.status == "completed",
+        )
+        .order_by(StageExecutionRecord.round_number.desc())
+    )
+    stage = stage_result.scalars().first()
+    merged_findings: list[Finding] = []
+    seen_clause_uids: set[str] = set()
+    if stage and stage.structured_output:
+        for f in stage.structured_output.get("merged_findings", []):
+            try:
+                finding = Finding.model_validate(f)
+                merged_findings.append(finding)
+                seen_clause_uids.add(finding.clause_uid)
+            except Exception:
+                continue
+
+    # 2. Supplement with FindingRecord rows not already covered.
+    db_result = await session.execute(
+        select(FindingRecord)
+        .where(FindingRecord.run_id == run_id)
+        .order_by(FindingRecord.created_at.asc())
+    )
+    db_findings = db_result.scalars().all()
+
+    best_by_clause: dict[str, FindingRecord] = {}
+    for fr in db_findings:
+        uid = fr.clause_uid or str(fr.id)
+        if uid in seen_clause_uids:
+            continue
+        agent = fr.source_agent or ""
+        # final_reviewer is not a valid source in the current topology.
+        if agent.startswith("final_reviewer"):
+            continue
+        existing = best_by_clause.get(uid)
+        if existing is None or _source_priority(fr.source_agent) < _source_priority(existing.source_agent):
+            best_by_clause[uid] = fr
+
+    for fr in best_by_clause.values():
+        finding = _finding_record_to_finding(fr)
+        if finding is not None:
+            merged_findings.append(finding)
+
+    return merged_findings
+
+
+def _annotate_consensus(
+    findings: list[Finding],
+    harvey_block: ReviewBlockResult | None,
+    kira_block: ReviewBlockResult | None,
+) -> list[Finding]:
+    """Overlay consensus_status and unresolved_by_consensus from branch block results."""
+    harvey_consensus_uids: set[str] = set()
+    if harvey_block:
+        for f in harvey_block.aggregated_findings:
+            if f.consensus_status == "consensus":
+                harvey_consensus_uids.add(f.clause_uid)
+
+    kira_consensus_uids: set[str] = set()
+    if kira_block:
+        for f in kira_block.aggregated_findings:
+            if f.consensus_status == "consensus":
+                kira_consensus_uids.add(f.clause_uid)
+
+    annotated: list[Finding] = []
+    for f in findings:
+        # If branch block has consensus data for this clause, overlay it.
+        if f.consensus_status is not None:
+            annotated.append(f)
+            continue
+
+        if f.branch == "harvey":
+            if harvey_block is None:
+                annotated.append(f)
+            elif f.clause_uid in harvey_consensus_uids:
+                annotated.append(f.model_copy(update={"consensus_status": "consensus", "unresolved_by_consensus": False}))
+            else:
+                annotated.append(f.model_copy(update={"consensus_status": "unresolved_by_consensus", "unresolved_by_consensus": True}))
+        elif f.branch == "kira":
+            if kira_block is None:
+                annotated.append(f)
+            elif f.clause_uid in kira_consensus_uids:
+                annotated.append(f.model_copy(update={"consensus_status": "consensus", "unresolved_by_consensus": False}))
+            else:
+                annotated.append(f.model_copy(update={"consensus_status": "unresolved_by_consensus", "unresolved_by_consensus": True}))
+        else:
+            annotated.append(f)
+    return annotated
+
+
+def _build_final_verdict(
+    run: RunRecord,
+    findings: list[FindingRecord],
+    human_action: str | None,
+    full_findings: list[Finding] | None = None,
+    harvey_block: ReviewBlockResult | None = None,
+    kira_block: ReviewBlockResult | None = None,
+    admin_block: AdminMergeOutput | None = None,
+) -> FinalVerdict | None:
+    """Build FinalVerdict exposing Harvey RAG context, Kira findings, Admin merged findings,
+    unresolved_by_consensus flags, and evidence per evidence-schema.
+    """
+    if run.verdict_payload is not None:
+        cached = FinalVerdict.model_validate(run.verdict_payload)
+        # Backfill findings if the cached payload has none (legacy runs stored before this fix).
+        if not cached.findings and full_findings:
+            annotated = _annotate_consensus(full_findings, harvey_block, kira_block)
+            cached = cached.model_copy(update={"findings": annotated})
+        return cached
+
+    if human_action is None:
+        return None
+
+    # Annotate full_findings with consensus data from Harvey/Kira block results.
+    verdict_findings = _annotate_consensus(full_findings or [], harvey_block, kira_block)
+
+    # Derive overall risk from annotated findings.
+    risk = "low"
+    for f in verdict_findings:
+        sev = f.severity if hasattr(f, "severity") else None
+        if sev == "critical":
+            risk = "critical"
+            break
+        if sev == "high":
+            risk = "high"
+        elif sev == "medium" and risk == "low":
+            risk = "medium"
+
+    unresolved_count = sum(1 for f in verdict_findings if getattr(f, "unresolved_by_consensus", False))
+
+    recommendations: list[str] = []
+    for fr in findings:
+        if fr.recommendation:
+            recommendations.append(fr.recommendation)
+
+    # Build summary incorporating branch breakdown.
+    harvey_count = sum(1 for f in verdict_findings if getattr(f, "branch", None) == "harvey")
+    kira_count = sum(1 for f in verdict_findings if getattr(f, "branch", None) == "kira")
+    admin_merged_count = len(admin_block.merged_findings) if admin_block else 0
+    summary = (
+        f"{len(verdict_findings)} findings reviewed "
+        f"(Harvey: {harvey_count}, Kira: {kira_count}; "
+        f"admin-merged: {admin_merged_count}; "
+        f"unresolved by consensus: {unresolved_count})."
+    )
+
+    return FinalVerdict(
+        run_id=run.id,
+        finalized_at=run.updated_at,
+        overall_risk_level=risk,  # type: ignore[arg-type]
+        findings=verdict_findings,
+        summary=summary,
+        recommendations=recommendations,
+        human_action=human_action,  # type: ignore[arg-type]
+        unresolved_finding_count=unresolved_count,
+    )
 
 
 async def create_run(
@@ -51,6 +352,11 @@ async def create_run(
     regime: str,
     effective_date: str | None,
 ) -> RunCreateResponse:
+    """Create a new analysis run.
+
+    tenant_id must be derived from JWT membership by the caller
+    (auth-derived-tenancy — never from request body).
+    """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PDF uploads are accepted.")
 
@@ -99,146 +405,6 @@ async def create_run(
     return RunCreateResponse(run_id=run.id, state="created", created_at=run.created_at)
 
 
-def _map_stage_state(record: StageExecutionRecord) -> str:
-    mapping = {
-        "pending": "pending",
-        "claimed": "running",
-        "running": "running",
-        "completed": "done",
-        "failed": "failed",
-        "retrying": "retrying",
-    }
-    return mapping.get(record.status, "pending")
-
-
-def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
-    """Convert a FindingRecord DB row into a Finding schema object with synthetic evidence."""
-    try:
-        clause_text = fr.clause_text or fr.issue or ""
-        return Finding.model_construct(
-            finding_id=str(fr.id),
-            clause_uid=fr.clause_uid or "unknown",
-            issue_type="liability_exposure",
-            severity=fr.severity,  # type: ignore[arg-type]
-            exploitability="medium",
-            business_impact="medium",
-            description=fr.issue,
-            recommendation="negotiate",
-            recommendation_detail=fr.recommendation or "",
-            evidence=[
-                EvidenceRef.model_construct(
-                    page=1,
-                    bbox=[0.0, 0.0, 0.0, 0.0],
-                    normalized_text=clause_text,
-                    extraction_confidence=1.0,
-                )
-            ],
-            branch="harvey",
-            agent_role=fr.source_agent or "unknown",
-            round_number=fr.round_number,
-            consensus_status=None,
-            unresolved_by_consensus=False,
-            human_edited=False,
-            human_edit_delta=None,
-        )
-    except Exception:
-        return None
-
-
-async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Finding]:
-    """Load Finding objects: primary source is admin_merge, supplemented by FindingRecord table.
-
-    The admin_merge LLM sometimes aggressively deduplicates down to 1 finding. To ensure
-    the UI shows all meaningful findings, we also load unique findings from the DB and merge.
-    """
-    # 1. Load from admin_merge structured_output (full Finding schema, proper evidence)
-    stage_result = await session.execute(
-        select(StageExecutionRecord).where(
-            StageExecutionRecord.run_id == run_id,
-            StageExecutionRecord.stage_name == "admin_merge",
-            StageExecutionRecord.status == "completed",
-        )
-    )
-    stage = stage_result.scalars().first()
-    merged_findings: list[Finding] = []
-    seen_clause_uids: set[str] = set()
-    if stage and stage.structured_output:
-        for f in stage.structured_output.get("merged_findings", []):
-            try:
-                finding = Finding.model_validate(f)
-                merged_findings.append(finding)
-                seen_clause_uids.add(finding.clause_uid)
-            except Exception:
-                continue
-
-    # 2. Supplement with FindingRecord entries not already covered.
-    #    Use the highest-priority source agent: prefer final_reviewer > admin > harvey/kira.
-    #    Deduplicate by clause_uid — keep one representative finding per clause.
-    db_result = await session.execute(
-        select(FindingRecord)
-        .where(FindingRecord.run_id == run_id)
-        .order_by(FindingRecord.created_at.asc())
-    )
-    db_findings = db_result.scalars().all()
-
-    # Group by clause_uid, pick the best representative per clause
-    best_by_clause: dict[str, FindingRecord] = {}
-    priority = {"final_reviewer": 0, "admin": 1, "harvey": 2, "kira": 3}
-    for fr in db_findings:
-        uid = fr.clause_uid or fr.id
-        if uid in seen_clause_uids:
-            continue
-        existing = best_by_clause.get(uid)
-        if existing is None:
-            best_by_clause[uid] = fr
-        else:
-            rank = lambda r: min(priority.get(p, 9) for p in priority if (r.source_agent or "").startswith(p))
-            if rank(fr) < rank(existing):
-                best_by_clause[uid] = fr
-
-    for fr in best_by_clause.values():
-        finding = _finding_record_to_finding(fr)
-        if finding is not None:
-            merged_findings.append(finding)
-
-    return merged_findings
-
-
-def _build_final_verdict(
-    run: RunRecord,
-    findings: list[FindingRecord],
-    human_action: str | None,
-    full_findings: list[Finding] | None = None,
-) -> FinalVerdict | None:
-    if run.verdict_payload is not None:
-        cached = FinalVerdict.model_validate(run.verdict_payload)
-        # Backfill findings if the cached payload has none (legacy runs stored before this fix)
-        if not cached.findings and full_findings:
-            cached = cached.model_copy(update={"findings": full_findings})
-        return cached
-    if human_action is None:
-        return None
-    risk = "low"
-    for finding in findings:
-        if finding.severity == "critical":
-            risk = "critical"
-            break
-        if finding.severity == "high":
-            risk = "high"
-        elif finding.severity == "medium" and risk == "low":
-            risk = "medium"
-    return FinalVerdict(
-        run_id=run.id,
-        finalized_at=run.updated_at,
-        overall_risk_level=risk,  # type: ignore[arg-type]
-        findings=full_findings or [],
-        summary=f"{len(findings)} findings were reviewed.",
-        recommendations=[finding.recommendation for finding in findings if finding.recommendation],
-        human_action=human_action,  # type: ignore[arg-type]
-        unresolved_finding_count=sum(1 for finding in findings if finding.is_disputed),
-    )
-
-
 async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
     run = await session.get(RunRecord, run_id)
     if run is None:
@@ -254,6 +420,11 @@ async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
 
     findings = finding_result.scalars().all()
     run_review = review_result.scalars().first()
+    all_stages = stages_result.scalars().all()
+
+    stage_names = [s.stage_name for s in all_stages]
+    is_legacy = _is_legacy_run(stage_names)
+
     stages = [
         StageStatus(
             stage_name=stage.stage_name,
@@ -264,10 +435,26 @@ async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
             completed_at=stage.finished_at,
             error_detail=stage.failure_reason,
         )
-        for stage in stages_result.scalars().all()
+        for stage in all_stages
     ]
+
     full_findings = await _load_full_findings(session, run_id)
-    verdict = _build_final_verdict(run, findings, run_review.action if run_review else None, full_findings=full_findings)
+
+    # Legacy runs: render verdict read-only from cached payload; never re-enqueue.
+    if is_legacy:
+        verdict = _build_final_verdict(run, findings, run_review.action if run_review else None, full_findings=full_findings)
+    else:
+        harvey_block, kira_block, admin_block = await _load_branch_stage_outputs(session, run_id)
+        verdict = _build_final_verdict(
+            run,
+            findings,
+            run_review.action if run_review else None,
+            full_findings=full_findings,
+            harvey_block=harvey_block,
+            kira_block=kira_block,
+            admin_block=admin_block,
+        )
+
     return RunDetail(
         run_id=run.id,
         state=run.status,  # type: ignore[arg-type]
@@ -333,6 +520,7 @@ async def submit_human_review(session: AsyncSession, run_id: str, payload: Human
         await append_run_event(session, run_id, "human_rejected", {"reviewer_id": payload.reviewer_id, "reason": payload.rejection_reason})
         return HumanReviewResult(run_id=run_id, run_action="rejected", state="rejected")
 
+    # Finalize directly after admin_merge + human review — no final_review_block.
     run.status = "processing"
     await append_run_event(
         session,
@@ -348,10 +536,32 @@ async def finalize_run_if_approved(session: AsyncSession, run_id: str, human_act
     run = await session.get(RunRecord, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+
     finding_result = await session.execute(select(FindingRecord).where(FindingRecord.run_id == run_id))
     findings = finding_result.scalars().all()
     full_findings = await _load_full_findings(session, run_id)
-    verdict = _build_final_verdict(run, findings, human_action, full_findings=full_findings)
+
+    # Check whether this is a legacy run before loading branch outputs.
+    stages_result = await session.execute(
+        select(StageExecutionRecord.stage_name).where(StageExecutionRecord.run_id == run_id)
+    )
+    stage_names = [row[0] for row in stages_result.all()]
+    is_legacy = _is_legacy_run(stage_names)
+
+    if is_legacy:
+        verdict = _build_final_verdict(run, findings, human_action, full_findings=full_findings)
+    else:
+        harvey_block, kira_block, admin_block = await _load_branch_stage_outputs(session, run_id)
+        verdict = _build_final_verdict(
+            run,
+            findings,
+            human_action,
+            full_findings=full_findings,
+            harvey_block=harvey_block,
+            kira_block=kira_block,
+            admin_block=admin_block,
+        )
+
     if verdict is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Run cannot be finalized yet.")
 

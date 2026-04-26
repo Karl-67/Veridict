@@ -1,0 +1,41 @@
+models:
+  gemma_26b_finetuned:
+    name: gemma_26b_finetuned
+    role_support: [harvey, kira, admin]
+    provider_url: null
+    api_key_env: GEMMA_26B_FINETUNED_API_KEY
+    enabled: false
+    is_finetuned: true
+    decoding: {temperature: 0.2, top_p: 0.9, max_tokens: 4096}
+    timeout_seconds: 120
+    notes: N/A - weights pending
+  gemma_26b_base:
+    name: gemma_26b_base
+    role_support: [harvey, kira, admin]
+    provider_url: null
+    api_key_env: GEMMA_26B_BASE_API_KEY
+    enabled: false
+    is_finetuned: false
+    decoding: {temperature: 0.2, top_p: 0.9, max_tokens: 4096}
+    timeout_seconds: 120
+    notes: Disabled until endpoint is configured.
+  baseline_legal_1:
+    name: baseline_legal_1
+    role_support: [harvey, kira]
+    provider_url: null
+    api_key_env: BASELINE_LEGAL_1_API_KEY
+    enabled: false
+    is_finetuned: false
+    decoding: {temperature: 0.2, top_p: 0.9, max_tokens: 4096}
+    timeout_seconds: 90
+    notes: Baseline endpoint placeholder.
+  baseline_legal_2:
+    name: baseline_legal_2
+    role_support: [harvey, kira]
+    provider_url: null
+    api_key_env: BASELINE_LEGAL_2_API_KEY
+    enabled: false
+    is_finetuned: false
+    decoding: {temperature: 0.2, top_p: 0.9, max_tokens: 4096}
+    timeout_seconds: 90
+    notes: Baseline endpoint placeholder.
