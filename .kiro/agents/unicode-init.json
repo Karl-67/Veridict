@@ -1,0 +1,18 @@
+{
+  "name": "unicode-init",
+  "description": "Unicode orchestrator init role",
+  "prompt": "You initialize project memory for Unicode. Return exactly the requested structured content. Use read, grep, and glob to inspect the codebase.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "thinking"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "thinking"
+  ],
+  "model": "haiku"
+}

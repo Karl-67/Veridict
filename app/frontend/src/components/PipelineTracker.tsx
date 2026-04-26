@@ -35,11 +35,11 @@ const STAGE_DISPLAY: Record<string, StageDisplayInfo> = {
   ingest_pdf:            { label: "Ingesting PDF",      icon: FileText },
   parse_ocr_normalize:   { label: "Parsing & OCR",      icon: FileSearch },
   clause_index:          { label: "Indexing Clauses",   icon: Database },
-  harvey_context_load:   { label: "Harvey Context",     icon: Shield },
+  harvey_context_load:   { label: "Harvey RAG",         icon: Shield },
   kira_context_load:     { label: "Kira Context",       icon: FileSearch },
   harvey_review_block:   { label: "Harvey Review",      icon: Shield },
-  kira_review_block:     { label: "Kira Review",        icon: FileSearch },
-  admin_merge:           { label: "Merging Findings",   icon: GitMerge },
+  kira_review_block:     { label: "Kira Problem Scan",  icon: FileSearch },
+  admin_merge:           { label: "Admin Consensus",    icon: GitMerge },
   final_review_block:    { label: "Final Review",       icon: Users },
   awaiting_human_review: { label: "Human Review Gate",  icon: UserCheck },
   finalized:             { label: "Verdict Ready",      icon: Scale },
@@ -47,8 +47,7 @@ const STAGE_DISPLAY: Record<string, StageDisplayInfo> = {
 
 const STAGE_ORDER = [
   "create_run", "ingest_pdf", "parse_ocr_normalize", "clause_index",
-  "harvey_context_load", "kira_context_load", "harvey_review_block",
-  "kira_review_block", "admin_merge", "final_review_block",
+  "harvey_context_load", "kira_review_block", "admin_merge",
   "awaiting_human_review", "finalized",
 ];
 

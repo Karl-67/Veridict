@@ -1,0 +1,12 @@
+{
+  "name": "unicode-summary",
+  "description": "Unicode orchestrator summary role",
+  "prompt": "You summarize completed Unicode runs. Be concise and follow the caller's output format exactly.",
+  "tools": [
+    "read"
+  ],
+  "allowedTools": [
+    "read"
+  ],
+  "model": "haiku"
+}

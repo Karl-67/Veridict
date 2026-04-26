@@ -1,0 +1,187 @@
+<task>[Pasted text #1 — 47 lines]:
+I will now send you the project rubric, that has everything required for the project, All of these should be met fully, and completely. I want you at the end to make a md </task>
+
+These files will be created in parallel as part of this task. For each file, extract its expected public interface based solely on its spec.
+
+<file_specs>
+FILE: app/backend/alembic/versions/0003_add_harvey_rag.py
+- `CREATE EXTENSION IF NOT EXISTS vector`.
+- Create rag_source_documents, rag_document_versions, rag_chunks, rag_embeddings, rag_ingestion_jobs, rag_retrieval_traces.
+- Add finding JSONB schema upgrade for new evidence fields with default `{}`.
+- Add indexes per `rag-storage-contract`.
+- Idempotent re: legacy final_review_block rows (do not delete).
+
+FILE: app/backend/services/rag_ingestion.py
+- `RagIngestionService` with: `create_ingestion_job(file, doc_type, policy_family_id, jurisdiction, version_label, tenant_id, workspace_id)`, `ingest_document(job_id)`, `chunk_document(parsed_doc, size, overlap)`, `compute_file_hash(bytes)`, `compute_chunk_hash(text)`, `embed_chunks(chunks)`, `activate_new_version(version_id)`, `soft_delete_previous_active(document_id)`, `mark_job_failed(job_id, error)`.
+- Validate doc_type ∈ {policy, reference_contract, playbook}; enforce 50MB / 500 page limit; reject duplicate file_hash with 409; dedupe chunks by chunk_hash within version.
+- New version acti
+
+FILE: app/backend/services/rag_retrieval.py
+- `HarveyRagRetriever` with: `retrieve_for_run(run_id, clauses) → list[RetrievalTraceItem]`, `retrieve_for_clause(clause, scope) → list[RagCitation]`, `hybrid_search(query, scope, k)`, `vector_search`, `text_search` (postgres tsvector BM25-ish), `rerank_results` (bge-reranker hook, no-op stub if unavailable), `persist_retrieval_trace`, `validate_citation_ids(chunk_ids, run_id)`.
+- Scope filter: `(tenant_id, workspace_id, active_version, policy_family_id ∈ {target, linked_playbooks, linked_reference_contracts})`.
+- Caller identity guard: raise `RagAccessForbidden` if caller role != harvey.
+
+FILE: app/backend/services/embeddings.py
+- `EmbeddingProvider` ABC with `embed_texts(list[str]) → list[list[float]]`, `dimensions: int`.
+- Implementations: `LocalEmbeddingProvider` (sentence-transformers), `OpenAICompatibleEmbeddingProvider` (Ollama nomic-embed-text default).
+- `get_embedding_provider()` factory from settings.
+- Batch size 32, normalize L2.
+
+FILE: app/backend/services/metrics.py
+- Prometheus client setup; counters/histograms per `observability-contract`: `runs_total{status}`, `stage_duration_seconds{stage}`, `provider_latency_seconds{provider,model}`, `provider_failures_total`, `json_repair_total`, `retrieval_hits_total`, `citation_validation_failures_total{code}`, `queue_age_seconds`, `retry_total{stage}`, `worker_lease_expiry_total`.
+- `setup_metrics(app)` mounts `/metrics`.
+
+FILE: app/backend/routes/rag.py
+- `APIRouter(prefix="/api/rag")`.
+- `POST /documents` (admin only): multipart upload → enqueue ingestion → return job_id.
+- `GET /documents`: list for caller's tenant/workspace.
+- `GET /documents/{id}`: detail with active version, chunk count.
+- `GET /ingestions/{job_id}`: status + error.
+- `DELETE /documents/{id}`: soft-delete active version.
+- All endpoints derive tenant via `auth-derived-tenancy`; reject if user role not admin/workspace_admin.
+
+FILE: app/frontend/src/components/RagDocumentPanel.tsx
+- Components: `RagDocumentPanel`, `RagUploadForm` (file, doc_type select, policy_family_id, jurisdiction, version_label), `RagIngestionStatusList`, `RagDocumentTable`, `RagDocumentDetailDrawer`.
+- Polls `/api/rag/ingestions/{job_id}` until terminal status.
+
+FILE: configs/models.yaml
+- Entries: `gemma_26b_finetuned` (enabled:false, is_finetuned:true), `gemma_26b_base` (enabled:false, is_finetuned:false), `baseline_legal_1`, `baseline_legal_2`.
+- Each: name, role_support, provider_url, api_key_env, enabled, is_finetuned, decoding{temperature,top_p,max_tokens}, timeout_seconds, notes.
+
+FILE: scripts/eval_model_registry.py
+- `ModelRegistry`, `load_model_registry(path)`, `validate_model_registry()`, `iter_enabled_models()`, `mark_missing_as_pending()`.
+- Health-checks each enabled endpoint; disabled fine-tuned → emits `N/A - weights pending` row.
+
+FILE: scripts/eval_finetune_vs_baseline.py
+- `EvalRunner.run_eval_suite(dataset_path, models)`: load CUAD/ContractNLI fixtures, run identical prompts/retrieval/decoding across models, capture per-role and full-pipeline outputs.
+- `evaluate_role_outputs`, `evaluate_full_pipeline`, `write_markdown_report`, `write_json_results`.
+- Paired comparison + bootstrap CI + McNemar.
+
+FILE: scripts/eval_metrics.py
+- `json_validity_rate`, `contradiction_prf`, `citation_accuracy`, `hallucinated_citation_rate`, `severity_calibration` (Brier/ECE), `admin_agreement_rate`, `latency_cost_summary`, `bootstrap_confidence_interval(n=1000)`, `mcnemar_test`.
+
+FILE: tests/conftest.py
+- Fixtures: `db_session` (test postgres + pgvector), `fake_provider`, `sample_contract_pdf`, `sample_policy_pdf`, `auth_admin_user`, `auth_member_user`, `seeded_rag_corpus`.
+
+FILE: tests/test_stage_topology.py
+- Assert new run stages == `stage-topology`.
+- Assert no final_review_block rows for new runs.
+- Assert SSE event stream excludes final_review_block.
+- Assert legacy run with final_review_block still finalizes.
+
+FILE: tests/test_harvey_trio_consensus.py
+- Assert exactly 3 Harvey + 3 Kira reviewer outputs per run.
+- Assert agreement calculation for unanimous/majority/split fixtures.
+- Assert admin merge handles unresolved consensus.
+
+FILE: tests/test_rag_ingestion.py
+- Upload → job created → completion creates active version.
+- Duplicate file hash → 409.
+- Chunk hash dedupe within version.
+- Failed embedding → prior active version retained.
+- Tenant A cannot see tenant B documents.
+
+FILE: tests/test_rag_retrieval.py
+- Filter by tenant/workspace/policy_family/jurisdiction.
+- Kira caller raises `RagAccessForbidden`.
+- Retrieval trace persisted with chunk_ids.
+- `validate_citation_ids` rejects foreign chunk_ids.
+
+FILE: tests/test_parser_confidence.py
+- Docling primary path returns clauses with confidence.
+- Image-only PDF triggers OCR fallback.
+- Corrupt PDF triggers pdfplumber fallback then blocked state.
+- Confidence <0.3 → blocked; <0.6 → warning; override path audited.
+
+FILE: tests/test_validator_evidence.py
+- Harvey finding without rag_citations → `MISSING_RAG_CITATION`.
+- Harvey citation with chunk_id not in trace → `INVALID_CHUNK_ID`.
+- Kira finding with rag_citations → `KIRA_RAG_FORBIDDEN`.
+- Kira finding without contract_evidence → `MISSING_CONTRACT_EVIDENCE`.
+- Valid findings pass.
+
+FILE: tests/test_run_lifecycle.py
+- E2E: upload → parse → harvey_context_load → kira_context_load → harvey/kira review → admin_merge → awaiting_human_review → finalized.
+- Findings endpoint includes evidence + consensus.
+- Human approve/edit/reject flows.
+
+FILE: tests/test_eval_metrics.py
+- Unit tests for each metric in `scripts/eval_metrics.py`.
+- Disabled fine-tuned endpoint produces `N/A - weights pending`.
+
+FILE: Dockerfile.api
+- python:3.11-slim base; install tesseract-ocr, poppler-utils for Docling/OCR.
+- Copy app/backend, install requirements.
+- Run `uvicorn app.backend.main:app --host 0.0.0.0 --port 8000`.
+
+FILE: Dockerfile.worker
+- Same base + system deps as api.
+- Run `python -m app.backend.worker`.
+
+FILE: Dockerfile.frontend
+- node:20-alpine build stage → nginx:alpine serve stage.
+- Build Vite app, serve dist on port 80.
+
+FILE: docker-compose.yml
+- Services: `postgres` (pgvector/pgvector:pg16, named volume), `api` (Dockerfile.api, depends_on postgres healthy), `worker` (Dockerfile.worker), `frontend` (Dockerfile.frontend), optional `ollama`.
+- Healthchecks on postgres and api.
+- Env via `.env`; no secrets committed.
+
+FILE: .github/workflows/ci.yml
+- Jobs: `backend-test` (ruff, mypy optional, pytest with postgres+pgvector service), `frontend-build` (npm ci, tsc, build), `docker-build` (build all Dockerfiles).
+- Upload pytest junit + coverage artifacts.
+
+FILE: .github/workflows/eval.yml
+- `workflow_dispatch` only.
+- Loads model API keys from secrets; runs `scripts/eval_finetune_vs_baseline.py`; uploads markdown + JSON reports as artifacts.
+- Missing fine-tuned endpoint → `N/A - weights pending`, not failure.
+
+FILE: docs/CURRENT_LIMITATIONS.md
+- Sections: Impossible Now, Blocked by Missing Weights, Blocked by Missing Secrets/Cloud, Deferred by Scope, Implemented but Not Benchmark-Proven.
+- List: no fine-tuned Gemma 26B weights, no production RAG corpus until customer PDFs uploaded, no live deployment URL until Modal/Vercel secrets set, benchmark superiority claims pending eval run.
+
+FILE: docs/CHANGELOG_IMPLEMENTATION.md
+- Per-file change log with rubric extent rating (full/partial/pending).
+- Sections per milestone: pipeline topology, RAG, evaluation, deployment, observability, tests, docs.
+
+FILE: docs/DEPLOYMENT_RESEARCH.md
+- Compare Modal vs RunPod Serverless vs HF Inference Endpoints vs Koyeb on: VRAM for Gemma 26B (needs ≥48GB → H100/H200 or 2×A100), cold start, public URL, secrets, scale-to-zero, monthly demo cost, production cost.
+- Recommendation: Vercel (frontend) + Modal CPU (FastAPI/worker) + Neon Postgres+pgvector + Modal vLLM H200 (inference).
+
+FILE: docs/EVALUATION_PLAN.md
+- Test suite: 1 fine-tuned Gemma 26B vs 3 baselines on identical prompts/retrieval/decoding.
+- Metrics, paired eval, bootstrap CI, McNemar.
+- Datasets: CUAD, ContractNLI subset, internal golden set.
+- Reporting: per-model × per-role × full-pipeline tables.
+- Claim policy: no superiority claim until p<0.05 + CI excludes 0.
+
+FILE: docs/API_SPEC.md
+- Document all run + RAG endpoints with schemas, auth requirements, file limits, error codes, SSE event types, retry/timeout policy, evidence/citation rules.
+
+FILE: docs/ARCHITECTURE.md
+- Service boundaries diagram (frontend/api/worker/postgres+pgvector/inference).
+- Pipeline DAG per `stage-topology`; 3 Harvey + 3 Kira + Admin merge + human review.
+- Harvey-only RAG flow; Kira blocked path.
+- Deployment topology.
+
+FILE: docs/RAG_DESIGN.md
+- Ingestion → parsing → chunking (800 tok / 100 overlap) → embedding → pgvector.
+- Hybrid retrieval (vector + tsvector BM25) + optional bge-reranker.
+- Metadata schema, retrieval traces, citation validation.
+- Versioning, dedupe, rollback semantics.
+
+FILE: docs/RUNBOOK.md
+- Local setup, migrations, docker-compose up, demo data seeding, RAG ingestion walkthrough, run lifecycle demo, metrics dashboard pointer, eval runner usage, deployment, secrets, rollback, troubleshooting.
+</file_specs>
+
+Output format (repeat for each file):
+FILE: path/to/file.py
+- def function_name(param: type) -> return_type
+- class ClassName
+
+Rules:
+- Public API only (functions/classes other files will import)
+- Use the exact names from the spec
+- If a spec has no clear public API, skip that file
+- No prose, no explanations, no implementation details
+Return ONLY the FILE blocks.

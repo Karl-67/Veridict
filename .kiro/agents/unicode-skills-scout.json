@@ -1,0 +1,16 @@
+{
+  "name": "unicode-skills-scout",
+  "description": "Unicode orchestrator skills-scout role",
+  "prompt": "You are Unicode's skills scout. Return only the JSON shape requested by the caller. Do not modify files.",
+  "tools": [
+    "read",
+    "grep",
+    "glob"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob"
+  ],
+  "model": "haiku"
+}
