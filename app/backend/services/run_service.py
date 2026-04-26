@@ -29,21 +29,25 @@ from app.backend.models.schemas import (
     StageStatus,
 )
 
-# Active stage topology — final_review_block removed (stage-topology contract).
-STAGE_SEQUENCE = [
-    "create_run",
-    "ingest_pdf",
-    "parse_ocr_normalize",
-    "clause_index",
-    "harvey_context_load",
-    "kira_review_block",
-    "admin_merge",
-    "awaiting_human_review",
-    "finalized",
+# Active stage topology.
+# Tuples of (stage_name, stage_order). Same stage_order = parallel — both claimable
+# once all lower-order stages are complete. With two workers they run simultaneously;
+# with one worker they run sequentially but neither blocks the other from being claimed.
+STAGE_SEQUENCE: list[tuple[str, int]] = [
+    ("create_run", 1),
+    ("ingest_pdf", 2),
+    ("parse_ocr_normalize", 3),
+    ("clause_index", 4),
+    ("harvey_context_load", 5),
+    ("harvey_review_block", 6),  # parallel with kira_review_block
+    ("kira_review_block", 6),    # parallel with harvey_review_block
+    ("admin_merge", 7),
+    ("awaiting_human_review", 8),
+    ("finalized", 9),
 ]
 
 # Stages that exist only in legacy runs and must never be re-enqueued.
-_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
+_LEGACY_STAGES = frozenset({"final_review_block", "kira_context_load"})
 
 
 def _parse_effective_date(value: str | None):
@@ -328,11 +332,14 @@ def _build_final_verdict(
         f"unresolved by consensus: {unresolved_count})."
     )
 
+    clause_verdicts = admin_block.clause_verdicts if admin_block else []
+
     return FinalVerdict(
         run_id=run.id,
         finalized_at=run.updated_at,
         overall_risk_level=risk,  # type: ignore[arg-type]
         findings=verdict_findings,
+        clause_verdicts=clause_verdicts,
         summary=summary,
         recommendations=recommendations,
         human_action=human_action,  # type: ignore[arg-type]
@@ -385,7 +392,7 @@ async def create_run(
     session.add(run)
     await session.flush()
 
-    for stage_order, stage_name in enumerate(STAGE_SEQUENCE, start=1):
+    for stage_name, stage_order in STAGE_SEQUENCE:
         session.add(
             StageExecutionRecord(
                 run_id=run.id,

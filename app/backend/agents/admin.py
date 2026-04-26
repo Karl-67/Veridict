@@ -1,12 +1,18 @@
 """
 Admin-layer orchestration agents.
-Implements the `harvey-trio-contract` shared dependency: Admin is merge-only,
-no admin reviewers. ConsensusAdmin deduplicates findings via clause_uid +
-issue_type clustering across both trios and computes 3-way agreement per branch.
+
+AdminMergeAgent: LLM-based synthesiser. Receives Harvey's cross-contract findings
+and Kira's intra-contract findings; produces per-clause ClauseVerdicts with
+intra_comment (what's wrong inside the contract) and cross_comment (what conflicts
+with prior policy / knowledge base).
+
+ConsensusAdmin / AgreementAdmin / ReviewBlockAggregator: deterministic helpers
+used during Harvey and Kira review blocks to compute 2-of-3 agreement.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections import defaultdict
 from typing import Literal
 
@@ -15,22 +21,26 @@ from pydantic import BaseModel, Field
 from app.backend.models.schemas import (
     AdminMergeOutput,
     BranchReviewOutput,
+    ClauseVerdict,
     Finding,
     ReviewBlockResult,
     ReviewerVote,
     ValidatorOutput,
 )
+from app.backend.providers.base import StructuredLLMProvider
 
 ConsensusState = Literal["unanimous", "majority", "split"]
+
+
+# ---------------------------------------------------------------------------
+# Deterministic consensus helpers (used by Harvey and Kira review blocks)
+# ---------------------------------------------------------------------------
 
 
 class TrioMergeOutput(BaseModel):
     merged_findings: list[Finding]
     consensus_state: ConsensusState
-    unresolved_by_consensus: list[str] = Field(
-        default_factory=list,
-        description="finding_ids where no 2-of-3 agreement was reached in either branch.",
-    )
+    unresolved_by_consensus: list[str] = Field(default_factory=list)
     harvey_agreement: ConsensusState
     kira_agreement: ConsensusState
     deduplication_log: list[dict] = Field(default_factory=list)
@@ -40,7 +50,7 @@ def _merge_evidence(findings: list[Finding]) -> list:
     seen: set[tuple[str, int]] = set()
     merged = []
     for f in findings:
-        for ev in f.evidence:
+        for ev in (f.evidence or []):
             ref = (ev.clause_uid, ev.page)
             if ref not in seen:
                 seen.add(ref)
@@ -51,10 +61,7 @@ def _merge_evidence(findings: list[Finding]) -> list:
 def _branch_consensus(
     trio_outputs: list[BranchReviewOutput],
 ) -> tuple[ConsensusState, list[Finding], list[str]]:
-    """
-    Cluster findings by (clause_uid, issue_type), compute 3-way agreement.
-    Returns (branch_agreement, canonical_findings, unresolved_finding_ids).
-    """
+    """Cluster findings by (clause_uid, issue_type), compute 2-of-3 agreement."""
     key_to_findings: dict[str, list[Finding]] = defaultdict(list)
     key_to_voters: dict[str, set[int]] = defaultdict(set)
 
@@ -79,15 +86,15 @@ def _branch_consensus(
 
         if voter_count >= 3:
             unanimous_count += 1
-            status = "consensus"
             is_unresolved = False
+            status = "consensus"
         elif voter_count >= 2:
-            status = "consensus"
             is_unresolved = False
+            status = "consensus"
         else:
             has_split = True
-            status = "unresolved_by_consensus"
             is_unresolved = True
+            status = "unresolved_by_consensus"
             unresolved_ids.append(primary.finding_id)
 
         canonical.append(
@@ -114,8 +121,6 @@ _AGREEMENT_RANK: dict[str, int] = {"split": 0, "majority": 1, "unanimous": 2}
 
 
 class AgreementAdmin:
-    """Computes Harvey 3-way and Kira 3-way agreement; returns consensus_state."""
-
     def check(
         self,
         harvey_trio_outputs: list[BranchReviewOutput],
@@ -127,8 +132,6 @@ class AgreementAdmin:
 
 
 class ConsensusAdmin:
-    """Merge-only admin: deduplicates harvey + kira trio outputs into one finding set."""
-
     _agreement_admin = AgreementAdmin()
 
     def merge(
@@ -139,7 +142,6 @@ class ConsensusAdmin:
         harvey_agreement, harvey_findings, harvey_unresolved = _branch_consensus(harvey_trio_outputs)
         kira_agreement, kira_findings, kira_unresolved = _branch_consensus(kira_trio_outputs)
 
-        # Cross-branch dedup: same clause_uid + issue_type in both branches → merge evidence
         seen: dict[str, Finding] = {}
         deduplication_log: list[dict] = []
 
@@ -149,16 +151,14 @@ class ConsensusAdmin:
                 seen[key] = finding
             else:
                 existing = seen[key]
-                existing_refs = {(e.clause_uid, e.page) for e in existing.evidence}
-                extra_ev = [ev for ev in finding.evidence if (ev.clause_uid, ev.page) not in existing_refs]
-                seen[key] = existing.model_copy(update={"evidence": existing.evidence + extra_ev})
-                deduplication_log.append(
-                    {
-                        "kept_finding_id": existing.finding_id,
-                        "discarded_finding_id": finding.finding_id,
-                        "key": key,
-                    }
-                )
+                existing_refs = {(e.clause_uid, e.page) for e in (existing.evidence or [])}
+                extra_ev = [ev for ev in (finding.evidence or []) if (ev.clause_uid, ev.page) not in existing_refs]
+                seen[key] = existing.model_copy(update={"evidence": (existing.evidence or []) + extra_ev})
+                deduplication_log.append({
+                    "kept_finding_id": existing.finding_id,
+                    "discarded_finding_id": finding.finding_id,
+                    "key": key,
+                })
 
         all_unresolved = list(dict.fromkeys(harvey_unresolved + kira_unresolved))
         overall: ConsensusState = min(harvey_agreement, kira_agreement, key=lambda s: _AGREEMENT_RANK[s])
@@ -174,7 +174,8 @@ class ConsensusAdmin:
 
 
 class ReviewBlockAggregator:
-    """Small deterministic aggregator for the active Kira problem-finding block."""
+    """Deterministic aggregator: deduplicates findings from a review block by
+    (clause_uid, issue_type, description) and returns a ReviewBlockResult."""
 
     def aggregate(
         self,
@@ -198,7 +199,7 @@ class ReviewBlockAggregator:
             round_number=round_number,
             rerun_required=False,
             escalated=False,
-            accepted_reviewer_indexes=[output.reviewer_index for output in review_outputs],
+            accepted_reviewer_indexes=[o.reviewer_index for o in review_outputs],
             aggregated_findings=findings,
             reviewer_outputs=review_outputs,
             reviewer_votes=reviewer_votes,
@@ -206,21 +207,155 @@ class ReviewBlockAggregator:
         )
 
 
+# ---------------------------------------------------------------------------
+# Admin output schema for LLM structured output
+# ---------------------------------------------------------------------------
+
+_CLAUSE_VERDICT_ITEM_SCHEMA: dict = {
+    "type": "object",
+    "required": ["clause_uid", "severity", "contributing_finding_ids"],
+    "properties": {
+        "clause_uid": {"type": "string"},
+        "intra_comment": {
+            "type": "string",
+            "description": (
+                "Clear, actionable summary of Kira's internal-contract findings for this clause. "
+                "Include the recommended change. Omit if no Kira findings for this clause."
+            ),
+        },
+        "cross_comment": {
+            "type": "string",
+            "description": (
+                "Clear, actionable summary of Harvey's cross-contract/policy findings. "
+                "State which prior policy or knowledge-base document is contradicted. "
+                "Omit if no Harvey findings for this clause."
+            ),
+        },
+        "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "critical"],
+            "description": "Highest severity across all findings for this clause.",
+        },
+        "contributing_finding_ids": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "All finding_ids that contributed to this verdict entry.",
+        },
+    },
+}
+
+_ADMIN_OUTPUT_SCHEMA: dict = {
+    "type": "object",
+    "required": ["clause_verdicts"],
+    "properties": {
+        "clause_verdicts": {
+            "type": "array",
+            "items": _CLAUSE_VERDICT_ITEM_SCHEMA,
+        },
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Admin prompt helpers
+# ---------------------------------------------------------------------------
+
+
+def _format_findings_for_admin(findings: list[Finding], label: str) -> str:
+    if not findings:
+        return f"{label}: (none)"
+    lines = [f"{label}:"]
+    for f in findings:
+        rec = f.recommended_change or f.recommendation_detail or ""
+        lines.append(
+            f"  finding_id={f.finding_id} clause={f.clause_uid} "
+            f"severity={f.severity} type={f.issue_type}\n"
+            f"  description: {f.description}\n"
+            f"  recommended_change: {rec}"
+        )
+    return "\n".join(lines)
+
+
+_ADMIN_SYSTEM = """\
+[ADMIN — Consensus Reviewer]
+You are the Admin Reviewer. You receive two sets of independent findings about a contract:
+
+- HARVEY FINDINGS (cross_contract): contradictions between this contract and prior policy
+  versions or knowledge-base documents. Each Harvey finding points to a policy regression,
+  conflict, or downstream enforcement risk.
+
+- KIRA FINDINGS (intra_contract): internal contract integrity problems — ambiguities,
+  missing protections, exploitable gaps. Each Kira finding includes a recommended_change.
+
+Your task:
+For every clause_uid that has at least one finding (from either branch), produce one
+ClauseVerdict entry containing:
+  - intra_comment: synthesise Kira's findings for this clause into a single, clear,
+    actionable comment that includes the recommended change. Null if no Kira findings.
+  - cross_comment: synthesise Harvey's findings for this clause into a single, clear,
+    actionable comment that names the prior policy or document being contradicted.
+    Null if no Harvey findings.
+  - severity: the highest severity level across all findings for this clause.
+  - contributing_finding_ids: all finding_ids (from either branch) for this clause.
+
+Rules:
+- One ClauseVerdict per clause_uid. Deduplicate overlapping findings across branches.
+- Write comments in plain English for a senior lawyer to act on immediately.
+- Do NOT include chain-of-thought. Return strict JSON only."""
+
+
+# ---------------------------------------------------------------------------
+# LLM-based AdminMergeAgent
+# ---------------------------------------------------------------------------
+
+
 class AdminMergeAgent:
-    """Compatibility facade used by the state machine.
+    """Synthesises Harvey cross-contract findings and Kira intra-contract findings
+    into per-clause ClauseVerdicts with intra_comment and cross_comment."""
 
-    Active architecture: Harvey contributes RAG evidence, Kira contributes
-    findings, Admin creates the consensus output.
-    """
+    def __init__(self, provider: StructuredLLMProvider) -> None:
+        self._provider = provider
 
-    def merge(self, harvey_output: ValidatorOutput, kira_output: ValidatorOutput) -> AdminMergeOutput:
-        del harvey_output
+    async def merge(
+        self,
+        harvey_findings: list[Finding],
+        kira_findings: list[Finding],
+    ) -> AdminMergeOutput:
+        harvey_block = _format_findings_for_admin(harvey_findings, "HARVEY FINDINGS (cross_contract)")
+        kira_block = _format_findings_for_admin(kira_findings, "KIRA FINDINGS (intra_contract)")
+
+        prompt = (
+            f"{_ADMIN_SYSTEM}\n\n"
+            f"{harvey_block}\n\n"
+            f"{kira_block}\n\n"
+            "Return ONLY a JSON object matching the schema. No explanation, no chain-of-thought."
+        )
+
+        raw = await self._provider.generate_structured_output(prompt, _ADMIN_OUTPUT_SCHEMA)
+
+        clause_verdicts: list[ClauseVerdict] = []
+        for item in raw.get("clause_verdicts", []):
+            if not isinstance(item, dict) or not item.get("clause_uid"):
+                continue
+            severity = item.get("severity", "medium")
+            if severity not in ("low", "medium", "high", "critical"):
+                severity = "medium"
+            clause_verdicts.append(
+                ClauseVerdict(
+                    clause_uid=item["clause_uid"],
+                    intra_comment=item.get("intra_comment") or None,
+                    cross_comment=item.get("cross_comment") or None,
+                    severity=severity,  # type: ignore[arg-type]
+                    contributing_finding_ids=item.get("contributing_finding_ids", []),
+                )
+            )
+
+        # Combined finding list for backwards-compat (merged_findings field)
+        all_findings = [*harvey_findings, *kira_findings]
+
         return AdminMergeOutput(
-            merged_findings=kira_output.validated_findings,
+            merged_findings=all_findings,
+            clause_verdicts=clause_verdicts,
             deduplication_log=[
-                {
-                    "source": "admin_consensus",
-                    "note": "Kira findings merged with Harvey RAG evidence context.",
-                }
+                {"source": "admin_llm", "clause_verdict_count": len(clause_verdicts)}
             ],
         )

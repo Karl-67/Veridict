@@ -24,6 +24,8 @@ SCHEMA_VERSION = 2
 
 BranchName = Literal["harvey", "kira"]
 
+FindingScope = Literal["intra_contract", "cross_contract"]
+
 IssueType = Literal[
     "liability_exposure",
     "open_clause",
@@ -201,10 +203,19 @@ class Finding(BaseModel):
         description="RAG corpus citations. Required (≥1) for Harvey contradiction findings.",
     )
 
+    # Scope — which dimension this finding addresses
+    finding_scope: FindingScope = Field(
+        "intra_contract",
+        description="intra_contract = problem within this contract (Kira); cross_contract = conflict with policy/knowledge base (Harvey).",
+    )
+
+    # Kira-only: concrete suggested rewrite for the problematic clause text
+    recommended_change: Optional[str] = None
+
     # Provenance
     branch: BranchName
-    agent_role: str = Field(..., description="E.g. 'harvey_issue_discovery', 'kira_false_positive_challenge'.")
-    round_number: int = Field(..., ge=1, description="Final-review round this finding originated from.")
+    agent_role: str = Field(..., description="E.g. 'harvey_reviewer', 'kira_reviewer'.")
+    round_number: int = Field(..., ge=1, description="Review round this finding originated from.")
 
     # Consensus tracking
     consensus_state: Optional[ConsensusStatus] = None
@@ -359,11 +370,37 @@ class ValidatorOutput(BaseModel):
     notes: Optional[str] = None
 
 
+class ClauseVerdict(BaseModel):
+    """Per-clause final verdict produced by AdminMergeAgent.
+
+    intra_comment summarises Kira's internal-contract findings for this clause.
+    cross_comment summarises Harvey's cross-contract/policy findings for this clause.
+    Either can be None when only one branch flagged the clause.
+    """
+
+    schema_version: int = SCHEMA_VERSION
+    clause_uid: str
+    intra_comment: Optional[str] = Field(
+        None,
+        description="Kira-derived comment: what is wrong within this contract.",
+    )
+    cross_comment: Optional[str] = Field(
+        None,
+        description="Harvey-derived comment: how this clause conflicts with prior policy or knowledge base.",
+    )
+    severity: SeverityLevel
+    contributing_finding_ids: list[str] = Field(default_factory=list)
+
+
 class AdminMergeOutput(BaseModel):
-    """Merged finding set produced by AdminMergeAgent (legacy shape)."""
+    """Merged finding set produced by AdminMergeAgent."""
 
     schema_version: int = SCHEMA_VERSION
     merged_findings: list[Finding]
+    clause_verdicts: list[ClauseVerdict] = Field(
+        default_factory=list,
+        description="Per-clause synthesised verdicts with intra_comment + cross_comment.",
+    )
     deduplication_log: list[dict] = Field(
         default_factory=list,
         description="Records of duplicate finding groups that were merged.",
@@ -402,6 +439,9 @@ class FinalVerdict(BaseModel):
     unresolved_by_consensus: list[str] = Field(
         default_factory=list, description="finding_ids unresolved by consensus."
     )
+
+    # Per-clause synthesised verdicts (intra_comment + cross_comment)
+    clause_verdicts: list[ClauseVerdict] = Field(default_factory=list)
 
     summary: str
     recommendations: list[str]

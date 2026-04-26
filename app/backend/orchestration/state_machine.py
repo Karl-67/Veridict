@@ -34,11 +34,17 @@ from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.backend.agents.admin import AdminMergeAgent, ReviewBlockAggregator
-from app.backend.agents.reviewer import HarveyReviewerAgent, KiraReviewerAgent
+from app.backend.agents.reviewer import (
+    HarveyReviewer,
+    KiraWorker,
+    KiraPanelReviewer,
+    aggregate_kira_panel_feedback,
+)
 from app.backend.agents.validator import KiraValidatorAgent
+from app.backend.db.models import RagChunk
 from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, ParsedClauseRecord, RunRecord, StageExecutionRecord
-from app.backend.models.schemas import BranchReviewOutput, ReviewBlockResult, ValidatorOutput
+from app.backend.models.schemas import BranchReviewOutput, ReviewBlockResult
 from app.backend.services.compliance_repository import MissingComplianceScopeError, resolve_applicable_corpora
 from app.backend.services.event_stream import append_run_event
 from app.backend.services.parser import build_clause_index, parse_pdf_to_canonical_document
@@ -46,7 +52,7 @@ from app.backend.services.policy_repository import MissingLineageError, load_pri
 from app.backend.services.rag_retrieval import HarveyRagRetriever
 
 # Stages from retired topology that must never be re-enqueued or claimed.
-_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
+_LEGACY_STAGES = frozenset({"final_review_block", "kira_context_load"})
 
 
 def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> StageExecutionRecord | None:
@@ -216,44 +222,141 @@ def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
     )
 
 
-async def _run_harvey_review_block(clause_index: list[dict], context: dict, settings: Settings, round_number: int) -> ReviewBlockResult:
+def _load_rag_chunks_from_trace(session: Session, harvey_context: dict) -> list[dict]:
+    """Resolve chunk texts from the rag_trace stored by harvey_context_load."""
+    rag_trace = harvey_context.get("rag_trace", [])
+    chunk_meta: dict[str, str] = {}  # chunk_id -> source_path
+    for trace_item in rag_trace:
+        for citation in trace_item.get("citations", []):
+            chunk_id = citation.get("chunk_id")
+            if chunk_id:
+                chunk_meta[chunk_id] = citation.get("source_path", "")
+    if not chunk_meta:
+        return []
+    chunk_records = session.scalars(
+        select(RagChunk).where(RagChunk.id.in_(list(chunk_meta.keys())))
+    ).all()
+    return [
+        {
+            "chunk_id": chunk.id,
+            "text": chunk.text,
+            "source_path": chunk_meta.get(chunk.id, ""),
+        }
+        for chunk in chunk_records
+    ]
+
+
+async def _run_harvey_review_block(
+    clause_index: list[dict],
+    policy_context: dict,
+    rag_chunks: list[dict],
+    settings: Settings,
+    round_number: int,
+) -> dict:
+    """Sequential 3-stage Harvey pipeline.
+
+    Stage 1 (contradiction_finder)  — exhaustive discovery on contract + RAG.
+    Stage 2 (regression_challenger) — receives stage-1 findings, filters to material regressions.
+    Stage 3 (downstream_risk)       — receives stage-2 findings, enriches with downstream consequences.
+
+    Each stage sees the prior stage's output, not the raw contract independently.
+    """
     provider = _provider(settings)
     try:
-        reviewers = [HarveyReviewerAgent(provider, index) for index in (1, 2, 3)]
-        review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
-        review_outputs = [
-            output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
-            for output in review_outputs
-        ]
-        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-        return ReviewBlockAggregator().aggregate(
-            branch="harvey",
-            review_outputs=review_outputs,
-            reviewer_votes=votes,
-            round_number=round_number,
-            max_reruns=5,
-        )
+        r1 = HarveyReviewer(provider, 1)
+        r2 = HarveyReviewer(provider, 2)
+        r3 = HarveyReviewer(provider, 3)
+
+        # Stage 1: exhaustive contradiction discovery
+        initial_output = await r1.review(clause_index, policy_context, rag_chunks)
+        initial_findings = initial_output.findings
+
+        # Stage 2: challenge — filters stage-1 findings to genuine regressions
+        challenged_findings = await r2.challenge(initial_findings, clause_index, policy_context, rag_chunks)
+
+        # Stage 3: downstream risk enrichment of validated findings
+        final_findings = await r3.assess_risk(challenged_findings, clause_index, policy_context, rag_chunks)
+
+        return {
+            "aggregated_findings": [f.model_dump(mode="json") for f in final_findings],
+            "pipeline": {
+                "stage1_initial_count": len(initial_findings),
+                "stage2_challenged_count": len(challenged_findings),
+                "stage3_final_count": len(final_findings),
+            },
+        }
     finally:
         await provider.aclose()
 
 
-async def _run_kira_review_block(clause_index: list[dict], context: dict, settings: Settings, round_number: int) -> ReviewBlockResult:
+async def _run_admin_merge(
+    harvey_findings: list,
+    kira_findings: list,
+    settings: Settings,
+):
+    from app.backend.models.schemas import Finding
     provider = _provider(settings)
     try:
-        reviewers = [KiraReviewerAgent(provider, index) for index in (1, 2, 3)]
-        review_outputs = [await reviewer.review(clause_index, context) for reviewer in reviewers]
-        review_outputs = [
-            output.model_copy(update={"findings": [finding.model_copy(update={"round_number": round_number}) for finding in output.findings]})
-            for output in review_outputs
-        ]
-        votes = [await reviewer.vote(review_outputs) for reviewer in reviewers]
-        return ReviewBlockAggregator().aggregate(
-            branch="kira",
-            review_outputs=review_outputs,
-            reviewer_votes=votes,
-            round_number=round_number,
-            max_reruns=5,
-        )
+        harvey = [Finding.model_validate(f) if isinstance(f, dict) else f for f in harvey_findings]
+        kira = [Finding.model_validate(f) if isinstance(f, dict) else f for f in kira_findings]
+        return await AdminMergeAgent(provider).merge(harvey, kira)
+    finally:
+        await provider.aclose()
+
+
+_KIRA_MAX_ITERATIONS = 3
+
+
+async def _run_kira_review_block(
+    clause_index: list[dict],
+    compliance_context: dict,
+    settings: Settings,
+    max_iterations: int = _KIRA_MAX_ITERATIONS,
+) -> dict:
+    """Worker-panel loop for Kira.
+
+    1. Worker analyses the contract.
+    2. 3 panel reviewers each vote approve/reject with feedback.
+    3. If 2+ approve → done.
+    4. If 2+ reject → aggregate feedback → worker revises → repeat from step 2.
+    5. After max_iterations, pass whatever the worker last produced.
+    """
+    provider = _provider(settings)
+    try:
+        worker = KiraWorker(provider)
+        panel = [KiraPanelReviewer(provider, i) for i in (1, 2, 3)]
+
+        current_findings = await worker.analyze(clause_index, compliance_context)
+        iterations: list[dict] = []
+
+        for iteration in range(1, max_iterations + 1):
+            decisions = [await reviewer.review(current_findings) for reviewer in panel]
+            approval_count = sum(1 for d in decisions if d.decision == "approve")
+            approved = approval_count >= 2
+
+            iterations.append({
+                "iteration": iteration,
+                "finding_count": len(current_findings),
+                "decisions": [d.model_dump() for d in decisions],
+                "approval_count": approval_count,
+                "approved": approved,
+            })
+
+            if approved:
+                break
+
+            if iteration < max_iterations:
+                feedback = aggregate_kira_panel_feedback(decisions)
+                current_findings = await worker.revise(
+                    clause_index, compliance_context, current_findings, feedback, iteration + 1
+                )
+
+        return {
+            "final_findings": [f.model_dump(mode="json") for f in current_findings],
+            "iterations": iterations,
+            "total_iterations": len(iterations),
+            "approved": iterations[-1]["approved"] if iterations else False,
+        }
     finally:
         await provider.aclose()
 
@@ -341,41 +444,50 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             advance_stage(session, stage, resolve_applicable_corpora(run.tenant_id, run.jurisdiction, run.regime, run.effective_date))
             return
 
+        if stage.stage_name == "harvey_review_block":
+            clause_index = _load_clause_index(session, run.id)
+            harvey_context = _stage_output(session, run.id, "harvey_context_load")
+            policy_context = {
+                "lineage": harvey_context.get("lineage"),
+                "prior_versions": harvey_context.get("prior_versions", []),
+                "playbook_rules": harvey_context.get("playbook_rules", []),
+            }
+            rag_chunks = _load_rag_chunks_from_trace(session, harvey_context)
+            result = asyncio.run(
+                _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number)
+            )
+            for finding in result.aggregated_findings:
+                session.add(_to_finding_record(stage, finding))
+            advance_stage(session, stage, result.model_dump(mode="json"))
+            return
+
         if stage.stage_name == "kira_review_block":
             clause_index = _load_clause_index(session, run.id)
 
-            # Honor parser-confidence-contract: block before review if confidence < 0.3
             is_blocked, blocked_reason = _check_parser_confidence(session, run.id)
             if is_blocked:
                 mark_run_blocked(session, run, blocked_reason)
                 return
 
-            # Kira finds the problems. Harvey RAG evidence is passed in as read-only context.
-            harvey_context = _stage_output(session, run.id, "harvey_context_load")
-            kira_context = resolve_applicable_corpora(run.tenant_id, run.jurisdiction, run.regime, run.effective_date)
-            context = {**kira_context, "harvey_rag_trace": harvey_context.get("rag_trace", [])}
-            result = asyncio.run(_run_kira_review_block(clause_index, context, settings, stage.round_number))
-            if result.rerun_required:
-                session.add(
-                    StageExecutionRecord(
-                        run_id=run.id,
-                        stage_name=stage.stage_name,
-                        stage_order=stage.stage_order,
-                        round_number=stage.round_number + 1,
-                        attempt_number=1,
-                        status="pending",
-                        max_retries=5,
-                    )
-                )
-                advance_stage(session, stage, result.model_dump(mode="json"))
-                return
-            validator = KiraValidatorAgent(_provider(settings))
+            compliance_context = resolve_applicable_corpora(
+                run.tenant_id, run.jurisdiction, run.regime, run.effective_date
+            )
+            kira_result = asyncio.run(
+                _run_kira_review_block(clause_index, compliance_context, settings)
+            )
+
+            # Deserialise final findings and run the hallucination validator
+            from app.backend.models.schemas import Finding as _Finding
+            final_findings = [
+                _Finding.model_validate(f) for f in kira_result.get("final_findings", [])
+            ]
             aggregate_output = BranchReviewOutput(
                 branch="kira",
-                reviewer_index=result.accepted_reviewer_indexes[0] if result.accepted_reviewer_indexes else 1,
-                findings=result.aggregated_findings,
+                reviewer_index=1,
+                findings=final_findings,
                 raw_response_id=None,
             )
+            validator = KiraValidatorAgent(_provider(settings))
             validated = asyncio.run(
                 validator.validate(
                     [aggregate_output],
@@ -390,25 +502,23 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 session,
                 stage,
                 {
-                    "review_block": result.model_dump(mode="json"),
+                    "review_block": kira_result,
                     "validated_output": validated.model_dump(mode="json"),
                 },
             )
             return
 
         if stage.stage_name == "admin_merge":
-            kira_output = _stage_output(session, run.id, "kira_review_block").get("validated_output", {})
-            harvey_output = {
-                "schema_version": 2,
-                "branch": "harvey",
-                "validated_findings": [],
-                "hallucinated_clause_uids": [],
-                "notes": "Harvey supplied RAG evidence only; Kira is the problem-finding branch.",
-            }
-            merged = AdminMergeAgent().merge(
-                ValidatorOutput.model_validate(harvey_output),
-                ValidatorOutput.model_validate(kira_output),
-            )
+            # Harvey aggregated findings (cross_contract, no validator)
+            harvey_block = _stage_output(session, run.id, "harvey_review_block")
+            harvey_findings_raw = harvey_block.get("aggregated_findings", [])
+
+            # Kira validated findings (intra_contract)
+            kira_block = _stage_output(session, run.id, "kira_review_block")
+            kira_validated = kira_block.get("validated_output", {})
+            kira_findings_raw = kira_validated.get("validated_findings", [])
+
+            merged = asyncio.run(_run_admin_merge(harvey_findings_raw, kira_findings_raw, settings))
             for finding in merged.merged_findings:
                 session.add(_to_finding_record(stage, finding))
             advance_stage(session, stage, merged.model_dump(mode="json"))
