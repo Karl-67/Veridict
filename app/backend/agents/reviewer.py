@@ -3,11 +3,6 @@ Verdict reviewer agents.
 
 Reviewers own prompt construction and typed result assembly.
 Providers own transport and structured-output enforcement.
-
-Active architecture:
-  Harvey retrieves RAG evidence; Kira finds contract problems; Admin merges the
-  consensus output. Harvey reviewer classes are retained for legacy runs and
-  offline experiments only.
 """
 
 from __future__ import annotations
@@ -20,6 +15,7 @@ from app.backend.providers.base import StructuredLLMProvider
 
 # ---------------------------------------------------------------------------
 # Enum coercion — small models often return plausible-but-wrong values.
+# We map the most common deviations to a valid literal before Pydantic sees it.
 # ---------------------------------------------------------------------------
 
 _VALID_ISSUE_TYPES = {
@@ -27,23 +23,27 @@ _VALID_ISSUE_TYPES = {
     "exploitability", "weakened_protection", "compliance_failure",
 }
 _ISSUE_TYPE_MAP: dict[str, str] = {
+    # indemnification / liability variants
     "indemnification": "liability_exposure",
     "indemnity": "liability_exposure",
     "liability": "liability_exposure",
     "limitation_of_liability": "liability_exposure",
     "unlimited_liability": "liability_exposure",
+    # vague / undefined clause variants
     "termination": "open_clause",
     "payment": "open_clause",
     "force_majeure": "open_clause",
     "notice": "open_clause",
     "undefined_term": "open_clause",
     "missing_term": "open_clause",
+    # protection / IP / confidentiality variants
     "warranty": "weakened_protection",
     "intellectual_property": "weakened_protection",
     "ip": "weakened_protection",
     "confidentiality": "weakened_protection",
     "data_protection": "weakened_protection",
     "non_compete": "weakened_protection",
+    # compliance variants
     "regulatory": "compliance_failure",
     "gdpr": "compliance_failure",
     "anti_bribery": "compliance_failure",
@@ -52,8 +52,6 @@ _ISSUE_TYPE_MAP: dict[str, str] = {
 _VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 _VALID_RECOMMENDATIONS = {"negotiate", "reject", "accept_with_note", "seek_legal_advice"}
 
-DEFAULT_REVIEWER_TEMPERATURE = 0.2
-
 
 def _coerce_issue_type(value: str) -> str:
     v = value.lower().strip().replace(" ", "_").replace("-", "_")
@@ -61,6 +59,7 @@ def _coerce_issue_type(value: str) -> str:
         return v
     if v in _ISSUE_TYPE_MAP:
         return _ISSUE_TYPE_MAP[v]
+    # Keyword-based fallback
     if any(k in v for k in ("liab", "indemn", "penalty", "damages")):
         return "liability_exposure"
     if any(k in v for k in ("comply", "regulat", "gdpr", "law", "statute")):
@@ -71,7 +70,7 @@ def _coerce_issue_type(value: str) -> str:
         return "exploitability"
     if any(k in v for k in ("protect", "weak", "ip", "warrant", "confid")):
         return "weakened_protection"
-    return "open_clause"
+    return "open_clause"  # safest generic fallback
 
 
 def _coerce_level(value: str, valid: set[str], default: str) -> str:
@@ -93,15 +92,19 @@ def _coerce_recommendation(value: str) -> str:
 
 
 def _normalize_vote_raw(raw: dict, reviewer_index: int) -> dict:
+    """Coerce model vote output to valid ranges before Pydantic sees it."""
+    # correctness_score: model may use 0-10 or 0-100 scale instead of 0-1
     score = raw.get("correctness_score", 0.0)
     try:
         score = float(score)
     except (TypeError, ValueError):
         score = 0.5
     if score > 1.0:
+        # Detect scale: >10 → assume 0-100, else assume 0-10
         score = score / 100.0 if score > 10 else score / 10.0
     score = max(0.0, min(1.0, score))
 
+    # supported_reviewer_indexes: filter to valid 1-3
     raw_supported = raw.get("supported_reviewer_indexes", [])
     if not isinstance(raw_supported, list):
         raw_supported = []
@@ -110,6 +113,7 @@ def _normalize_vote_raw(raw: dict, reviewer_index: int) -> dict:
         if isinstance(i, (int, float)) and 1 <= int(i) <= 3
     ]
 
+    # accepted_finding_keys: must be a list of strings
     raw_keys = raw.get("accepted_finding_keys", [])
     if not isinstance(raw_keys, list):
         raw_keys = []
@@ -125,23 +129,14 @@ def _normalize_vote_raw(raw: dict, reviewer_index: int) -> dict:
 
 
 def _normalize_finding_item(item: dict) -> dict:
+    """Coerce model output fields to valid enum values before Pydantic validation."""
     item = dict(item)
     item["issue_type"] = _coerce_issue_type(item.get("issue_type", ""))
     item["severity"] = _coerce_level(item.get("severity", ""), _VALID_SEVERITIES, "medium")
     item["exploitability"] = _coerce_level(item.get("exploitability", ""), _VALID_SEVERITIES, "medium")
     item["business_impact"] = _coerce_level(item.get("business_impact", ""), _VALID_SEVERITIES, "medium")
     item["recommendation"] = _coerce_recommendation(item.get("recommendation", ""))
-    if not isinstance(item.get("contract_evidence"), list):
-        item["contract_evidence"] = []
-    if not isinstance(item.get("rag_citations"), list):
-        item["rag_citations"] = []
-    item["uncertainty"] = bool(item.get("uncertainty", False))
-    if "rationale" not in item or not isinstance(item.get("rationale"), str):
-        item["rationale"] = ""
-    if "unresolved_by_consensus" not in item:
-        item["unresolved_by_consensus"] = False
     return item
-
 
 ReviewerRole = Literal["issue_discovery", "false_positive_challenge", "exploitability_impact"]
 
@@ -151,11 +146,7 @@ _ROLE_BY_INDEX: dict[int, ReviewerRole] = {
     3: "exploitability_impact",
 }
 
-# ---------------------------------------------------------------------------
-# JSON schemas for structured LLM output
-# ---------------------------------------------------------------------------
-
-_FINDING_ITEM_SCHEMA_BASE: dict = {
+_FINDING_ITEM_SCHEMA: dict = {
     "type": "object",
     "required": [
         "clause_uid",
@@ -166,10 +157,6 @@ _FINDING_ITEM_SCHEMA_BASE: dict = {
         "description",
         "recommendation",
         "recommendation_detail",
-        "contract_evidence",
-        "rationale",
-        "uncertainty",
-        "unresolved_by_consensus",
     ],
     "properties": {
         "clause_uid": {"type": "string"},
@@ -193,55 +180,14 @@ _FINDING_ITEM_SCHEMA_BASE: dict = {
             "enum": ["negotiate", "reject", "accept_with_note", "seek_legal_advice"],
         },
         "recommendation_detail": {"type": "string"},
-        "contract_evidence": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "clause_uid values that directly support this finding.",
-        },
-        "rationale": {
-            "type": "string",
-            "description": "Single-sentence explanation for the finding, no chain-of-thought.",
-        },
-        "uncertainty": {
-            "type": "boolean",
-            "description": "Set true when model confidence for this finding is below 0.7.",
-        },
-        "unresolved_by_consensus": {
-            "type": "boolean",
-            "description": "True when the finding could not be resolved by reviewer consensus.",
-        },
     },
 }
 
-# Harvey schema adds rag_citations (required, ≥1 for contradiction findings)
-_HARVEY_FINDING_ITEM_SCHEMA: dict = {
-    **_FINDING_ITEM_SCHEMA_BASE,
-    "required": [*_FINDING_ITEM_SCHEMA_BASE["required"], "rag_citations"],
-    "properties": {
-        **_FINDING_ITEM_SCHEMA_BASE["properties"],
-        "rag_citations": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "RAG chunk_ids from the policy/compliance corpus that contradict or confirm this clause.",
-        },
-    },
-}
-
-HARVEY_REVIEWER_OUTPUT_SCHEMA: dict = {
+REVIEWER_OUTPUT_SCHEMA: dict = {
     "type": "object",
     "required": ["findings"],
-    "properties": {"findings": {"type": "array", "items": _HARVEY_FINDING_ITEM_SCHEMA}},
+    "properties": {"findings": {"type": "array", "items": _FINDING_ITEM_SCHEMA}},
 }
-
-# Kira schema omits rag_citations entirely (service layer blocks access)
-KIRA_REVIEWER_OUTPUT_SCHEMA: dict = {
-    "type": "object",
-    "required": ["findings"],
-    "properties": {"findings": {"type": "array", "items": _FINDING_ITEM_SCHEMA_BASE}},
-}
-
-# Keep for backward compat with vote calls
-REVIEWER_OUTPUT_SCHEMA = HARVEY_REVIEWER_OUTPUT_SCHEMA
 
 REVIEWER_VOTE_SCHEMA: dict = {
     "type": "object",
@@ -260,103 +206,25 @@ REVIEWER_VOTE_SCHEMA: dict = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# System role prompts — role instructions passed as system context
-# ---------------------------------------------------------------------------
-
-_HARVEY_ISSUE_DISCOVERY_SYSTEM = """\
-[SYSTEM ROLE: Harvey Issue Discovery]
+_ISSUE_DISCOVERY_SYSTEM = """\
 You are a meticulous legal contract reviewer performing an exhaustive issue-discovery pass.
 Surface every plausible issue tied to the supplied clause_uid values.
-Flag liability exposure, open clauses, ambiguity, exploitability, weakened protections, and compliance failures.
+Flag liability exposure, open clauses, ambiguity, exploitability, weakened protections, and compliance failures."""
 
-CRITICAL RULES:
-- You MUST cite at least one rag_citation (chunk_id from the policy corpus) for every \
-contradiction finding. Findings that contradict policy without a rag_citation will be discarded.
-- You MUST cite at least one contract_evidence (clause_uid) per finding.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true for any finding where your confidence is below 0.7.
-- Do not fabricate chunk_ids. Only cite chunk_ids that were present in the RAG context."""
-
-_HARVEY_FALSE_POSITIVE_CHALLENGE_SYSTEM = """\
-[SYSTEM ROLE: Harvey False-Positive Challenge]
+_FALSE_POSITIVE_CHALLENGE_SYSTEM = """\
 You are a rigorous legal contract reviewer performing a false-positive challenge pass.
 Keep only material issues that a senior transactional attorney would care about.
-Discard immaterial boilerplate concerns and weak findings.
+Discard immaterial boilerplate concerns and weak findings."""
 
-CRITICAL RULES:
-- For every finding you retain, cite at least one rag_citation (chunk_id) from the policy \
-corpus that confirms this is a real issue, and at least one contract_evidence (clause_uid).
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when your confidence for a finding is below 0.7.
-- Do not fabricate chunk_ids. Only cite chunk_ids that were present in the RAG context."""
-
-_HARVEY_EXPLOITABILITY_IMPACT_SYSTEM = """\
-[SYSTEM ROLE: Harvey Exploitability & Business Impact]
+_EXPLOITABILITY_IMPACT_SYSTEM = """\
 You are a legal contract reviewer specializing in exploitability and business impact.
-Focus on clauses a sophisticated counterparty could weaponize. Quantify the practical downside.
+Focus on clauses a sophisticated counterparty could weaponize and quantify the practical downside."""
 
-CRITICAL RULES:
-- For each finding, cite at least one rag_citation (chunk_id) showing the policy/regulation \
-violated or enabling the exploit, and at least one contract_evidence (clause_uid).
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when your confidence is below 0.7.
-- Do not fabricate chunk_ids. Only cite chunk_ids that were present in the RAG context."""
-
-_KIRA_ISSUE_DISCOVERY_SYSTEM = """\
-[SYSTEM ROLE: Kira Issue Discovery]
-You are a meticulous legal contract reviewer performing an exhaustive issue-discovery pass \
-focused on internal contract integrity: holes, ambiguities, and missing protections.
-Surface every plausible issue tied to the supplied clause_uid values.
-
-CRITICAL RULES:
-- You MUST cite at least one contract_evidence (clause_uid) per finding.
-- You are STRICTLY FORBIDDEN from citing or referencing RAG chunk_ids or any external corpus. \
-Your analysis is based solely on the contract text provided.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true for any finding where your confidence is below 0.7."""
-
-_KIRA_FALSE_POSITIVE_CHALLENGE_SYSTEM = """\
-[SYSTEM ROLE: Kira False-Positive Challenge]
-You are a rigorous legal contract reviewer performing a false-positive challenge pass \
-focused on internal contract integrity.
-Keep only material issues: internal inconsistencies, missing protections, and genuine ambiguities \
-that a senior attorney would flag.
-
-CRITICAL RULES:
-- For every finding you retain, cite at least one contract_evidence (clause_uid).
-- You are STRICTLY FORBIDDEN from citing or referencing RAG chunk_ids or any external corpus.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when your confidence for a finding is below 0.7."""
-
-_KIRA_EXPLOITABILITY_IMPACT_SYSTEM = """\
-[SYSTEM ROLE: Kira Exploitability & Business Impact — Contract-Only]
-You are a legal contract reviewer specializing in exploitability and business impact, \
-working exclusively from the contract text.
-Focus on internal clause weaknesses, missing protections, and ambiguous language a \
-sophisticated counterparty could exploit from within the four corners of the document.
-
-CRITICAL RULES:
-- Cite at least one contract_evidence (clause_uid) per finding.
-- You are STRICTLY FORBIDDEN from citing or referencing RAG chunk_ids or any external corpus.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when your confidence is below 0.7."""
-
-_HARVEY_SYSTEM_BY_ROLE: dict[ReviewerRole, str] = {
-    "issue_discovery": _HARVEY_ISSUE_DISCOVERY_SYSTEM,
-    "false_positive_challenge": _HARVEY_FALSE_POSITIVE_CHALLENGE_SYSTEM,
-    "exploitability_impact": _HARVEY_EXPLOITABILITY_IMPACT_SYSTEM,
+_SYSTEM_BY_ROLE: dict[ReviewerRole, str] = {
+    "issue_discovery": _ISSUE_DISCOVERY_SYSTEM,
+    "false_positive_challenge": _FALSE_POSITIVE_CHALLENGE_SYSTEM,
+    "exploitability_impact": _EXPLOITABILITY_IMPACT_SYSTEM,
 }
-
-_KIRA_SYSTEM_BY_ROLE: dict[ReviewerRole, str] = {
-    "issue_discovery": _KIRA_ISSUE_DISCOVERY_SYSTEM,
-    "false_positive_challenge": _KIRA_FALSE_POSITIVE_CHALLENGE_SYSTEM,
-    "exploitability_impact": _KIRA_EXPLOITABILITY_IMPACT_SYSTEM,
-}
-
-# ---------------------------------------------------------------------------
-# Prompt formatters
-# ---------------------------------------------------------------------------
 
 
 def _format_clauses(clause_index: list[dict]) -> str:
@@ -371,8 +239,7 @@ def _format_policy_context(context: dict) -> str:
     lineage = context.get("lineage")
     if lineage:
         parts.append(
-            f"Lineage tenant={lineage.get('tenant_id')} family={lineage.get('policy_family_id')} "
-            f"version={lineage.get('version_number')}"
+            f"Lineage tenant={lineage.get('tenant_id')} family={lineage.get('policy_family_id')} version={lineage.get('version_number')}"
         )
     for prior in context.get("prior_versions", []):
         parts.append(f"Prior version {prior.get('version_number')}: {prior.get('change_summary') or 'n/a'}")
@@ -381,19 +248,6 @@ def _format_policy_context(context: dict) -> str:
         parts.append("Playbook rules:")
         parts.extend(f"- {rule}" for rule in rules[:50])
     return "\n".join(parts) or "(no policy context)"
-
-
-def _format_rag_context(rag_chunks: list[dict]) -> str:
-    """Format RAG retrieval results for Harvey prompts."""
-    if not rag_chunks:
-        return "(no RAG context retrieved)"
-    parts: list[str] = []
-    for chunk in rag_chunks:
-        chunk_id = chunk.get("chunk_id", "unknown")
-        text = chunk.get("text", "")
-        source = chunk.get("source_path", "")
-        parts.append(f"[chunk_id={chunk_id}] source={source}\n{text}")
-    return "\n\n".join(parts)
 
 
 def _format_compliance_context(context: dict) -> str:
@@ -436,11 +290,6 @@ def _format_branch_review_output(output: BranchReviewOutput) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Assembly helpers
-# ---------------------------------------------------------------------------
-
-
 def _assemble_branch_output(
     raw: dict,
     *,
@@ -449,8 +298,6 @@ def _assemble_branch_output(
     agent_role: str,
     clause_index: list[dict],
     round_number: int,
-    require_rag_citations: bool = False,
-    require_contract_evidence: bool = True,
 ) -> BranchReviewOutput:
     clauses_by_uid = {clause["clause_uid"]: clause for clause in clause_index}
     findings: list[Finding] = []
@@ -461,16 +308,6 @@ def _assemble_branch_output(
         clause = clauses_by_uid.get(clause_uid)
         if not clause:
             continue
-
-        contract_evidence: list[str] = item.get("contract_evidence", [])
-        rag_citations: list[str] = item.get("rag_citations", [])
-
-        # Enforce evidence-schema invariants
-        if require_contract_evidence and not contract_evidence:
-            continue
-        if require_rag_citations and not rag_citations:
-            continue
-
         findings.append(
             Finding(
                 finding_id=str(uuid.uuid4()),
@@ -496,7 +333,6 @@ def _assemble_branch_output(
                 branch=branch,  # type: ignore[arg-type]
                 agent_role=agent_role,
                 round_number=round_number,
-                unresolved_by_consensus=item.get("unresolved_by_consensus", False),
             )
         )
 
@@ -508,46 +344,28 @@ def _assemble_branch_output(
     )
 
 
-# ---------------------------------------------------------------------------
-# Harvey reviewers — query pgvector RAG; require rag_citations
-# ---------------------------------------------------------------------------
-
-
-class HarveyReviewer:
-    """Harvey branch reviewer with RAG citation enforcement."""
-
-    temperature: float = DEFAULT_REVIEWER_TEMPERATURE
-
+class HarveyReviewerAgent:
     def __init__(self, provider: StructuredLLMProvider, reviewer_index: int) -> None:
         if reviewer_index not in (1, 2, 3):
             raise ValueError("reviewer_index must be 1, 2, or 3")
         self._provider = provider
         self._reviewer_index = reviewer_index
-        self._role: ReviewerRole = _ROLE_BY_INDEX[reviewer_index]
+        self._role = _ROLE_BY_INDEX[reviewer_index]
 
     @property
     def agent_role(self) -> str:
         return f"harvey_reviewer_{self._reviewer_index}"
 
-    async def review(
-        self,
-        clause_index: list[dict],
-        policy_context: dict,
-        rag_chunks: list[dict] | None = None,
-    ) -> BranchReviewOutput:
-        system_block = _HARVEY_SYSTEM_BY_ROLE[self._role]
-        rag_block = _format_rag_context(rag_chunks or [])
+    async def review(self, clause_index: list[dict], policy_context: dict) -> BranchReviewOutput:
         prompt = (
-            f"{system_block}\n\n"
+            f"{_SYSTEM_BY_ROLE[self._role]}\n\n"
             "## Policy Context\n"
             f"{_format_policy_context(policy_context)}\n\n"
-            "## RAG Context (cite chunk_ids from this section in rag_citations)\n"
-            f"{rag_block}\n\n"
             "## Contract Clauses\n"
             f"{_format_clauses(clause_index)}\n\n"
-            "Return ONLY a JSON object matching the schema. No explanation, no chain-of-thought."
+            "Return only a JSON object matching the schema."
         )
-        raw = await self._provider.generate_structured_output(prompt, HARVEY_REVIEWER_OUTPUT_SCHEMA)
+        raw = await self._provider.generate_structured_output(prompt, REVIEWER_OUTPUT_SCHEMA)
         return _assemble_branch_output(
             raw,
             branch="harvey",
@@ -555,59 +373,41 @@ class HarveyReviewer:
             agent_role=self.agent_role,
             clause_index=clause_index,
             round_number=1,
-            require_rag_citations=True,
-            require_contract_evidence=True,
         )
 
     async def vote(self, review_outputs: list[BranchReviewOutput]) -> ReviewerVote:
         prompt = (
-            f"You are Harvey reviewer {self._reviewer_index}. "
-            "Review the other reviewers' outputs below and state who you agree with.\n\n"
+            "You are reviewer "
+            f"{self._reviewer_index}. Review the other reviewers' outputs and state who you agree with.\n\n"
             + "\n\n".join(_format_branch_review_output(output) for output in review_outputs)
-            + "\n\nReturn JSON only. accepted_finding_keys must use the exact format "
-            "clause_uid|issue_type|severity."
+            + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
         )
         raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
         return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))
 
 
-# ---------------------------------------------------------------------------
-# Kira reviewers — contract-only analysis; rag_citations explicitly forbidden
-# ---------------------------------------------------------------------------
-
-
-class KiraReviewer:
-    """Kira branch reviewer; contract-only, no RAG access per harvey-rag-only contract."""
-
-    temperature: float = DEFAULT_REVIEWER_TEMPERATURE
-
+class KiraReviewerAgent:
     def __init__(self, provider: StructuredLLMProvider, reviewer_index: int) -> None:
         if reviewer_index not in (1, 2, 3):
             raise ValueError("reviewer_index must be 1, 2, or 3")
         self._provider = provider
         self._reviewer_index = reviewer_index
-        self._role: ReviewerRole = _ROLE_BY_INDEX[reviewer_index]
+        self._role = _ROLE_BY_INDEX[reviewer_index]
 
     @property
     def agent_role(self) -> str:
         return f"kira_reviewer_{self._reviewer_index}"
 
-    async def review(
-        self,
-        clause_index: list[dict],
-        compliance_context: dict,
-    ) -> BranchReviewOutput:
-        system_block = _KIRA_SYSTEM_BY_ROLE[self._role]
+    async def review(self, clause_index: list[dict], compliance_context: dict) -> BranchReviewOutput:
         prompt = (
-            f"{system_block}\n\n"
+            f"{_SYSTEM_BY_ROLE[self._role]}\n\n"
             "## Compliance Context\n"
             f"{_format_compliance_context(compliance_context)}\n\n"
             "## Contract Clauses\n"
             f"{_format_clauses(clause_index)}\n\n"
-            "Return ONLY a JSON object matching the schema. No explanation, no chain-of-thought. "
-            "Do NOT include rag_citations in your response."
+            "Return only a JSON object matching the schema."
         )
-        raw = await self._provider.generate_structured_output(prompt, KIRA_REVIEWER_OUTPUT_SCHEMA)
+        raw = await self._provider.generate_structured_output(prompt, REVIEWER_OUTPUT_SCHEMA)
         return _assemble_branch_output(
             raw,
             branch="kira",
@@ -615,25 +415,65 @@ class KiraReviewer:
             agent_role=self.agent_role,
             clause_index=clause_index,
             round_number=1,
-            require_rag_citations=False,
-            require_contract_evidence=True,
         )
 
     async def vote(self, review_outputs: list[BranchReviewOutput]) -> ReviewerVote:
         prompt = (
-            f"You are Kira reviewer {self._reviewer_index}. "
-            "Review the other reviewers' outputs below and state who you agree with.\n\n"
+            "You are reviewer "
+            f"{self._reviewer_index}. Review the other reviewers' outputs and state who you agree with.\n\n"
             + "\n\n".join(_format_branch_review_output(output) for output in review_outputs)
-            + "\n\nReturn JSON only. accepted_finding_keys must use the exact format "
-            "clause_uid|issue_type|severity."
+            + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
         )
         raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
         return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat aliases — callers referencing the old names still work
-# ---------------------------------------------------------------------------
+class FinalReviewerAgent:
+    def __init__(self, provider: StructuredLLMProvider, reviewer_index: int) -> None:
+        if reviewer_index not in (1, 2, 3):
+            raise ValueError("reviewer_index must be 1, 2, or 3")
+        self._provider = provider
+        self._reviewer_index = reviewer_index
+        self._role = _ROLE_BY_INDEX[reviewer_index]
 
-HarveyReviewerAgent = HarveyReviewer
-KiraReviewerAgent = KiraReviewer
+    @property
+    def agent_role(self) -> str:
+        return f"final_reviewer_{self._reviewer_index}"
+
+    async def review(
+        self,
+        clause_index: list[dict],
+        merged_findings: list[dict],
+        *,
+        round_number: int = 1,
+        delta_instructions: str | None = None,
+    ) -> BranchReviewOutput:
+        delta_block = f"\n\n## Delta Instructions\n{delta_instructions}" if delta_instructions else ""
+        prompt = (
+            f"{_SYSTEM_BY_ROLE[self._role]}\n\n"
+            "## Merged Findings\n"
+            f"{_format_findings(merged_findings)}\n\n"
+            "## Contract Clauses\n"
+            f"{_format_clauses(clause_index)}"
+            f"{delta_block}\n\n"
+            "Return only a JSON object matching the schema."
+        )
+        raw = await self._provider.generate_structured_output(prompt, REVIEWER_OUTPUT_SCHEMA)
+        return _assemble_branch_output(
+            raw,
+            branch="harvey",
+            reviewer_index=self._reviewer_index,
+            agent_role=self.agent_role,
+            clause_index=clause_index,
+            round_number=round_number,
+        )
+
+    async def vote(self, review_outputs: list[BranchReviewOutput]) -> ReviewerVote:
+        prompt = (
+            "You are reviewer "
+            f"{self._reviewer_index}. Review the other reviewers' outputs and state who you agree with.\n\n"
+            + "\n\n".join(_format_branch_review_output(output) for output in review_outputs)
+            + "\n\nReturn JSON only. accepted_finding_keys must use the exact format clause_uid|issue_type|severity."
+        )
+        raw = await self._provider.generate_structured_output(prompt, REVIEWER_VOTE_SCHEMA)
+        return ReviewerVote(**_normalize_vote_raw(raw, self._reviewer_index))

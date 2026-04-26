@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Trash2, UserPlus, Copy, Check, Shield, Users, Briefcase, Loader2, ChevronRight, Unlock, FileText } from "lucide-react";
+import { Plus, Trash2, UserPlus, Copy, Check, Shield, Users, Briefcase, Loader2, ChevronRight, Unlock } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
-import RagDocumentPanel from "./RagDocumentPanel";
 
 const API_BASE = "http://localhost:8000/api";
 
@@ -66,7 +65,7 @@ function RoleBadge({ role }: { role: string }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-type Tab = "users" | "workspaces" | "invites" | "rag";
+type Tab = "users" | "workspaces" | "invites";
 
 export default function AdminPage({ onBack }: { onBack: () => void }) {
   const { user } = useAuth();
@@ -195,7 +194,6 @@ export default function AdminPage({ onBack }: { onBack: () => void }) {
     { id: "users", label: "Users", icon: Users },
     { id: "workspaces", label: "Workspaces", icon: Briefcase },
     { id: "invites", label: "Pending Invites", icon: UserPlus },
-    { id: "rag", label: "RAG", icon: FileText },
   ];
 
   return (
@@ -455,8 +453,6 @@ export default function AdminPage({ onBack }: { onBack: () => void }) {
               )}
             </div>
           )}
-
-          {tab === "rag" && <RagDocumentPanel />}
         </>
       )}
     </motion.div>

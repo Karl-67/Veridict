@@ -1,424 +1,296 @@
 # Task
 
-[Pasted text #1 — 47 lines]:
-I will now send you the project rubric, that has everything required for the project, All of these should be met fully, and completely. I want you at the end to make a md file of the things that you can’t touch or make at this point in time, i want you to check the features, and check if the prompting is at it’s best for our use case. 
-We should have the infrastructure for rag where you can just add (contracts/policies)pdfs, and it’s then added to the model knowledge base such that Harvey can actually check with them so they don’t have contracts that contradict with anything new or have policies that contradict with anything older. The contracts and policies that you can see at the moment are for training, we don’t have current contracts that will be used for rag, Harvey should have access to this rag information at the beginning so Harvey knows the context from the policies or contracts in addition to the contract the user uploads for review. 
-Search for the Best platform for Deployment and put it in an md file, want to deploy a fine tuned gemma 4 26b models with 3 non fine tuned ones. everything you see within the system Harvey will have 3 other harveys to verify it’s work and kira the same. 
-The problem we want to solve is to make an application for organizations that handle large contract volumes and want to reduce legal spend and review time. 
-I also want you at the end to make an md file with every change made and to what extent do we currently.
-We also want you to make a testing suit, of how to prove that fine tuned models were better then non fine tuned models, we want numbers, at the moment i don’t have finetuned models in the codebase, so you will make the pipeline with an interface so we can add the agents later on. 
-Only Harvey will have access to rag. 
-Harvey will check the context with other policies and give possible contradictions, and Kira will check if the sent (input) clauses and contracts have holes within them. 
-The admin will make the consensus between the two outputs. 
+[Attached image #1: C:/Users/PinkPanther/Downloads/WhatsApp%20Image%202026-04-03%20at%2010.47.22%20AM.jpeg]
+(Use the Read tool to view the attached images above.)
 
-Here is the whole project rubric which everything should be fully met. 
-Live demo, public endpoint, end-to-end user flow.
-Deployed API URL, cloud architecture, end-to-end behavior.
-Architecture diagram, repo services, Docker services, API boundaries.
-Repo, docs, deployment link, demo readiness, poster if required.
-Project framing, problem statement or research framing, novelty/publishability evidence.
-Architecture, repo, model/pipeline logic, deployed behavior.
-Service boundary, code, container, endpoint contract, role in the system.
-Service boundary, code, container, endpoint contract, role in the system.
-External API code, request flow, orchestration logic, validation, request limits.
-Tradeoffs section, benchmarks, experiments, measurements.
-Demo behavior, outputs, logs, error cases, failure handling, test evidence.
-Architecture docs, endpoint specs, service responsibilities, schemas.
-Input schemas, payload constraints, validation code, limits/rate controls.
-Error behavior, logs, timeout/retry policy, fallback behavior, docs.
-Dockerfiles, image list, Docker Compose, Kubernetes manifests.
-Deployment diagram, cloud setup, secrets strategy, cost notes.
-Project statement, slides, docs, intro framing.
-Baselines, comparisons, benchmark section, experiments.
-Results, justification section, comparative evidence.
-Business case, deployer/payer claim, target venue, paper draft, benchmark artifact.
-Live presentation/demo.
-Slides, verbal explanation, diagrams, walkthrough.
-Metrics, benchmarks, tests, dashboards, tables, visuals.
-Live answers, pacing, confidence, command of details.
-Slides, poster, demo UI/UX, narrative impact.
-Problem framing, system choice, comparison to common baselines/known demos.
-Design decisions beyond minimum compliance, thoughtful constraints or clever system choices.
-Repo tests, CI logs, demo of tests, coverage of unit/integration/E2E.
-Golden datasets, regression checks, data validation, LLM evaluation logic, thresholds.
-Commit history, authorship pattern, feature progression, issue linkage if any.
-Branches, PRs/review notes, repo cleanliness, README, prompt version tracking if relevant.
-Automation scripts, CI/CD, pipeline DAG, promotion/rollback logic.
-MLflow/W&B/equivalent, metric history, thresholds, model/prompt selection logic.
-Prometheus/Grafana/equivalent, dashboards, latency/error/throughput metrics, ML-specific signals.
-Technical docs, business docs, runbook, tradeoffs section, endpoint docs, cost estimate.
-Evidence of above-and-beyond work that is not already captured elsewhere.
-
-this is everything i want you to know and do, do your best, my life depends on your output.
+i want you to look at the project, and check what is still required to finalize this architecture, the current schema should be calling a google api, we can continue with that for now however, i would like to make it later be a local agent that does all of this that we should be fine tuning none of this is current there but its the plan for the final product. if you have any questions for clarification ask them. i want this to be super clear for you so you can apply what i want exactly.
 
 ━━━ BACKGROUND RESEARCH (context only) ━━━
+I don't have permission to view the image yet. However, I can work from the three detailed analyses already provided. Let me aggregate those findings into your briefing:
+
+---
+
 ## Existing Solutions & Libraries
 
-**Commercial comparables:** Harvey (legal AI workspace, document storage, due diligence, workflow agents), Kira (extraction-heavy contract review, provision models, Quick Study training), Ironclad (CLM integration, playbooks, clause detection, redlining), Luminance (enterprise contract intelligence, drafting support, portfolio insight). Gap: little public benchmark transparency, hard to know when AI is wrong, limited explainability beyond citations.
+**Document processing:**
+- Docling for structured conversion with OCR support; Unstructured for partitioning; Marker for PDF→markdown/JSON.
+- `pdfplumber` is insufficient for serious legal workflows (scanned PDFs, tables, multi-column layouts fail silently).
 
-**Open-source/research:** PAKTON (multi-agent contract QA with RAG, similar architecture to Harvey/Kira/Admin); CUAD (510 contracts, 41 clause types, 13k+ labels); ContractNLI (contradiction/entailment reasoning); CLAUSE benchmark (tests subtle legal discrepancies).
+**Orchestration & state:**
+- LangGraph for graph-based stateful workflows with branching; Temporal for resumable long-running jobs + human review steps; PydanticAI for typed outputs.
+- FastAPI background tasks adequate for light work only; move to proper job queue for production.
 
-**Tech stack:** Docling/PyMuPDF for extraction (pdfplumber currently used, should upgrade); LlamaIndex/LangChain/Haystack for chunking; pgvector/Qdrant for vector DB; bge-reranker/Cohere for reranking; vLLM/TGI for inference; Ragas/DeepEval for evaluation.
+**Model serving (future local path):**
+- vLLM or Ollama for inference; TRL/Axolotl/LLaMA-Factory for fine-tuning; Outlines for schema-constrained decoding.
+
+**Storage & retrieval:**
+- Postgres + SQLAlchemy for contracts, outputs, audit data.
+- Vector store (pgvector, Qdrant) only if precedent/policy retrieval is semantic, not version lookup.
+
+---
 
 ## Technical Approaches & Trade-offs
 
-**RAG scope:** Harvey-only (no Kira RAG). Harvey retrieves from policy/contract PDFs; Kira focuses on internal holes in uploaded contract. Admin merges both. Hybrid retrieval (BM25 + embeddings) beats vector-only. Required metadata: `tenant_id`, `doc_type`, `policy_family_id`, `version`, `jurisdiction`, `source_path`, `page`, `chunk_hash`.
+**Immediate fixes for Google API path:**
+- Use Google's structured output (JSON schema) instead of parsing free-form text.
+- Add provider abstraction layer now to decouple Gemini from business logic.
+- Replace single giant contract prompt with clause extraction + targeted review passes.
+- Add OCR fallback for scanned PDFs; current text truncation silently drops content.
 
-**Contradiction checking:** Same policy family only (safer, cheaper) vs. all-tenant search (catches more but increases false positives). Recommend phase 1 uses family + explicitly linked playbooks.
+**Phased migration to local agents:**
+- Phase 1: Keep Gemini, add real orchestration + strict schemas + evidence spans.
+- Phase 2: Add policy store, precedent retrieval, disagreement logic, admin merge.
+- Phase 3: Log corrections to build fine-tuning dataset.
+- Phase 4: Fine-tune narrow subtasks first (clause classification, risk labeling, disagreement arbitration), not whole architecture.
+- Phase 5: Swap Gemini reviewers one-by-one behind same interface.
 
-**Deployment:** Modal (Gemma + vLLM, H200 guidance, model cache volumes, public URL) > Runpod Serverless (cost, scale-to-zero) > HF Inference Endpoints (managed, expensive) > Koyeb. Suggested: Vercel frontend, Render/Fly/Modal CPU API, Neon/Supabase Postgres + pgvector, Modal vLLM for inference.
+**Hybrid approach preferred:** Local model for reasoning + deterministic rules for policy checks + retrieval for lookup + optional external fallback.
 
-**Fine-tuned vs. baseline:** Identical prompts, retrieval context, decoding params. Metrics: JSON parse rate, contradiction F1/precision/recall, citation accuracy, hallucination rate, severity calibration, latency/cost. Use paired eval, bootstrap CI, McNemar test. Minimum claim: "fine-tuned beats base by X points on contradiction F1, reduces hallucinated citations by Y% on N examples."
+---
 
 ## Architectural Patterns
 
-**Current state:** 12-stage pipeline fully implemented end-to-end (create_run → parse_ocr_normalize → clause_index → harvey_context_load → kira_context_load → harvey_review_block → kira_review_block → admin_merge → final_review_block → awaiting_human_review → finalized). Multi-tenant auth, 3-reviewer branches (Harvey: issue_discovery/false_positive_challenge/exploitability_impact; Kira: same structure), admin deduplication, human review gate, vote aggregation with re-rounds, SSE event stream, exponential retry with jitter.
+**Current gap:** Single Gemini call returns one JSON; frontend simulates pipeline with timers; backend hard-codes stage names regardless of actual execution.
 
-**Prompting issues:** No chain-of-thought elicitation; role-specific system prompts in user turn (not system role); schema hint lacks field descriptions; temperature 0.3 acceptable but validator should be 0.1; Harvey prompt missing RAG context integration.
+**Required structure:**
+- Explicit execution graph: `ingest → normalize/chunk → Harvey branch → Kira branch → 3 reviewers per branch → validators → admin adjudicator → verdict`.
+- Separate agent roles: `harvey_conflict_detector`, `kira_internal_policy_checker`, `reviewer`, `validator`, `admin` with distinct prompts/schemas.
+- Shared typed state object across stages tracking: document ID, policy ID, clauses, evidence spans, findings, branch verdicts, consensus score, disagreements.
+- Per-branch output schemas (Harvey ≠ Kira).
+- Evidence grounding: every finding includes source span, page, confidence, rationale.
+- Job/run IDs with `202 Accepted` responses; persist state; stream SSE/WebSocket progress to UI.
+- Retry/idempotency per stage; handle parse errors, rate limits, partial outputs.
 
-**Test & monitoring gaps:** No repo tests exist (rubric requires unit/integration/E2E, golden datasets, LLM eval logic, thresholds); no Prometheus/Grafana; no MLflow/W&B experiment tracking; no CI/CD.
+---
 
 ## Known Pitfalls & Challenges
 
-- **No true RAG:** Currently Harvey loads only structured JSON from DB tables; PDF ingestion, chunking, embedding, retrieval pipeline entirely missing.
-- **No fine-tuned weights:** Training pipeline complete; no trained model artifacts in codebase; all runs use base models.
-- **No benchmark results:** No side-by-side evaluation runner; fine-tuning impact unproven.
-- **No deployment:** Zero Docker, docker-compose, Kubernetes, cloud setup, public endpoint.
-- **Parser quality:** pdfplumber first-pass; should upgrade to Docling for better evidence anchoring.
-- **RISK-001:** Extraction confidence not gated downstream; low-confidence clauses not filtered before review.
-- **RISK-002:** No ETL for CUAD/LEDGAR/MAUD parquets into ComplianceCorpus; corpus seeded manually.
-- **RISK-008:** llama3.2:3b quality ceiling; coercion keeps pipeline running but cannot improve reasoning.
+**Definition gaps:**
+- "Previous policy conflict" undefined: direct contradiction vs. scope mismatch vs. version regression vs. exception mismatch vs. approval workflow mismatch.
+- "Harvey branch" scope unclear: check only prior versions of same policy, or all organizational policies, or curated subset?
+- "Kira branch" scope unclear: internal policy only, or broader compliance/risk engine?
+
+**Multi-reviewer design risk:** Three reviewers seeing the same draft context can self-reinforce hallucinations. Better: independent first-pass, blinded validator, admin sees only structured diffs + evidence.
+
+**Document handling:** Tables, appendices, cross-references, defined terms require clause-level extraction that preserves section numbers. Long documents need clause indexing; naive context-window usage will fail.
+
+**Retrieval risks:** Embeddings can return wrong-tenant policies unless tenant filters enforced before vector search. Consensus is not accuracy.
+
+**PDF text extraction:** Scanned PDFs and complex layouts break standard extraction.
+
+---
+
+## Critical Unknowns Blocking Full Architecture
+
+- Are the 3 reviewers intended as independent parallel passes with different prompts, or sequential critique/revision?
+- Final local product: one fine-tuned model for all roles, or multiple role-specific models?
+- Should final output include clause-level redlines + fallback language, or issue spotting + recommendations only?
 
 # Implementation Plan
 
+────────────────────────
 ## Shared Dependencies
+`phase-1-architecture-spec`: authoritative phase-1 architecture using Gemini now and provider-swappable local agents later; locks stage graph, review-loop rules, human approval gate, and system boundaries (used by: orchestrator.md, .orchestrator/decisions.md, .orchestrator/key_facts.md, .orchestrator/issues.md, app/README.md)
 
-`stage-topology`: active stages = create_run, ingest_pdf, parse_ocr_normalize, clause_index, harvey_context_load, kira_context_load, harvey_review_block, kira_review_block, admin_merge, awaiting_human_review, finalized; final_review_block removed (used by: app/backend/services/run_service.py, app/backend/orchestration/state_machine.py, app/frontend/src/components/PipelineTracker.tsx, docs/ARCHITECTURE.md)
+`run-state-contract`: canonical typed contract for runs, stages, findings, evidence anchors, human-review actions, events, and final verdict payloads (used by: app/backend/models/schemas.py, app/backend/routes/contracts.py, app/backend/agents/reviewer.py, app/backend/agents/validator.py, app/backend/agents/admin.py, app/backend/services/run_service.py, app/backend/services/event_stream.py, app/backend/orchestration/state_machine.py, app/frontend/src/types/index.ts, app/frontend/src/lib/api.ts, app/frontend/src/App.tsx, app/frontend/src/components/PipelineTracker.tsx, app/frontend/src/components/VerdictCard.tsx, app/frontend/src/components/HumanReviewPanel.tsx)
 
-`harvey-trio-contract`: 3 Harvey reviewers (issue_discovery, false_positive_challenge, exploitability_impact) + 3 Kira reviewers same structure; Admin is merge-only, no admin reviewers (used by: app/backend/agents/reviewer.py, app/backend/agents/admin.py, app/backend/orchestration/state_machine.py)
+`gemini-provider-boundary`: provider abstraction where Gemini owns transport, structured-output schema binding, retry/backoff, and raw response capture; role agents own prompts and interpretation so local models can replace Gemini later (used by: app/backend/core/config.py, app/backend/providers/base.py, app/backend/providers/google_provider.py, app/backend/agents/reviewer.py, app/backend/agents/validator.py, app/backend/agents/admin.py, app/backend/requirements.txt, app/README.md)
 
-`harvey-rag-only`: only Harvey reviewers query pgvector RAG; Kira blocked at service layer (used by: app/backend/services/rag_retrieval.py, app/backend/agents/reviewer.py)
+`docling-canonical-parser`: Docling-first PDF parsing with OCR fallback and canonical clause anchors including document hash, parser version, clause UID, page, bbox, normalized text, and extraction confidence (used by: orchestrator.md, app/backend/models/schemas.py, app/backend/services/parser.py, app/backend/db/models.py, app/backend/orchestration/state_machine.py, app/backend/requirements.txt)
 
-`evidence-schema`: findings carry contract_evidence[] and rag_citations[]; Harvey contradictions require ≥1 rag_citation, Kira findings require ≥1 contract_evidence (used by: app/backend/models/schemas.py, app/backend/agents/validator.py, app/frontend/src/types/index.ts)
+`policy-lineage-and-corpora`: Harvey lineage keyed by `tenant_id + policy_family_id + version_number`; Kira corpora versioned by tenant, corpus type, jurisdiction, regime, and effective dates (used by: orchestrator.md, app/backend/models/schemas.py, app/backend/db/models.py, app/backend/services/policy_repository.py, app/backend/services/compliance_repository.py, app/backend/orchestration/state_machine.py)
 
-`auth-derived-tenancy`: tenant_id/workspace_id derived from JWT membership only, never request body (used by: app/backend/routes/rag.py, app/backend/routes/contracts.py)
+`postgres-stage-queue`: Postgres-backed run/stage queue with idempotent stage execution, leases, retry counters, blocked states, and worker claiming semantics (used by: orchestrator.md, app/backend/db/models.py, app/backend/db/session.py, app/backend/alembic/env.py, app/backend/alembic/versions/0001_initial_architecture.py, app/backend/services/run_service.py, app/backend/orchestration/state_machine.py, app/backend/worker.py)
 
-`rag-storage-contract`: pgvector tables for source_documents, document_versions, chunks, embeddings, ingestion_jobs, retrieval_traces with metadata {tenant_id, doc_type, policy_family_id, version, jurisdiction, source_path, page, chunk_hash} (used by: app/backend/db/models.py, app/backend/services/rag_ingestion.py, app/backend/services/rag_retrieval.py)
+`sse-run-events`: persisted event stream for `run_created`, `stage_started`, `stage_completed`, `stage_failed`, `stage_retrying`, `consensus_unresolved`, `awaiting_human_review`, `human_edited`, `human_rejected`, `human_approved`, and `run_finalized` (used by: app/backend/models/schemas.py, app/backend/routes/contracts.py, app/backend/services/event_stream.py, app/backend/services/run_service.py, app/frontend/src/types/index.ts, app/frontend/src/lib/api.ts, app/frontend/src/App.tsx, app/frontend/src/components/PipelineTracker.tsx)
 
-`parser-confidence-contract`: Docling primary → OCR → pdfplumber fallback; per-clause confidence propagated; <0.6 = warning, <0.3 = blocked unless override (used by: app/backend/services/parser.py, app/backend/orchestration/state_machine.py)
-
-`model-registry-contract`: configs/models.yaml lists 1 fine-tuned Gemma 26B + 3 baselines; missing endpoints report `N/A - weights pending` not crash (used by: scripts/eval_*.py, docs/EVALUATION_PLAN.md)
-
-`observability-contract`: Prometheus metrics for run status, stage duration, provider latency, JSON repair, retrieval hits, citation failures, queue age, retry count (used by: app/backend/services/metrics.py, app/backend/main.py, app/backend/worker.py)
+`human-review-gate`: mandatory human approval workflow with run-level approval state, per-finding edit capture, rejection handling, and audit provenance (used by: orchestrator.md, app/backend/models/schemas.py, app/backend/db/models.py, app/backend/routes/contracts.py, app/backend/services/run_service.py, app/frontend/src/types/index.ts, app/frontend/src/App.tsx, app/frontend/src/components/HumanReviewPanel.tsx, app/frontend/src/components/VerdictCard.tsx)
 
 ## Files
 
-### app/backend/services/run_service.py (MODIFY)
-- Remove `final_review_block` from `STAGE_SEQUENCE`; new runs use `stage-topology`.
-- Update `_load_full_findings()` source priority to {admin, harvey, kira} only.
-- Update `_build_final_verdict()` to expose Harvey trio consensus, Kira findings, Admin merged findings, unresolved_by_consensus flags, evidence per `evidence-schema`.
-- Update `submit_human_review()` and `finalize_run_if_approved()` to finalize directly after admin_merge + human review.
-- Add legacy compatibility branch: existing runs with final_review_block render read-only but never re-enqueue.
-- Tenant derivation in run creation must use `auth-derived-tenancy`.
+### orchestrator.md (CREATE)
+- Create the missing authoritative architecture document required by `AGENTS.md`.
+- Lock the exact phase-1 stage graph: `create_run -> ingest_pdf -> parse_ocr_normalize -> clause_index -> harvey_context_load + kira_context_load -> harvey_reviewers_1_2_3 -> harvey_validator -> kira_reviewers_1_2_3 -> kira_validator -> admin_merge -> final_reviewers_1_2_3 -> agreement_check -> awaiting_human_review -> approved|edited|rejected -> finalized`.
+- Lock the disagreement policy: maximum 2 final-review rounds; round-1 disagreement triggers admin delta instructions and disputed-only re-review; round-2 disagreement triggers admin tie-break with `unresolved_by_consensus`.
+- Lock the Google-now/local-later strategy and explicitly state that fine-tuning targets narrow roles, not one monolithic agent.
+- Define Harvey scope, Kira scope, mandatory human approval, and “issues” meaning liability exposure, open clauses, ambiguity, exploitability, weakened protections, and compliance failures.
+- Define concrete worker, persistence, event, and audit expectations from `postgres-stage-queue`, `sse-run-events`, and `human-review-gate`.
 
-### app/backend/orchestration/state_machine.py (MODIFY)
-- Delete `_enqueue_final_review_stage()` and `FinalReviewerAgent` import.
-- `harvey_review_block` fans out to 3 Harvey reviewers per `harvey-trio-contract`, each receiving uploaded contract clauses + ranked RAG retrieval trace from `harvey_context_load`.
-- `kira_review_block` fans out to 3 Kira reviewers; must NOT call `rag_retrieval.py`.
-- `admin_merge` consumes Harvey trio + Kira trio outputs only; transitions directly to `awaiting_human_review`.
-- Fix `_stage_output()` ordering by (round_number DESC, attempt_number DESC, finished_at DESC) — closes BUG-012.
-- Honor `parser-confidence-contract` blocked state by halting before review stages and emitting blocked SSE event.
-- SSE events emit only stages in `stage-topology`.
+### .orchestrator/decisions.md (MODIFY)
+- Record the architecture decisions from `phase-1-architecture-spec`.
+- Add ADR entries for Gemini as the phase-1 provider, Docling as the canonical parser, Postgres as system of record, and mandatory human approval before finalization.
+- Add ADR entry for provider abstraction as the migration seam for future local fine-tuned agents.
 
-### app/backend/agents/reviewer.py (MODIFY)
-- Remove `FinalReviewerAgent`.
-- Define `HarveyReviewer` with role variants: `issue_discovery`, `false_positive_challenge`, `exploitability_impact`.
-- Each Harvey reviewer prompt: contradiction-checking task, must cite `rag_citations` by chunk_id, must cite `contract_evidence` by clause_id, no chain-of-thought, strict JSON, uncertainty flag required when confidence<0.7.
-- Define `KiraReviewer` mirroring 3 roles; prompt focuses on internal holes/ambiguity/missing protections; explicitly forbidden from rag_citations.
-- Move role instructions to provider system role (via `providers/base.py` system field).
-- Default reviewer temperature 0.2; pass through provider call.
-- Output schema matches `evidence-schema`: `{findings: [{contract_evidence, rag_citations, severity, exploitability, business_impact, unresolved_by_consensus, rationale, uncertainty}]}`.
+### .orchestrator/key_facts.md (MODIFY)
+- Record the locked stage names, run states, event names, Harvey lineage key, Kira corpus metadata, and canonical finding fields.
+- Record the backend API contract and the required frontend SSE subscription behavior.
+- Record that the current backend/frontend are scaffolding and not architecturally representative.
 
-### app/backend/agents/admin.py (MODIFY)
-- `ConsensusAdmin.merge()` accepts `(harvey_trio_outputs, kira_trio_outputs)`; deduplicates findings via clause_id + finding_type clustering.
-- `AgreementAdmin.check()` computes Harvey 3-way agreement and Kira 3-way agreement; returns `consensus_state ∈ {unanimous, majority, split}`.
-- Remove all final/admin reviewer code paths.
-- Output schema includes `merged_findings`, `consensus_state`, `unresolved_by_consensus`, `harvey_agreement`, `kira_agreement`.
-
-### app/backend/agents/validator.py (MODIFY)
-- Validator temperature 0.1.
-- `validate_harvey_finding()`: reject if `rag_citations` empty; reject if any chunk_id not in run's retrieval_trace; reject if contract_evidence clause_id not in parsed clauses.
-- `validate_kira_finding()`: reject if `contract_evidence` empty; reject if any `rag_citations` present.
-- Return structured `ValidationError {code, field, message}`; codes: `MISSING_RAG_CITATION`, `INVALID_CHUNK_ID`, `KIRA_RAG_FORBIDDEN`, `MISSING_CONTRACT_EVIDENCE`, `MALFORMED_JSON`.
-
-### app/backend/models/schemas.py (MODIFY)
-- Add Pydantic models: `ContractEvidence(clause_id, page, span, text, confidence)`, `RagCitation(chunk_id, document_id, version, page, source_path, chunk_hash, score)`, `RetrievalTraceItem`, `HarveyReviewerOutput`, `HarveyTrioConsensus`, `KiraReviewerOutput`, `AdminConsensusOutput`, `RagDocumentCreate`, `RagDocumentResponse`, `RagIngestionStatus`, `ModelRegistryEntry`, `EvalMetricRow`.
-- Update `Finding`, `ReviewResult`, `FinalVerdict` with branch grouping, `consensus_state`, evidence fields, `exploitability`, `business_impact`, `unresolved_by_consensus`.
-- Drop active `final_reviewer` references; keep optional fields tagged `legacy=True`.
-
-### app/backend/db/models.py (MODIFY)
-- Add ORM models: `RagSourceDocument`, `RagDocumentVersion`, `RagChunk`, `RagEmbedding(vector pgvector(N))`, `RagIngestionJob(status, error, started_at, finished_at)`, `RagRetrievalTrace(run_id, clause_id, chunk_ids[], scores[], created_at)`.
-- Extend `FindingRecord` JSON to carry `contract_evidence`, `rag_citations`, `consensus_state`, `business_impact`, `exploitability`, `unresolved_by_consensus`.
-- Indexes: `(tenant_id, workspace_id, policy_family_id, doc_type)`, unique `(document_id, version)`, unique `(version_id, chunk_hash)`, `(run_id, clause_id)` on traces, ivfflat or hnsw on embedding column.
-
-### app/backend/alembic/versions/0003_add_harvey_rag.py (CREATE)
-- `CREATE EXTENSION IF NOT EXISTS vector`.
-- Create rag_source_documents, rag_document_versions, rag_chunks, rag_embeddings, rag_ingestion_jobs, rag_retrieval_traces.
-- Add finding JSONB schema upgrade for new evidence fields with default `{}`.
-- Add indexes per `rag-storage-contract`.
-- Idempotent re: legacy final_review_block rows (do not delete).
-
-### app/backend/services/parser.py (MODIFY)
-- Add `parse_document(path) → ParsedDoc` orchestrator: try `parse_with_docling()`, on fail/empty try `parse_with_ocr_fallback()` (tesseract via pytesseract), else `parse_with_pdfplumber_fallback()`.
-- `compute_clause_confidence()` blends extractor confidence + OCR signal + heuristic (text length, char dist).
-- Return `{pages[], clauses[{id, text, page, bbox, confidence, source_extractor}]}` consumed by `parser-confidence-contract`.
-- Preserve existing public function signatures used by clause_index stage.
-
-### app/backend/services/rag_ingestion.py (CREATE)
-- `RagIngestionService` with: `create_ingestion_job(file, doc_type, policy_family_id, jurisdiction, version_label, tenant_id, workspace_id)`, `ingest_document(job_id)`, `chunk_document(parsed_doc, size, overlap)`, `compute_file_hash(bytes)`, `compute_chunk_hash(text)`, `embed_chunks(chunks)`, `activate_new_version(version_id)`, `soft_delete_previous_active(document_id)`, `mark_job_failed(job_id, error)`.
-- Validate doc_type ∈ {policy, reference_contract, playbook}; enforce 50MB / 500 page limit; reject duplicate file_hash with 409; dedupe chunks by chunk_hash within version.
-- New version activated only after successful embedding; on failure prior active version remains.
-- Async via worker queue.
-
-### app/backend/services/rag_retrieval.py (CREATE)
-- `HarveyRagRetriever` with: `retrieve_for_run(run_id, clauses) → list[RetrievalTraceItem]`, `retrieve_for_clause(clause, scope) → list[RagCitation]`, `hybrid_search(query, scope, k)`, `vector_search`, `text_search` (postgres tsvector BM25-ish), `rerank_results` (bge-reranker hook, no-op stub if unavailable), `persist_retrieval_trace`, `validate_citation_ids(chunk_ids, run_id)`.
-- Scope filter: `(tenant_id, workspace_id, active_version, policy_family_id ∈ {target, linked_playbooks, linked_reference_contracts})`.
-- Caller identity guard: raise `RagAccessForbidden` if caller role != harvey.
-
-### app/backend/services/embeddings.py (CREATE)
-- `EmbeddingProvider` ABC with `embed_texts(list[str]) → list[list[float]]`, `dimensions: int`.
-- Implementations: `LocalEmbeddingProvider` (sentence-transformers), `OpenAICompatibleEmbeddingProvider` (Ollama nomic-embed-text default).
-- `get_embedding_provider()` factory from settings.
-- Batch size 32, normalize L2.
-
-### app/backend/services/metrics.py (CREATE)
-- Prometheus client setup; counters/histograms per `observability-contract`: `runs_total{status}`, `stage_duration_seconds{stage}`, `provider_latency_seconds{provider,model}`, `provider_failures_total`, `json_repair_total`, `retrieval_hits_total`, `citation_validation_failures_total{code}`, `queue_age_seconds`, `retry_total{stage}`, `worker_lease_expiry_total`.
-- `setup_metrics(app)` mounts `/metrics`.
-
-### app/backend/routes/rag.py (CREATE)
-- `APIRouter(prefix="/api/rag")`.
-- `POST /documents` (admin only): multipart upload → enqueue ingestion → return job_id.
-- `GET /documents`: list for caller's tenant/workspace.
-- `GET /documents/{id}`: detail with active version, chunk count.
-- `GET /ingestions/{job_id}`: status + error.
-- `DELETE /documents/{id}`: soft-delete active version.
-- All endpoints derive tenant via `auth-derived-tenancy`; reject if user role not admin/workspace_admin.
-
-### app/backend/routes/contracts.py (MODIFY)
-- Remove `tenant_id` form parameter from `POST /api/runs`; derive from JWT.
-- Findings response includes `evidence-schema` fields.
-- Retry endpoint must not enqueue `final_review_block`.
-- Add `parser_confidence_state` field to run detail response.
-
-### app/backend/main.py (MODIFY)
-- Mount `rag_router`.
-- Call `setup_metrics(app)` to expose `/metrics`.
-- Replace hardcoded CORS origins with `settings.cors_origins`.
-- Startup hook validates: DB connectable, embedding provider reachable, `configs/models.yaml` parseable.
-
-### app/backend/core/config.py (MODIFY)
-- Add: `parser_primary` (docling), `ocr_enabled`, `pdfplumber_fallback_enabled`, `rag_max_file_mb=50`, `rag_max_pages=500`, `rag_chunk_size=800`, `rag_chunk_overlap=100`, `rag_top_k=20`, `rag_rerank_top_k=5`, `embedding_provider`, `embedding_dimensions`, `pgvector_enabled`, `model_registry_path`, `metrics_enabled`, `cors_origins: list[str]`, `reviewer_temperature=0.2`, `validator_temperature=0.1`.
-
-### app/backend/providers/base.py (MODIFY)
-- Provider interface: `complete(system: str, user: str, temperature: float, response_format: dict|None) → ProviderResponse`.
-- Add `ModelEndpoint` dataclass with `name, role, is_finetuned, provider_url, api_key_env, enabled, timeout_seconds, cost_per_1k`.
-- Strict JSON response_format honored when supported.
-
-### app/backend/providers/google_provider.py (MODIFY)
-- Use Gemini system_instruction for system prompt.
-- Per-call temperature.
-- Wrap with `record_provider_call()` metric.
-
-### app/backend/providers/openrouter_provider.py (MODIFY)
-- Use OpenAI-compat `messages=[{role:system},{role:user}]`.
-- Per-call temperature.
-- Wrap with `record_provider_call()` metric.
-
-### app/backend/services/policy_repository.py (MODIFY)
-- Add `get_policy_family(family_id)`, `list_linked_playbooks(family_id)`, `list_reference_contracts_for_family(family_id)`, `resolve_harvey_rag_scope(run) → RagScope`.
-
-### app/backend/services/compliance_repository.py (MODIFY)
-- Add docstring clarifying this is Kira's structured corpus only, not pgvector RAG.
-- Assert no caller queries `rag_chunks`/`rag_embeddings`.
-
-### app/backend/worker.py (MODIFY)
-- Add metrics: queue age on dequeue, retry counter on failed jobs, lease expiry counter.
-- Process new job type `rag_ingestion` via `RagIngestionService.ingest_document`.
-- Skip claiming any `final_review_block` job.
+### .orchestrator/issues.md (MODIFY)
+- Replace the placeholder with active implementation risks and acceptance checkpoints.
+- Track open implementation constraints such as parser-confidence handling, corpus-governance ingestion, and schema-version migration ownership.
+- Track the requirement that no run can finalize without a human approval action.
 
 ### app/backend/requirements.txt (MODIFY)
-- Add: `docling`, `pytesseract`, `pgvector`, `sentence-transformers`, `prometheus-client`, `mlflow`, `pytest`, `pytest-asyncio`, `httpx`, `respx`.
+- Add the runtime dependencies for `gemini-provider-boundary`, `docling-canonical-parser`, `postgres-stage-queue`, and `sse-run-events`.
+- Include packages for Postgres access, migrations, settings management, Docling/OCR parsing, and SSE streaming.
+- Remove reliance on `pdfplumber` as the primary parser and keep it only if the developer uses it as a low-priority fallback utility.
+
+### app/backend/core/config.py (CREATE)
+- Create a typed settings module for environment-driven configuration.
+- Add `Settings` fields for Gemini API key, Gemini model name, Postgres DSN, worker lease duration, max stage retries, document storage path, allowed frontend origins, and parser/OCR toggles.
+- Add `get_settings()` for shared dependency injection across API, worker, and provider layers.
+
+### app/backend/db/session.py (CREATE)
+- Create database engine/session wiring for Postgres.
+- Add `get_engine()`, `get_session_factory()`, and `get_db_session()` helpers for API handlers and worker processes.
+- Add transaction and session-scoping rules to support idempotent stage execution and human-review writes.
+
+### app/backend/db/models.py (CREATE)
+- Create the persistence models that back `run-state-contract`, `policy-lineage-and-corpora`, and `postgres-stage-queue`.
+- Add ORM models for `RunRecord`, `StageExecutionRecord`, `FindingRecord`, `EvidenceRecord`, `ParsedClauseRecord`, `PolicyVersionRecord`, `ComplianceCorpusRecord`, `RunEventRecord`, and `HumanReviewRecord`.
+- Add fields for stage lease expiry, retry count, blocked reason, parser metadata, clause UID stability fields, source rule/prior-version references, and human edit provenance.
+
+### app/backend/alembic/env.py (CREATE)
+- Create migration environment wiring against the new Postgres metadata.
+- Configure target metadata from `app/backend/db/models.py`.
+- Ensure migrations support the new run, clause, evidence, corpus, and human-review tables.
+
+### app/backend/alembic/versions/0001_initial_architecture.py (CREATE)
+- Create the first migration for the architecture baseline.
+- Create tables and indexes for runs, stages, parsed clauses, findings, evidence, policy lineage, compliance corpora, run events, and human reviews.
+- Add uniqueness and lookup indexes for `run_id`, `clause_uid`, `tenant_id + policy_family_id + version_number`, and event replay ordering.
+
+### app/backend/models/schemas.py (MODIFY)
+- Replace the flat upload/result schema set with the full `run-state-contract`.
+- Add Pydantic models for `RunStatus`, `StageStatus`, `StageLease`, `EvidenceRef`, `ParsedClause`, `Finding`, `BranchReviewOutput`, `ValidatorOutput`, `AdminMergeOutput`, `AgreementDecision`, `FinalVerdict`, `RunSummary`, `RunDetail`, `RunCreateResponse`, `RunEvent`, `HumanReviewAction`, `HumanReviewPayload`, and `HumanReviewResult`.
+- Add enums/literals for branch names, issue types, recommendation types, exploitability levels, business impact levels, consensus status, human status, stage states, and event types.
+- Add schema version fields so persisted records remain readable after later model evolution.
+
+### app/backend/providers/base.py (CREATE)
+- Create the provider interface used by all role agents.
+- Add `StructuredLLMProvider` with `generate_structured_output()` and raw request/response capture hooks.
+- Define provider-level error types for invalid schema output, transient provider failure, rate limit, and non-retryable provider failure.
+
+### app/backend/providers/google_provider.py (CREATE)
+- Implement the Gemini-specific provider from `gemini-provider-boundary`.
+- Use Gemini structured-output mode with explicit response schema binding instead of free-text JSON parsing.
+- Implement request construction, retry/backoff, token-budget handling, response validation, and raw payload capture for audit.
+- Expose `GeminiProvider` and any internal helpers needed to normalize Gemini responses into backend schemas.
+
+### app/backend/agents/reviewer.py (MODIFY)
+- Replace the single `review_contract()` function with role-specific reviewer agents.
+- Add `HarveyReviewerAgent`, `KiraReviewerAgent`, and `FinalReviewerAgent`.
+- Add prompt builders that enforce reviewer differentiation: issue discovery, false-positive challenge, and exploitability/liability impact.
+- Add methods that accept canonical clause/evidence input and return typed reviewer output only through the provider interface.
+
+### app/backend/agents/validator.py (CREATE)
+- Create the branch validator agents.
+- Add `HarveyValidatorAgent` and `KiraValidatorAgent`.
+- Add functions to normalize reviewer outputs, deduplicate overlapping findings, score evidence quality, and emit a canonical branch decision for admin merge.
+
+### app/backend/agents/admin.py (CREATE)
+- Create the admin-layer agents.
+- Add `AdminMergeAgent` to merge Harvey and Kira branch outputs into canonical findings.
+- Add `AgreementCheckAgent` to compare the three final-reviewer outputs, determine 2-of-3 agreement on `clause_uid + issue_type + severity_band`, and mark disputed or `unresolved_by_consensus` findings.
+- Add `AdminDeltaInstructionBuilder` to issue the round-1 disputed-only re-review instructions.
+
+### app/backend/services/parser.py (CREATE)
+- Create the document parsing service around `docling-canonical-parser`.
+- Add `parse_pdf_to_canonical_document()` to ingest the uploaded PDF, run Docling, trigger OCR fallback when needed, and emit parsed clauses with stable anchors.
+- Add `build_clause_index()` to create clause records with `clause_uid`, page, bbox, section path, normalized text, and extraction confidence.
+- Add parse-confidence handling so low-confidence parses can block downstream stages or mark the run for human attention.
+
+### app/backend/services/policy_repository.py (CREATE)
+- Create the Harvey lineage service.
+- Add `resolve_policy_lineage()` using only `tenant_id + policy_family_id + version_number`.
+- Add `load_prior_policy_versions()` for same-policy historical comparison.
+- Add blocked-state behavior that emits `blocked_missing_lineage` when authoritative lineage metadata is missing.
+
+### app/backend/services/compliance_repository.py (CREATE)
+- Create the Kira corpus access service.
+- Add `load_internal_playbook_rules()` and `load_external_compliance_rules()` using explicit tenant, jurisdiction, regime, and effective-date filters.
+- Add `resolve_applicable_corpora()` to freeze the exact internal and regulatory corpora versions for each run.
+- Add `needs_scope_review` behavior when required jurisdiction/regime metadata is absent.
+
+### app/backend/services/event_stream.py (CREATE)
+- Create the persisted event publisher and SSE adapter.
+- Add `append_run_event()` to write run events transactionally.
+- Add `stream_run_events()` to replay historical events and continue live SSE emission in order.
+- Add event serialization helpers for the exact `sse-run-events` payload contract.
+
+### app/backend/services/run_service.py (CREATE)
+- Create the application service that coordinates API requests, persistence writes, and worker-visible state transitions.
+- Add `create_run()`, `get_run_detail()`, `list_run_events()`, `submit_human_review()`, and `finalize_run_if_approved()`.
+- Add validation for upload metadata, Harvey lineage metadata, Kira scope metadata, and human-review authorization payloads.
+- Add logic to map human actions to run states: `approved`, `edited`, or `rejected`.
+
+### app/backend/orchestration/state_machine.py (CREATE)
+- Create the deterministic execution graph for the full phase-1 pipeline.
+- Add `claim_next_stage()`, `execute_stage()`, `advance_stage()`, `retry_stage()`, `mark_stage_failed()`, `mark_run_blocked()`, and `queue_disputed_findings_for_reround()`.
+- Implement the exact stage ordering, validator/admin/final-review loop, max-two-round policy, and mandatory handoff to `awaiting_human_review`.
+- Enforce idempotent stage writes so retries and worker restarts do not duplicate findings or events.
+
+### app/backend/worker.py (CREATE)
+- Create the dedicated worker process entrypoint for `postgres-stage-queue`.
+- Add `run_worker_loop()` to poll/claim leased stages, execute `state_machine` stages, refresh leases, and recover expired work.
+- Add dead-letter handling for permanently failed stages after max retries.
+- Add a startup entrypoint so the worker can be run separately from the FastAPI process.
+
+### app/backend/routes/contracts.py (MODIFY)
+- Replace the synchronous `/api/upload` contract with the async run API.
+- Keep `GET /api/health`.
+- Add `POST /api/runs` to accept PDF upload plus required metadata such as `tenant_id`, `policy_family_id`, `policy_version`, jurisdiction/regime scope, and optional run labels.
+- Add `GET /api/runs/{run_id}` to return full run detail from `run-state-contract`.
+- Add `GET /api/runs/{run_id}/events` for SSE event streaming.
+- Add `POST /api/runs/{run_id}/human-review` to approve, edit-and-approve, or reject findings with required reason/audit fields.
+- Return `202 Accepted` for run creation and never execute the pipeline inside the request.
+
+### app/backend/main.py (MODIFY)
+- Wire the new settings module, CORS config, DB lifecycle, and routes.
+- Register the run router and any startup checks for DB connectivity and configured storage paths.
+- Update the FastAPI title/version and remove assumptions tied to the old synchronous upload flow.
 
 ### app/frontend/src/types/index.ts (MODIFY)
-- Add types matching `evidence-schema` and RAG schemas.
-- Remove `final_review_block` from stage union; add `awaiting_human_review`, `blocked`, `retrying` states.
+- Replace the simple upload/result types with frontend copies of `run-state-contract`.
+- Add interfaces for `RunDetail`, `RunEvent`, `Finding`, `EvidenceRef`, `HumanReviewPayload`, `HumanReviewResult`, `BranchStatus`, `ConsensusStatus`, and the new run/event enums.
+- Remove `UploadResponse`, the flat `PipelineStatus`, and the old `ClauseFlag`/`ReviewResult` shapes as the primary UI contract.
 
 ### app/frontend/src/lib/api.ts (MODIFY)
-- Add: `uploadRagDocument`, `listRagDocuments`, `getRagDocument`, `getRagIngestionStatus`, `deleteRagDocument`.
-- Update run mappers for new evidence fields and parser confidence state.
-
-### app/frontend/src/components/PipelineTracker.tsx (MODIFY)
-- Stage list per `stage-topology`; remove final_review_block.
-- Render parser confidence warning/blocked badge.
-- Show "Harvey 1/2/3" sub-state under harvey_review_block.
-
-### app/frontend/src/components/VerdictCard.tsx (MODIFY)
-- Sections: Harvey Trio (with consensus_state badge), Kira Trio, Admin Merged, Human Action.
-- Render contract_evidence and rag_citations as separate citation chips; Harvey citations link to source PDF page via document_id+page.
-- Show unresolved_by_consensus banner.
-
-### app/frontend/src/components/HumanReviewPanel.tsx (MODIFY)
-- Display Admin merged findings with approve/edit/reject per finding.
-- Show Harvey + Kira agreement badges.
-- Show validator warnings inline.
-
-### app/frontend/src/components/AdminPage.tsx (MODIFY)
-- Add tab/section rendering `<RagDocumentPanel/>` for admin/workspace_admin role.
-
-### app/frontend/src/components/RagDocumentPanel.tsx (CREATE)
-- Components: `RagDocumentPanel`, `RagUploadForm` (file, doc_type select, policy_family_id, jurisdiction, version_label), `RagIngestionStatusList`, `RagDocumentTable`, `RagDocumentDetailDrawer`.
-- Polls `/api/rag/ingestions/{job_id}` until terminal status.
+- Replace the blocking upload client with the new run API client.
+- Add `createRun()`, `getRun()`, `subscribeToRunEvents()`, and `submitHumanReview()`.
+- Add SSE reconnect and replay support so the UI can reload a run, fetch its current state, and then resume live events without losing stage progress.
 
 ### app/frontend/src/App.tsx (MODIFY)
-- Remove final_review_block routing assumptions.
-- Route human review entry after `awaiting_human_review`.
+- Replace the fake upload/pipeline/waiting flow with backend-driven run state.
+- Add logic to create a run, store the current `run_id`, hydrate run detail on refresh, and subscribe to SSE updates.
+- Add rendering states for uploading, running, blocked, awaiting human review, finalized, failed, and rejected.
+- Integrate the new human-review panel before the final verdict is treated as complete.
 
-### app/frontend/src/components/AIEngineInsights.tsx (MODIFY)
-- Update copy: "3 Harvey + 3 Kira reviewers, Admin consensus merge, Harvey-only RAG".
+### app/frontend/src/components/PipelineTracker.tsx (MODIFY)
+- Replace timer-based stage animation with a renderer for real backend stage statuses and events.
+- Render the exact architecture stages from the backend, including Harvey/Kira branches, validators, admin merge, final reviewers, agreement check, and human review gate.
+- Show retrying, blocked, unresolved-consensus, failed, and completed states using the run event stream instead of local delays.
 
-### configs/models.yaml (CREATE)
-- Entries: `gemma_26b_finetuned` (enabled:false, is_finetuned:true), `gemma_26b_base` (enabled:false, is_finetuned:false), `baseline_legal_1`, `baseline_legal_2`.
-- Each: name, role_support, provider_url, api_key_env, enabled, is_finetuned, decoding{temperature,top_p,max_tokens}, timeout_seconds, notes.
+### app/frontend/src/components/VerdictCard.tsx (MODIFY)
+- Replace the flat risk-summary card with a run-aware verdict view.
+- Display grouped findings by branch and consensus state, clause-local recommendations, evidence anchors, exploitability/business impact, and any `unresolved_by_consensus` markers.
+- Display human review outcome and edited findings so the user can distinguish model output from approved final output.
 
-### scripts/eval_model_registry.py (CREATE)
-- `ModelRegistry`, `load_model_registry(path)`, `validate_model_registry()`, `iter_enabled_models()`, `mark_missing_as_pending()`.
-- Health-checks each enabled endpoint; disabled fine-tuned → emits `N/A - weights pending` row.
+### app/frontend/src/components/UploadForm.tsx (MODIFY)
+- Extend the upload form beyond file selection.
+- Add required metadata inputs for `tenant_id`, `policy_family_id`, `policy_version`, and Kira scope inputs such as jurisdiction/regime so Harvey/Kira can run deterministically.
+- Update submission behavior to call `createRun()` and surface backend validation failures for missing lineage or compliance scope.
 
-### scripts/eval_finetune_vs_baseline.py (CREATE)
-- `EvalRunner.run_eval_suite(dataset_path, models)`: load CUAD/ContractNLI fixtures, run identical prompts/retrieval/decoding across models, capture per-role and full-pipeline outputs.
-- `evaluate_role_outputs`, `evaluate_full_pipeline`, `write_markdown_report`, `write_json_results`.
-- Paired comparison + bootstrap CI + McNemar.
-
-### scripts/eval_metrics.py (CREATE)
-- `json_validity_rate`, `contradiction_prf`, `citation_accuracy`, `hallucinated_citation_rate`, `severity_calibration` (Brier/ECE), `admin_agreement_rate`, `latency_cost_summary`, `bootstrap_confidence_interval(n=1000)`, `mcnemar_test`.
-
-### tests/conftest.py (CREATE)
-- Fixtures: `db_session` (test postgres + pgvector), `fake_provider`, `sample_contract_pdf`, `sample_policy_pdf`, `auth_admin_user`, `auth_member_user`, `seeded_rag_corpus`.
-
-### tests/test_stage_topology.py (CREATE)
-- Assert new run stages == `stage-topology`.
-- Assert no final_review_block rows for new runs.
-- Assert SSE event stream excludes final_review_block.
-- Assert legacy run with final_review_block still finalizes.
-
-### tests/test_harvey_trio_consensus.py (CREATE)
-- Assert exactly 3 Harvey + 3 Kira reviewer outputs per run.
-- Assert agreement calculation for unanimous/majority/split fixtures.
-- Assert admin merge handles unresolved consensus.
-
-### tests/test_rag_ingestion.py (CREATE)
-- Upload → job created → completion creates active version.
-- Duplicate file hash → 409.
-- Chunk hash dedupe within version.
-- Failed embedding → prior active version retained.
-- Tenant A cannot see tenant B documents.
-
-### tests/test_rag_retrieval.py (CREATE)
-- Filter by tenant/workspace/policy_family/jurisdiction.
-- Kira caller raises `RagAccessForbidden`.
-- Retrieval trace persisted with chunk_ids.
-- `validate_citation_ids` rejects foreign chunk_ids.
-
-### tests/test_parser_confidence.py (CREATE)
-- Docling primary path returns clauses with confidence.
-- Image-only PDF triggers OCR fallback.
-- Corrupt PDF triggers pdfplumber fallback then blocked state.
-- Confidence <0.3 → blocked; <0.6 → warning; override path audited.
-
-### tests/test_validator_evidence.py (CREATE)
-- Harvey finding without rag_citations → `MISSING_RAG_CITATION`.
-- Harvey citation with chunk_id not in trace → `INVALID_CHUNK_ID`.
-- Kira finding with rag_citations → `KIRA_RAG_FORBIDDEN`.
-- Kira finding without contract_evidence → `MISSING_CONTRACT_EVIDENCE`.
-- Valid findings pass.
-
-### tests/test_run_lifecycle.py (CREATE)
-- E2E: upload → parse → harvey_context_load → kira_context_load → harvey/kira review → admin_merge → awaiting_human_review → finalized.
-- Findings endpoint includes evidence + consensus.
-- Human approve/edit/reject flows.
-
-### tests/test_eval_metrics.py (CREATE)
-- Unit tests for each metric in `scripts/eval_metrics.py`.
-- Disabled fine-tuned endpoint produces `N/A - weights pending`.
-
-### Dockerfile.api (CREATE)
-- python:3.11-slim base; install tesseract-ocr, poppler-utils for Docling/OCR.
-- Copy app/backend, install requirements.
-- Run `uvicorn app.backend.main:app --host 0.0.0.0 --port 8000`.
-
-### Dockerfile.worker (CREATE)
-- Same base + system deps as api.
-- Run `python -m app.backend.worker`.
-
-### Dockerfile.frontend (CREATE)
-- node:20-alpine build stage → nginx:alpine serve stage.
-- Build Vite app, serve dist on port 80.
-
-### docker-compose.yml (CREATE)
-- Services: `postgres` (pgvector/pgvector:pg16, named volume), `api` (Dockerfile.api, depends_on postgres healthy), `worker` (Dockerfile.worker), `frontend` (Dockerfile.frontend), optional `ollama`.
-- Healthchecks on postgres and api.
-- Env via `.env`; no secrets committed.
-
-### .github/workflows/ci.yml (CREATE)
-- Jobs: `backend-test` (ruff, mypy optional, pytest with postgres+pgvector service), `frontend-build` (npm ci, tsc, build), `docker-build` (build all Dockerfiles).
-- Upload pytest junit + coverage artifacts.
-
-### .github/workflows/eval.yml (CREATE)
-- `workflow_dispatch` only.
-- Loads model API keys from secrets; runs `scripts/eval_finetune_vs_baseline.py`; uploads markdown + JSON reports as artifacts.
-- Missing fine-tuned endpoint → `N/A - weights pending`, not failure.
-
-### docs/CURRENT_LIMITATIONS.md (CREATE)
-- Sections: Impossible Now, Blocked by Missing Weights, Blocked by Missing Secrets/Cloud, Deferred by Scope, Implemented but Not Benchmark-Proven.
-- List: no fine-tuned Gemma 26B weights, no production RAG corpus until customer PDFs uploaded, no live deployment URL until Modal/Vercel secrets set, benchmark superiority claims pending eval run.
-
-### docs/CHANGELOG_IMPLEMENTATION.md (CREATE)
-- Per-file change log with rubric extent rating (full/partial/pending).
-- Sections per milestone: pipeline topology, RAG, evaluation, deployment, observability, tests, docs.
-
-### docs/DEPLOYMENT_RESEARCH.md (CREATE)
-- Compare Modal vs RunPod Serverless vs HF Inference Endpoints vs Koyeb on: VRAM for Gemma 26B (needs ≥48GB → H100/H200 or 2×A100), cold start, public URL, secrets, scale-to-zero, monthly demo cost, production cost.
-- Recommendation: Vercel (frontend) + Modal CPU (FastAPI/worker) + Neon Postgres+pgvector + Modal vLLM H200 (inference).
-
-### docs/EVALUATION_PLAN.md (CREATE)
-- Test suite: 1 fine-tuned Gemma 26B vs 3 baselines on identical prompts/retrieval/decoding.
-- Metrics, paired eval, bootstrap CI, McNemar.
-- Datasets: CUAD, ContractNLI subset, internal golden set.
-- Reporting: per-model × per-role × full-pipeline tables.
-- Claim policy: no superiority claim until p<0.05 + CI excludes 0.
-
-### docs/API_SPEC.md (CREATE)
-- Document all run + RAG endpoints with schemas, auth requirements, file limits, error codes, SSE event types, retry/timeout policy, evidence/citation rules.
-
-### docs/ARCHITECTURE.md (CREATE)
-- Service boundaries diagram (frontend/api/worker/postgres+pgvector/inference).
-- Pipeline DAG per `stage-topology`; 3 Harvey + 3 Kira + Admin merge + human review.
-- Harvey-only RAG flow; Kira blocked path.
-- Deployment topology.
-
-### docs/RAG_DESIGN.md (CREATE)
-- Ingestion → parsing → chunking (800 tok / 100 overlap) → embedding → pgvector.
-- Hybrid retrieval (vector + tsvector BM25) + optional bge-reranker.
-- Metadata schema, retrieval traces, citation validation.
-- Versioning, dedupe, rollback semantics.
-
-### docs/RUNBOOK.md (CREATE)
-- Local setup, migrations, docker-compose up, demo data seeding, RAG ingestion walkthrough, run lifecycle demo, metrics dashboard pointer, eval runner usage, deployment, secrets, rollback, troubleshooting.
+### app/frontend/src/components/HumanReviewPanel.tsx (CREATE)
+- Create the mandatory review UI required by `human-review-gate`.
+- Add controls to approve, edit-and-approve, or reject.
+- Add per-finding edit support with required reason capture and final reviewer comments.
+- Add submission handling that sends the typed human-review payload to the backend and updates UI state from the returned review result.
 
 ### app/README.md (MODIFY)
-- Update architecture summary to 3 Harvey + 3 Kira + Admin merge + human review + Harvey-only RAG.
-- Link to all docs/*.md.
-- Remove stale Anthropic-only references.
-
-### AGENTS.md (MODIFY)
-- Record active topology, Harvey-only RAG rule, evidence schema, and doc update requirement after architecture changes.
+- Rewrite setup and architecture documentation to match the actual implementation plan.
+- Remove Anthropic references and document Gemini as the phase-1 provider.
+- Document the new backend API, required upload metadata, worker process, Postgres dependency, and Docling-based parsing flow.
+- Add a short roadmap section explaining that local fine-tuned agents will replace Gemini behind the provider boundary in later phases.
+────────────────────────

@@ -98,6 +98,17 @@ BATCHES_DIR   = DISTILL_DIR / "batches"
 RESULTS_DIR   = DISTILL_DIR / "results"
 ANNOTATED_DIR = DISTILL_DIR / "annotated"
 
+# ── Kira DeepSeek-labeling pipeline ──────────────────────────────────────────
+import os as _os
+
+CONTEXT_SENTENCES_CUAD = 8
+MAX_SEQ_LENGTH_KIRA    = 2048
+DEEPSEEK_MODEL         = _os.getenv("DEEPSEEK_MODEL", "")   # set in .env when ready
+DEEPSEEK_BASE_URL      = "https://api.deepseek.com/v1"
+KIRA_RAW_DIR           = DATA_DIR / "kira" / "raw"
+KIRA_LABELED_DIR       = DATA_DIR / "kira" / "labeled"
+KIRA_FT_DIR            = DATA_DIR / "kira" / "ft"
+
 for _d in [
     DISTILL_DIR,
     BATCHES_DIR, RESULTS_DIR, ANNOTATED_DIR,
@@ -106,5 +117,6 @@ for _d in [
     HARVEY_FT_DIR, KIRA_FT_DIR, VALIDATOR_FT_DIR,
     HARVEY_OUTPUT_DIR, KIRA_OUTPUT_DIR, VALIDATOR_OUTPUT_DIR,
     HARVEY_CHECKPOINTS, KIRA_CHECKPOINTS, VALIDATOR_CHECKPOINTS,
+    KIRA_RAW_DIR, KIRA_LABELED_DIR, KIRA_FT_DIR,
 ]:
     _d.mkdir(parents=True, exist_ok=True)

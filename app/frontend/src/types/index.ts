@@ -50,24 +50,6 @@ export interface EvidenceRef {
   extraction_confidence: number;
 }
 
-export interface ContractEvidence {
-  clause_id: string;
-  page: number;
-  span?: [number, number] | null;
-  text: string;
-  confidence: number;
-}
-
-export interface RagCitation {
-  chunk_id: string;
-  document_id: string;
-  version: string;
-  page: number;
-  source_path: string;
-  chunk_hash: string;
-  score: number;
-}
-
 export interface Finding {
   finding_id: string;
   clause_uid: string;
@@ -79,13 +61,9 @@ export interface Finding {
   recommendation: string;
   recommendation_detail: string;
   evidence: EvidenceRef[];
-  contract_evidence?: ContractEvidence[];
-  rag_citations?: RagCitation[];
   branch: "harvey" | "kira";
   agent_role: string;
   round_number: number;
-  consensus_state?: string | null;
-  unresolved_by_consensus?: boolean;
 }
 
 export interface FinalVerdict {
@@ -130,33 +108,6 @@ export interface RunDetail {
   updated_at: string;
   verdict?: FinalVerdict | null;
   blocked_reason?: string | null;
-  parser_confidence_state?: "ok" | "warning" | "blocked" | null;
-}
-
-export type RagDocType = "policy" | "reference_contract" | "playbook";
-
-export interface RagDocumentResponse {
-  document_id: string;
-  doc_type: RagDocType;
-  source_path: string;
-  version: string;
-  tenant_id: string;
-  workspace_id?: string | null;
-  active: boolean;
-  chunk_count: number;
-  created_at: string;
-  file_hash?: string | null;
-}
-
-export interface RagIngestionStatus {
-  job_id: string;
-  document_id?: string | null;
-  state: "pending" | "running" | "done" | "failed";
-  chunks_processed: number;
-  total_chunks?: number | null;
-  error_detail?: string | null;
-  started_at?: string | null;
-  completed_at?: string | null;
 }
 
 // ============================================================================

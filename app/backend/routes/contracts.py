@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -13,7 +13,6 @@ from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, Ru
 from app.backend.services.event_stream import list_run_events, stream_run_events
 from app.backend.db.models import RunRecord
 from app.backend.services.run_service import create_run, get_run_detail, submit_human_review, _load_full_findings
-from app.backend.services.auth_service import require_auth
 from sqlalchemy import select
 
 router = APIRouter(prefix="/api", tags=["runs"])
@@ -50,8 +49,8 @@ async def get_failures(limit: int = 50) -> list[dict]:
 async def post_run(
     db: DbSession,
     settings: SettingsDep,
-    token: dict = Depends(require_auth),
     file: UploadFile = File(...),
+    tenant_id: str = Form(...),
     policy_family_id: str = Form(...),
     policy_version: int = Form(...),
     jurisdiction: str = Form(...),
@@ -62,7 +61,7 @@ async def post_run(
         db,
         settings,
         file=file,
-        tenant_id=str(token.get("org_id") or token.get("sub")),
+        tenant_id=tenant_id,
         policy_family_id=policy_family_id,
         policy_version=policy_version,
         jurisdiction=jurisdiction,

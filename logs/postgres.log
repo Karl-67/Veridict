@@ -1,7 +1,0 @@
-2026-04-09 12:54:49 +03 LOG:  redirecting log output to logging collector process
-2026-04-09 12:54:49 +03 HINT:  Future log output will appear in directory "log".
-^C2026-04-09 12:57:57 +03 LOG:  redirecting log output to logging collector process
-2026-04-09 12:57:57 +03 HINT:  Future log output will appear in directory "log".
-2026-04-26 13:12:39 +03 LOG:  redirecting log output to logging collector process
-2026-04-26 13:12:39 +03 HINT:  Future log output will appear in directory "log".
-^C

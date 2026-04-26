@@ -21,8 +21,10 @@ def download_cuad():
     """
     out_dir = DATA_DIR / "atticus"
     out_file = out_dir / "cuad.parquet"
-    if out_file.exists():
-        print(f"[CUAD] Already cached at {out_file}")
+    clauses_file = out_dir / "cuad_clauses.parquet"
+
+    if out_file.exists() and clauses_file.exists():
+        print(f"[CUAD] Already cached at {out_dir}")
         return
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -37,7 +39,6 @@ def download_cuad():
             repo_type="dataset",
             local_dir=str(out_dir),
         )
-        # Move to expected location if needed
         downloaded_path = Path(downloaded)
         if downloaded_path != json_path and downloaded_path.exists():
             import shutil
@@ -71,58 +72,39 @@ def download_cuad():
                 })
 
     df = pd.DataFrame(rows)
-    df.to_parquet(out_file, index=False)
-    print(f"[CUAD] Saved {len(df)} rows to {out_file}")
+    if not out_file.exists():
+        df.to_parquet(out_file, index=False)
+        print(f"[CUAD] Saved {len(df)} rows to {out_file}")
 
-    # Also create an expanded clause-level dataframe
-    expand_cuad_clauses(df, out_dir)
+    # Build clause-level dataframe (full context preserved)
+    if not clauses_file.exists():
+        expand_cuad_clauses(df, out_dir)
 
 
 def expand_cuad_clauses(df: pd.DataFrame, out_dir: Path):
     """Expand CUAD's QA-style format into a clause-level dataframe.
 
-    CUAD stores clauses as answer spans in a SQuAD-like format.
-    We extract each clause with its category for EDA purposes.
+    Each answer span becomes one row. The full contract context is stored
+    verbatim — no truncation — so build_kira_dataset.py can extract ±8-sentence
+    context windows and use it as the DeepSeek full-contract fallback.
     """
     out_file = out_dir / "cuad_clauses.parquet"
 
-    # CUAD clause category names (41 categories)
-    clause_categories = [
-        "Document Name", "Parties", "Agreement Date", "Effective Date",
-        "Expiration Date", "Renewal Term", "Notice Period To Terminate Renewal",
-        "Governing Law", "Most Favored Nation", "Non-Compete",
-        "Exclusivity", "No-Solicit Of Customers", "Competitive Restriction Exception",
-        "No-Solicit Of Employees", "Non-Disparagement", "Termination For Convenience",
-        "Rofr/Rofo/Rofn", "Change Of Control", "Anti-Assignment",
-        "Revenue/Profit Sharing", "Price Restrictions", "Minimum Commitment",
-        "Volume Restriction", "Ip Ownership Assignment", "Joint Ip Ownership",
-        "License Grant", "Non-Transferable License", "Affiliate License-Licensor",
-        "Affiliate License-Licensee", "Unlimited/All-You-Can-Eat-License",
-        "Irrevocable Or Perpetual License", "Source Code Escrow",
-        "Post-Termination Services", "Audit Rights", "Uncapped Liability",
-        "Cap On Liability", "Liquidated Damages", "Warranty Duration",
-        "Insurance", "Covenant Not To Sue", "Third Party Beneficiary",
-    ]
-
     rows = []
     for _, row in df.iterrows():
-        context = row.get("context", "")
-        title = row.get("title", "")
-
-        answers = row.get("answers", {})
+        context  = row.get("context", "")
+        title    = row.get("title", "")
         question = row.get("question", "")
-
-        # Match question to clause category
-        clause_type = question if question else "Unknown"
+        answers  = row.get("answers", {})
 
         answer_texts = answers.get("text", []) if isinstance(answers, dict) else []
         for text in answer_texts:
             if text.strip():
                 rows.append({
                     "contract_title": title,
-                    "clause_type": clause_type,
-                    "clause_text": text.strip(),
-                    "context": context[:500],  # truncate for storage
+                    "clause_type":    question,   # full CUAD question string
+                    "clause_text":    text.strip(),
+                    "context":        context,    # full contract — no truncation
                 })
 
     clauses_df = pd.DataFrame(rows)
@@ -132,93 +114,6 @@ def expand_cuad_clauses(df: pd.DataFrame, out_dir: Path):
 
     clauses_df.to_parquet(out_file, index=False)
     print(f"[CUAD] Extracted {len(clauses_df)} clause spans to {out_file}")
-
-
-def download_ledgar():
-    """Download the LEDGAR dataset (from LexGLUE).
-
-    Source: coastalcph/lex_glue, config='ledgar'
-    Contract provision classification with 100 provision types.
-    """
-    out_dir = DATA_DIR / "legal_clauses"
-    out_file = out_dir / "ledgar.parquet"
-    if out_file.exists():
-        print(f"[LEDGAR] Already cached at {out_file}")
-        return
-
-    print("[LEDGAR] Downloading from HuggingFace...")
-    ds = load_dataset("coastalcph/lex_glue", "ledgar")
-
-    # Combine all splits
-    dfs = []
-    for split_name in ds:
-        split_df = ds[split_name].to_pandas()
-        split_df["split"] = split_name
-        dfs.append(split_df)
-
-    df = pd.concat(dfs, ignore_index=True)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_file, index=False)
-    print(f"[LEDGAR] Saved {len(df)} rows to {out_file}")
-
-
-def download_contract_nli():
-    """Download the ContractNLI dataset.
-
-    Source: kiddothe2b/contract-nli (zip file download, no custom script needed)
-    ~9.8k premise/hypothesis pairs with entailment/contradiction/neutral labels.
-    """
-    import zipfile
-
-    out_dir = DATA_DIR / "contractnli"
-    out_file = out_dir / "contractnli.parquet"
-    if out_file.exists():
-        print(f"[ContractNLI] Already cached at {out_file}")
-        return
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / "contract_nli.zip"
-
-    if not zip_path.exists():
-        print("[ContractNLI] Downloading zip from HuggingFace (kiddothe2b/contract-nli)...")
-        downloaded = hf_hub_download(
-            repo_id="kiddothe2b/contract-nli",
-            filename="contract_nli.zip",
-            repo_type="dataset",
-            local_dir=str(out_dir),
-        )
-        downloaded_path = Path(downloaded)
-        if downloaded_path != zip_path and downloaded_path.exists():
-            import shutil
-            shutil.copy2(downloaded_path, zip_path)
-    else:
-        print(f"[ContractNLI] Zip already cached at {zip_path}")
-
-    # Parse JSONL from zip
-    print("[ContractNLI] Parsing JSONL...")
-    rows = []
-    with zipfile.ZipFile(zip_path) as zf:
-        jsonl_files = [n for n in zf.namelist() if n.endswith(".jsonl")]
-        for fname in jsonl_files:
-            with zf.open(fname) as f:
-                import io
-                for line in io.TextIOWrapper(f, encoding="utf-8", errors="ignore"):
-                    line = line.strip()
-                    if line:
-                        try:
-                            rows.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
-
-    df = pd.DataFrame(rows)
-    # Rename 'subset' to 'split' if present
-    if "subset" in df.columns and "split" not in df.columns:
-        df = df.rename(columns={"subset": "split"})
-    # label is already a string ('entailment', 'contradiction', 'neutral')
-    df["label_name"] = df["label"].astype(str)
-
-    df.to_parquet(out_file, index=False)
-    print(f"[ContractNLI] Saved {len(df)} rows to {out_file}")
 
 
 def download_maud():
@@ -254,10 +149,6 @@ def main():
     print(f"Data directory: {DATA_DIR}\n")
 
     download_cuad()
-    print()
-    download_ledgar()
-    print()
-    download_contract_nli()
     print()
     download_maud()
 

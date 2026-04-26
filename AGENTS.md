@@ -15,22 +15,38 @@ Run `/init` to have Qwen populate them from the codebase if they are empty.
 
 **Current State**
 
-The active implementation is now the run-based architecture scaffold:
+The repo is not yet at the architecture in your diagram. It has useful scaffolding, but the live product path is still the old prototype:
 
-- Product architecture is `input/upload → Harvey RAG → Kira finds problems → Admin consensus → output`.
-- Active topology is `create_run → ingest_pdf → parse_ocr_normalize → clause_index → harvey_context_load → kira_review_block → admin_merge → awaiting_human_review → finalized`.
-- `final_review_block`, `harvey_review_block`, and `kira_context_load` are legacy-only. New runs must never enqueue them, and workers skip them.
-- Harvey is the RAG/evidence retrieval lane only.
-- Kira is the problem-finding lane.
-- Admin is merge-only. There are no admin/final reviewer agents in the active topology.
-- Harvey-only RAG is enforced at the service layer: Harvey can query pgvector RAG, Kira must use structured compliance corpora only.
-- Evidence schema is active: findings carry `contract_evidence[]` and `rag_citations[]`; Harvey citations must resolve to the run retrieval trace, and Kira findings must not contain RAG citations.
-- Tenant/workspace identity for RAG and run APIs should be derived from JWT membership, never request body.
-- Architecture docs live under `docs/`; update them after architecture changes.
+- Backend runtime is still one synchronous upload route in [contracts.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/routes/contracts.py), including `pdfplumber` extraction and hard truncation at [contracts.py:38](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/routes/contracts.py:38).
+- Frontend is still a simulated pipeline in [App.tsx](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/App.tsx) and [PipelineTracker.tsx](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/components/PipelineTracker.tsx:17), with polling at [App.tsx:62](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/frontend/src/App.tsx:62).
+- The good news is the provider boundary, typed schemas, DB session layer, ORM models, and reviewer scaffolding already exist in [base.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/providers/base.py), [google_provider.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/providers/google_provider.py), [schemas.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/models/schemas.py), [models.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/db/models.py), and [reviewer.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py).
 
-**Known Follow-Up Work**
+**What Is Still Required**
 
-- The new RAG ingestion/retrieval modules are functional scaffolding; pgvector ANN search and reranking still need production tuning.
-- Docker, CI, and evaluation workflows are present but need a real secrets/cloud setup before production use.
-- Full database migration execution was not run in this session.
-- Vite build can be blocked in the Codex sandbox by `esbuild` child process permissions; use `npx tsc -b` for type checking here.
+To finalize the architecture with Google now and local agents later, these are the remaining required pieces:
+
+- Build the real run-based API: `POST /api/runs`, `GET /api/runs/{id}`, SSE events, and human review submission. The current `/api/upload` path has to be replaced.
+- Add the actual orchestrator runtime: parser service, compliance repository, run service, event stream, state machine, worker, and admin agents.
+- Replace fake frontend flow with backend-driven state, run IDs, SSE subscription, real stage rendering, and a human review panel.
+- Unify the persistence contract. Right now [schemas.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/models/schemas.py), [models.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/db/models.py), and [0001_initial_architecture.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/alembic/versions/0001_initial_architecture.py) do not describe the same database shape.
+- Replace `pdfplumber`-first parsing with Docling + OCR fallback.
+- Update docs and config wiring. [app/README.md](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/README.md:20) still references Anthropic, and [main.py](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/main.py) still uses hardcoded CORS.
+
+**Critical Code Blockers**
+
+These should be fixed before deeper architecture work:
+
+- [contracts.py:5](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/routes/contracts.py:5) imports `review_contract`, but that function no longer exists.
+- [validator.py:18](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/validator.py:18) and [validator.py:24](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/validator.py:24) use inconsistent import paths.
+- Provider interface is async in [base.py:144](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/providers/base.py:144), but reviewer methods are sync in [reviewer.py:345](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py:345), [reviewer.py:405](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py:405), and [reviewer.py:464](/C:/Users/PinkPanther/PycharmProjects/Verdict/app/backend/agents/reviewer.py:464). That contract needs one direction.
+
+I updated [AGENTS.md](/C:/Users/PinkPanther/PycharmProjects/Verdict/AGENTS.md) to reflect the real repo state.
+
+**Clarifications I Need Before Implementing Phase 1**
+
+1. For Harvey, should conflict checking be only against prior versions of the same policy family, or against all tenant policies?
+2. For Kira, do you want only internal policy/playbook checks for phase 1, or internal + external compliance corpora now?
+3. After Admin, should the final 3 reviewers review only merged findings, or also be allowed to introduce brand-new findings?
+4. When the final local system replaces Google, do you want one local model behind role prompts, or separate fine-tuned models per role?
+
+I did not run the full app or DB migrations. I only inspected code and did a syntax-level parse pass.

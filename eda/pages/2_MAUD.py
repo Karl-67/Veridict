@@ -1,5 +1,6 @@
 """MAUD (Merger Agreement Understanding Dataset) EDA Dashboard."""
 
+import html as _html
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -412,3 +413,123 @@ CUAD and LEDGAR have limited M&A-specific content. MAUD is the only dataset in t
 - No-shop / go-shop deal protection
 - Conditions precedent in acquisition agreements
 """)
+
+# ── Section 11: Contract Explorer ───────────────────────────────────────────
+
+st.header("11. Contract Explorer")
+st.markdown("Select a merger agreement and browse all its annotated deal-point Q&A pairs.")
+
+all_contracts = sorted(df["contract_name"].unique())
+selected_contract = st.selectbox("Choose a contract", all_contracts, key="maud_contract")
+
+contract_rows = df[df["contract_name"] == selected_contract].copy()
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Total Q&A rows", len(contract_rows))
+col2.metric("Unique passages", contract_rows["text"].nunique())
+col3.metric("Categories covered", contract_rows["category"].nunique() if "category" in contract_rows.columns else "—")
+
+# Category filter
+cat_filter = st.multiselect(
+    "Filter by category",
+    options=sorted(contract_rows["category"].unique()) if "category" in contract_rows.columns else [],
+    default=sorted(contract_rows["category"].unique()) if "category" in contract_rows.columns else [],
+    key="maud_cat_filter",
+)
+if cat_filter:
+    contract_rows = contract_rows[contract_rows["category"].isin(cat_filter)]
+
+# Show the Q&A table
+show_cols = [c for c in ["category", "text_type", "question", "answer", "split"] if c in contract_rows.columns]
+st.dataframe(contract_rows[show_cols].reset_index(drop=True), use_container_width=True, height=280)
+
+# Expandable passage cards
+st.subheader("Passage Cards")
+st.caption("Each card shows the contract passage with its deal-point question and expert answer.")
+
+n_cards = st.slider("Cards to show", 3, 20, 5, key="maud_cards")
+card_rows = contract_rows.sample(min(n_cards, len(contract_rows)), random_state=42) if len(contract_rows) > 0 else contract_rows.head(0)
+
+CAT_COLORS = {
+    "Material Adverse Effect": "#e74c3c",
+    "Deal Protection and Related Provisions": "#3498db",
+    "Conditions to Closing": "#2ecc71",
+    "Operating and Efforts Covenant": "#f39c12",
+    "Knowledge": "#9b59b6",
+    "General Information": "#1abc9c",
+    "Remedies": "#e67e22",
+}
+
+for i, (_, row) in enumerate(card_rows.iterrows(), 1):
+    cat = str(row.get("category", ""))
+    border = CAT_COLORS.get(cat, "#aaa")
+    q = str(row.get("question", row.get("text_type", "")))
+    a = str(row.get("answer", ""))
+    with st.expander(f"#{i}  {q[:80]}  →  **{a}**", expanded=(i == 1)):
+        st.markdown(
+            f'<div style="background:#fafafa;border-left:5px solid {border};'
+            f'padding:10px 14px;border-radius:4px;font-size:0.83rem;'
+            f'white-space:pre-wrap;font-family:monospace;max-height:300px;overflow-y:auto;color:#1a1a1a">'
+            f'{_html.escape(str(row["text"]))}</div>',
+            unsafe_allow_html=True,
+        )
+        col_a, col_b, col_c = st.columns(3)
+        col_a.markdown(f"**Category:** {cat}")
+        col_b.markdown(f"**Answer:** `{a}`")
+        col_c.markdown(f"**Words:** {row.get('word_count', '—')}")
+
+# ── Section 12: Deal-Point Question Browser ──────────────────────────────────
+
+st.header("12. Deal-Point Question Browser")
+st.markdown("Pick a deal-point question type and browse sample passages and answers across all contracts.")
+
+all_text_types = sorted(df["text_type"].unique()) if "text_type" in df.columns else []
+selected_tt = st.selectbox("Question type (text_type)", all_text_types, key="maud_tt")
+
+tt_rows = df[df["text_type"] == selected_tt].copy() if "text_type" in df.columns else df.head(0)
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total rows", len(tt_rows))
+col2.metric("Unique contracts", tt_rows["contract_name"].nunique())
+col3.metric("Unique answers", tt_rows["answer"].nunique() if "answer" in tt_rows.columns else "—")
+col4.metric("Avg word count", f"{tt_rows['word_count'].mean():.0f}" if "word_count" in tt_rows.columns else "—")
+
+# Answer distribution for this question type
+if "answer" in tt_rows.columns:
+    ans_dist = tt_rows["answer"].value_counts().reset_index()
+    ans_dist.columns = ["Answer", "Count"]
+    fig_ans = px.bar(
+        ans_dist.head(15),
+        x="Count",
+        y="Answer",
+        orientation="h",
+        title=f'Answer distribution — "{selected_tt}"',
+        color="Count",
+        color_continuous_scale="Purples",
+    )
+    fig_ans.update_layout(height=max(300, min(15, len(ans_dist)) * 30), yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig_ans, use_container_width=True)
+
+# Sample passage cards
+n_tt = st.slider("Samples to show", 3, 20, 5, key="maud_tt_n")
+answer_filter = st.selectbox(
+    "Filter by answer (optional)",
+    ["(all)"] + sorted(tt_rows["answer"].unique().tolist()) if "answer" in tt_rows.columns else ["(all)"],
+    key="maud_ans_filter",
+)
+tt_filtered = tt_rows if answer_filter == "(all)" else tt_rows[tt_rows["answer"] == answer_filter]
+
+sample_tt = tt_filtered.sample(min(n_tt, len(tt_filtered)), random_state=42) if len(tt_filtered) > 0 else tt_filtered.head(0)
+
+for i, (_, row) in enumerate(sample_tt.iterrows(), 1):
+    a = str(row.get("answer", ""))
+    contract = str(row.get("contract_name", ""))
+    with st.expander(f"#{i}  {contract}  →  **{a}**", expanded=(i == 1)):
+        st.markdown(
+            f'<div style="background:#f8f0ff;border-left:5px solid #9b59b6;'
+            f'padding:10px 14px;border-radius:4px;font-size:0.83rem;'
+            f'white-space:pre-wrap;font-family:monospace;max-height:300px;overflow-y:auto;color:#1a1a1a">'
+            f'{_html.escape(str(row["text"]))}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(f"Contract: {contract}  |  Answer: {a}  |  Words: {row.get('word_count', '—')}")
