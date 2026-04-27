@@ -29,25 +29,23 @@ from app.backend.models.schemas import (
     StageStatus,
 )
 
-# Active stage topology.
-# Tuples of (stage_name, stage_order). Same stage_order = parallel — both claimable
-# once all lower-order stages are complete. With two workers they run simultaneously;
-# with one worker they run sequentially but neither blocks the other from being claimed.
-STAGE_SEQUENCE: list[tuple[str, int]] = [
-    ("create_run", 1),
-    ("ingest_pdf", 2),
-    ("parse_ocr_normalize", 3),
-    ("clause_index", 4),
-    ("harvey_context_load", 5),
-    ("harvey_review_block", 6),  # parallel with kira_review_block
-    ("kira_review_block", 6),    # parallel with harvey_review_block
-    ("admin_merge", 7),
-    ("awaiting_human_review", 8),
-    ("finalized", 9),
+# Active stage topology for new runs.
+STAGE_SEQUENCE: list[str] = [
+    "create_run",
+    "ingest_pdf",
+    "parse_ocr_normalize",
+    "clause_index",
+    "harvey_context_load",
+    "kira_review_block",
+    "admin_merge",
+    "awaiting_human_review",
+    "finalized",
 ]
 
+_STAGE_ORDER: dict[str, int] = {stage_name: index for index, stage_name in enumerate(STAGE_SEQUENCE, start=1)}
+
 # Stages that exist only in legacy runs and must never be re-enqueued.
-_LEGACY_STAGES = frozenset({"final_review_block", "kira_context_load"})
+_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
 
 
 def _parse_effective_date(value: str | None):
@@ -392,12 +390,12 @@ async def create_run(
     session.add(run)
     await session.flush()
 
-    for stage_name, stage_order in STAGE_SEQUENCE:
+    for stage_name in STAGE_SEQUENCE:
         session.add(
             StageExecutionRecord(
                 run_id=run.id,
                 stage_name=stage_name,
-                stage_order=stage_order,
+                stage_order=_STAGE_ORDER[stage_name],
                 round_number=1,
                 attempt_number=1,
                 status="pending",
