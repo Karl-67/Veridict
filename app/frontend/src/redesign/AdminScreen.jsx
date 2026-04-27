@@ -27,6 +27,8 @@ function AdminScreen() {
   const [users, setUsers]     = React.useState([]);
   const [workspaces, setWorkspaces] = React.useState([]);
   const [selectedWs, setSel]  = React.useState(null);
+  const [wsMembers, setWsMembers] = React.useState([]);
+  const [wsMembersLoading, setWsMembersLoading] = React.useState(false);
   const [invites, setInvites] = React.useState([]);
   const [adminLoading, setAdminLoading] = React.useState(true);
   const [inviteEmail, setInviteEmail] = React.useState("");
@@ -34,6 +36,10 @@ function AdminScreen() {
   const [inviteLink, setInviteLink]   = React.useState(null);
   const [copied, setCopied]           = React.useState(false);
   const [newWsName, setNewWsName]     = React.useState("");
+  const [newWsDesc, setNewWsDesc]     = React.useState("");
+  const [wsCreateOpen, setWsCreateOpen] = React.useState(false);
+  const [wsCreating, setWsCreating]   = React.useState(false);
+  const [wsError, setWsError]         = React.useState(null);
   const [ragDocs, setRagDocs]         = React.useState([]);
   const [ragLoading, setRagLoading]   = React.useState(false);
   const [ragUploading, setRagUploading] = React.useState(false);
@@ -76,6 +82,107 @@ function AdminScreen() {
 
   React.useEffect(() => { loadAdmin(); }, [loadAdmin]);
 
+  const loadWorkspaceMembers = React.useCallback((workspaceId) => {
+    if (!workspaceId) return Promise.resolve([]);
+    setWsMembersLoading(true);
+    return window.verdictApi.adminGet(`/admin/workspaces/${workspaceId}/members`)
+      .then(rows => {
+        const members = rows ?? [];
+        setWsMembers(members.map(row => ({
+          id: row.user_id,
+          name: row.display_name,
+          email: row.email,
+          jobTitle: row.job_title,
+          dept: row.department,
+          color: row.avatar_color,
+          role: row.role,
+        })));
+        return members;
+      })
+      .catch(err => {
+        setWsError(err?.message || "Failed to load workspace members");
+        setWsMembers([]);
+        return [];
+      })
+      .finally(() => setWsMembersLoading(false));
+  }, []);
+
+  function openWorkspace(ws) {
+    setWsError(null);
+    setWsCreateOpen(false);
+    setSel(ws);
+    loadWorkspaceMembers(ws.id);
+  }
+
+  function openCreateWorkspace() {
+    setSel(null);
+    setWsError(null);
+    setWsCreateOpen(true);
+    window.requestAnimationFrame(() => document.getElementById("new-workspace-name")?.focus());
+  }
+
+  function closeCreateWorkspace() {
+    setWsCreateOpen(false);
+    setWsError(null);
+    setNewWsName("");
+    setNewWsDesc("");
+  }
+
+  async function createWorkspace(e) {
+    e?.preventDefault?.();
+    const name = newWsName.trim();
+    if (!name || wsCreating) {
+      setWsError("Workspace name is required");
+      return;
+    }
+    setWsCreating(true);
+    setWsError(null);
+    try {
+      const created = await window.verdictApi.adminSend("POST", "/admin/workspaces", {
+        name,
+        description: newWsDesc.trim() || null,
+      });
+      const createdWs = {
+        id: created.workspace_id,
+        name: created.name,
+        desc: created.description,
+        memberCount: created.member_count ?? 1,
+      };
+      setWorkspaces(prev => [...prev, createdWs]);
+      setNewWsName("");
+      setNewWsDesc("");
+      setWsCreateOpen(false);
+      setSel(createdWs);
+      loadWorkspaceMembers(createdWs.id);
+      loadAdmin();
+    } catch (err) {
+      setWsError(err?.message || "Failed to create workspace");
+    } finally {
+      setWsCreating(false);
+    }
+  }
+
+  async function changeWorkspaceMemberRole(userId, role) {
+    if (!selectedWs) return;
+    await window.verdictApi.adminSend("PATCH", `/admin/workspaces/${selectedWs.id}/members/${userId}`, { role });
+    loadWorkspaceMembers(selectedWs.id);
+    loadAdmin();
+  }
+
+  async function removeWorkspaceMember(userId) {
+    if (!selectedWs) return;
+    await window.verdictApi.adminSend("DELETE", `/admin/workspaces/${selectedWs.id}/members/${userId}`);
+    loadWorkspaceMembers(selectedWs.id);
+    loadAdmin();
+  }
+
+  async function addWorkspaceMember(userId) {
+    if (!selectedWs) return;
+    await window.verdictApi.adminSend("POST", `/admin/workspaces/${selectedWs.id}/members`, { user_id: userId, role: "reviewer" });
+    loadWorkspaceMembers(selectedWs.id);
+    loadAdmin();
+  }
+
   const loadRag = React.useCallback(() => {
     setRagLoading(true);
     window.verdictApi.listRagDocuments()
@@ -107,11 +214,12 @@ function AdminScreen() {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
     try {
+      const isOrgAdminInvite = inviteRole === "org_admin";
       const created = await window.verdictApi.adminSend("POST", "/admin/invites", {
         email: inviteEmail,
-        org_role: "member",
-        workspace_id: workspaces[0]?.id ?? null,
-        workspace_role: inviteRole,
+        org_role: isOrgAdminInvite ? "org_admin" : "member",
+        workspace_id: isOrgAdminInvite ? null : (workspaces[0]?.id ?? null),
+        workspace_role: isOrgAdminInvite ? "reviewer" : inviteRole,
       });
       const linkData = await window.verdictApi.adminGet(`/admin/invites/${created.invite_id}/link`);
       setInviteLink(`${window.location.origin}${linkData.link}`);
@@ -153,7 +261,7 @@ function AdminScreen() {
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", marginBottom: 40 }}>
         {tabs.map(t => (
-          <button key={t.key} onClick={() => { setTab(t.key); setSel(null); }}
+          <button key={t.key} onClick={() => { setTab(t.key); setSel(null); setWsCreateOpen(false); }}
             style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 13, fontWeight: 500, color: tab === t.key ? "var(--text)" : "var(--text-2)", background: "none", border: "none", borderBottom: tab === t.key ? "2px solid var(--text)" : "2px solid transparent", marginBottom: -1, cursor: "pointer", transition: "all 0.15s" }}>
             {t.label}
             <span style={{ fontSize: 10.5, color: "var(--text-3)", background: "var(--border-light)", padding: "1px 6px", borderRadius: 8 }}>{adminLoading && tab !== "rag" ? "…" : t.count}</span>
@@ -192,27 +300,18 @@ function AdminScreen() {
       )}
 
       {/* ── Workspaces list ── */}
-      {tab === "workspaces" && !selectedWs && (
+      {tab === "workspaces" && !selectedWs && !wsCreateOpen && (
         <div style={{ animation: "fadeIn 0.2s ease" }}>
-          <div style={{ display: "flex", gap: 10, marginBottom: 32 }}>
-            <input value={newWsName} onChange={e => setNewWsName(e.target.value)} placeholder="New workspace name…"
-              style={{ ...input, flex: 1 }}
-              onFocus={e => e.target.style.borderColor = "var(--text-2)"}
-              onBlur={e => e.target.style.borderColor = "var(--border)"} />
-            <button onClick={async () => {
-              if (!newWsName.trim()) return;
-              await window.verdictApi.adminSend("POST", "/admin/workspaces", { name: newWsName, description: null }).catch(() => {});
-              setNewWsName("");
-              loadAdmin();
-            }} style={{ padding: "9px 18px", borderRadius: 7, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}>
-              <IconPlus size={11} />Create
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 28 }}>
+            <button onClick={openCreateWorkspace} style={{ padding: "9px 18px", borderRadius: 7, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}>
+              <IconPlus size={11} />Create workspace
             </button>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 28px", gap: "0 16px", padding: "0 0 11px", borderBottom: "1px solid var(--border)" }}>
             {["Workspace", "Members", ""].map(h => <span key={h} style={colLabel}>{h}</span>)}
           </div>
           {workspaces.map((ws, i) => (
-            <div key={ws.id} onClick={() => setSel(ws)}
+            <div key={ws.id} onClick={() => openWorkspace(ws)}
               style={{ display: "grid", gridTemplateColumns: "1fr 100px 28px", gap: "0 16px", padding: "15px 10px", borderBottom: "1px solid var(--border-light)", cursor: "pointer", transition: "background 0.1s", alignItems: "center", animation: `fadeIn 0.25s ${i * 0.06}s both` }}
               onMouseEnter={e => e.currentTarget.style.background = "var(--hover-bg)"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
@@ -227,6 +326,37 @@ function AdminScreen() {
         </div>
       )}
 
+      {/* ── Create workspace ── */}
+      {tab === "workspaces" && !selectedWs && wsCreateOpen && (
+        <div style={{ animation: "fadeIn 0.2s ease", maxWidth: 760 }}>
+          <button onClick={closeCreateWorkspace} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-2)", marginBottom: 28, border: "none", background: "none", cursor: "pointer", transition: "color 0.12s" }}
+            onMouseEnter={e => e.currentTarget.style.color = "var(--text)"}
+            onMouseLeave={e => e.currentTarget.style.color = "var(--text-2)"}>
+            <IconArrowLeft />All Workspaces
+          </button>
+          <h2 style={{ fontFamily: "var(--h-font)", fontSize: 28, fontWeight: 700, color: "var(--text)", marginBottom: 28 }}>Create workspace</h2>
+          <form onSubmit={createWorkspace}>
+            <label style={{ display: "block", ...colLabel, marginBottom: 8 }} htmlFor="new-workspace-name">Workspace name</label>
+            <input id="new-workspace-name" value={newWsName} onChange={e => { setNewWsName(e.target.value); setWsError(null); }} placeholder="e.g. M&A Q2 2026"
+              style={{ ...input, width: "100%", marginBottom: 18 }}
+              onFocus={e => e.target.style.borderColor = "var(--text-2)"}
+              onBlur={e => e.target.style.borderColor = "var(--border)"} />
+            <label style={{ display: "block", ...colLabel, marginBottom: 8 }} htmlFor="new-workspace-desc">Description</label>
+            <input id="new-workspace-desc" value={newWsDesc} onChange={e => setNewWsDesc(e.target.value)} placeholder="Optional"
+              style={{ ...input, width: "100%", marginBottom: wsError ? 8 : 26 }}
+              onFocus={e => e.target.style.borderColor = "var(--text-2)"}
+              onBlur={e => e.target.style.borderColor = "var(--border)"} />
+            {wsError && <p style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 22 }}>{wsError}</p>}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="submit" disabled={wsCreating} style={{ padding: "9px 18px", borderRadius: 7, background: wsCreating ? "var(--border-light)" : "var(--text)", color: wsCreating ? "var(--text-3)" : "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: wsCreating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 7, opacity: wsCreating ? 0.7 : 1 }}>
+                <IconPlus size={11} />{wsCreating ? "Creating..." : "Create"}
+              </button>
+              <button type="button" onClick={closeCreateWorkspace} style={{ padding: "9px 14px", borderRadius: 7, border: "1px solid var(--border)", background: "transparent", color: "var(--text-2)", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* ── Workspace detail ── */}
       {tab === "workspaces" && selectedWs && (
         <div style={{ animation: "fadeIn 0.2s ease" }}>
@@ -236,10 +366,12 @@ function AdminScreen() {
             <IconArrowLeft />All Workspaces
           </button>
           <h2 style={{ fontFamily: "var(--h-font)", fontSize: 28, fontWeight: 700, color: "var(--text)", marginBottom: 32 }}>{selectedWs.name}</h2>
+          {wsError && <p style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 18 }}>{wsError}</p>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 140px 80px", gap: "0 16px", padding: "0 0 11px", borderBottom: "1px solid var(--border)" }}>
             {["Member", "Role", ""].map(h => <span key={h} style={colLabel}>{h}</span>)}
           </div>
-          {users.slice(0, selectedWs.memberCount).map((u, i) => (
+          {wsMembersLoading && <p style={{ fontSize: 13, color: "var(--text-3)", padding: "20px 0" }}>Loading members…</p>}
+          {!wsMembersLoading && wsMembers.map((u, i) => (
             <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 140px 80px", gap: "0 16px", padding: "13px 0", borderBottom: "1px solid var(--border-light)", alignItems: "center" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ width: 26, height: 26, borderRadius: "50%", background: u.color, color: "white", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ini(u.name)}</span>
@@ -248,19 +380,21 @@ function AdminScreen() {
                   <p style={{ fontSize: 11, color: "var(--text-3)" }}>{u.jobTitle}</p>
                 </div>
               </div>
-              <select style={{ ...input, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}>
-                {["Reviewer", "Viewer", "Workspace Admin"].map(r => <option key={r}>{r}</option>)}
+              <select value={u.role} onChange={e => changeWorkspaceMemberRole(u.id, e.target.value)} style={{ ...input, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}>
+                <option value="reviewer">Reviewer</option>
+                <option value="viewer">Viewer</option>
+                <option value="workspace_admin">Workspace Admin</option>
               </select>
               <div style={{ textAlign: "right" }}>
-                <button style={{ ...ghostBtn, fontSize: 11 }} onMouseEnter={e => e.currentTarget.style.color = "var(--risk-high)"} onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>Remove</button>
+                <button onClick={() => removeWorkspaceMember(u.id)} style={{ ...ghostBtn, fontSize: 11 }} onMouseEnter={e => e.currentTarget.style.color = "var(--risk-high)"} onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>Remove</button>
               </div>
             </div>
           ))}
           <div style={{ marginTop: 24 }}>
             <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 12 }}>Add Member</p>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {users.slice(selectedWs.memberCount).map(u => (
-                <button key={u.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)", background: "none", cursor: "pointer", transition: "all 0.12s" }}
+              {users.filter(u => !wsMembers.some(m => m.id === u.id)).map(u => (
+                <button key={u.id} onClick={() => addWorkspaceMember(u.id)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)", background: "none", cursor: "pointer", transition: "all 0.12s" }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--text-3)"; e.currentTarget.style.color = "var(--text)"; }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-2)"; }}>
                   <span style={{ width: 18, height: 18, borderRadius: "50%", background: u.color, color: "white", fontSize: 8, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{ini(u.name)}</span>
@@ -268,6 +402,9 @@ function AdminScreen() {
                   <IconPlus size={10} />
                 </button>
               ))}
+              {!wsMembersLoading && users.filter(u => !wsMembers.some(m => m.id === u.id)).length === 0 && (
+                <p style={{ fontSize: 12, color: "var(--text-3)" }}>All organisation members are already in this workspace.</p>
+              )}
             </div>
           </div>
         </div>

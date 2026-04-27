@@ -121,7 +121,7 @@ function IconMoon({ size = 14 }) {
   return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M13.5 9.5A6 6 0 016.5 2.5 6 6 0 1013.5 9.5z"/></svg>;
 }
 function IconSettings({ size = 14 }) {
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>;
+  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="2"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.4 1.4M11.55 11.55l1.4 1.4M3.05 12.95l1.4-1.4M11.55 4.45l1.4-1.4"/></svg>;
 }
 function IconChevronDown({ size = 14 }) {
   return <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 5l5 5 5-5"/></svg>;
@@ -134,38 +134,7 @@ function IconCheck({ size = 14 }) {
 
 function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme, onLogout }) {
   const [notifOpen, setNotifOpen] = React.useState(false);
-  const [notifs, setNotifs]       = React.useState([]);
   const notifRef = React.useRef(null);
-  const user = window.verdictApi.currentUser();
-
-  React.useEffect(() => {
-    window.verdictApi.listHistory(50).then(rows => {
-      const pending = rows
-        .filter(r => r.state === "awaiting_human_review")
-        .slice(0, 8)
-        .map(r => ({
-          t: `${r.contract_name} requires sign-off`,
-          b: `${r.workspace_name ?? "Workspace"} · ${r.version_label ?? ""}`,
-          c: "var(--accent)",
-          ago: r.updated_at,
-          contractId: r.contract_id,
-          runId: r.run_id,
-        }));
-      const recent = rows
-        .filter(r => r.state === "finalized" && r.human_action)
-        .slice(0, 4)
-        .map(r => ({
-          t: `${r.contract_name} analysis complete`,
-          b: `${r.human_action === "approved" ? "Approved" : "Rejected"} · ${r.risk_level ? r.risk_level + " risk" : ""}`,
-          c: r.human_action === "approved" ? "var(--risk-low)" : "var(--risk-high)",
-          ago: r.updated_at,
-          contractId: r.contract_id,
-          runId: r.run_id,
-        }));
-      setNotifs([...pending, ...recent].slice(0, 8));
-    }).catch(() => {});
-  }, []);
-  const initials = (user?.display_name || "User").split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase();
 
   React.useEffect(() => {
     function handler(e) {
@@ -216,28 +185,25 @@ function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme,
           </button>
 
           <div style={{ position: "relative" }} ref={notifRef}>
-            <button {...iconBtn(() => setNotifOpen(v => !v), null, notifOpen, "Notifications")} style={{ ...iconBtn(() => {}).style, position: "relative" }}>
+            <button {...iconBtn(() => setNotifOpen(v => !v), null, false, "Notifications")} style={{ ...iconBtn(() => {}).style, position: "relative" }}>
               <IconBell />
-              {notifs.filter(n => n.c === "var(--accent)").length > 0 && (
-                <span style={{ position: "absolute", top: 6, right: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", border: "2px solid var(--bg)" }} />
-              )}
+              <span style={{ position: "absolute", top: 7, right: 7, width: 5, height: 5, borderRadius: "50%", background: "var(--accent)" }} />
             </button>
             {notifOpen && (
-              <div style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 320, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.12)", overflow: "hidden", zIndex: 60 }}>
+              <div style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", width: 300, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.12)", overflow: "hidden", zIndex: 60 }}>
                 <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)" }}>
                   <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)" }}>Notifications</p>
                 </div>
-                {notifs.length === 0 ? (
-                  <div style={{ padding: "24px 16px", textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>No notifications</div>
-                ) : notifs.map((n, i) => (
-                  <div key={i} onClick={() => { onNavigate("contract_detail", n.contractId); setNotifOpen(false); }} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-light)", cursor: "pointer", display: "flex", gap: 10, alignItems: "flex-start", transition: "background 0.1s" }}
+                {[{ t: "NDA — TechVentures LLC requires sign-off", b: "Analysis complete · Medium risk", c: "var(--accent)", ago: "2h ago" },
+                  { t: "MSA — Acme Corp analysis complete", b: "Finalized · High risk flagged", c: "var(--risk-low)", ago: "1d ago" }].map((n, i) => (
+                  <div key={i} onClick={() => { onNavigate("contract_detail", i + 1); setNotifOpen(false); }} style={{ padding: "12px 16px", borderBottom: "1px solid var(--border-light)", cursor: "pointer", display: "flex", gap: 10, transition: "background 0.1s" }}
                     onMouseEnter={e => e.currentTarget.style.background = "var(--hover-bg)"}
                     onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: n.c, flexShrink: 0, marginTop: 5 }} />
-                    <div style={{ minWidth: 0 }}>
-                      <p style={{ fontSize: 12, fontWeight: 500, color: "var(--text)", lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.t}</p>
-                      <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>{n.b} · {timeAgo(n.ago)}</p>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: n.c, flexShrink: 0, marginTop: 4 }} />
+                    <div>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: "var(--text)", lineHeight: 1.4 }}>{n.t}</p>
+                      <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>{n.b} · {n.ago}</p>
                     </div>
                   </div>
                 ))}
@@ -248,7 +214,7 @@ function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme,
           <button {...iconBtn(onToggleTheme, null, false, isDark ? "Light mode" : "Dark mode")}>{isDark ? <IconSun /> : <IconMoon />}</button>
           <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 4px" }} />
           <button {...iconBtn(onAdmin, null, screen === "admin", "Admin")}><IconSettings /></button>
-          <button onClick={onProfile} title="Profile" style={{ width: 28, height: 28, borderRadius: "50%", background: user?.avatar_color || "var(--accent)", color: "white", fontSize: 10, fontWeight: 700, border: screen === "profile" ? "2px solid var(--accent)" : "2px solid transparent", outline: screen === "profile" ? "2px solid var(--bg)" : "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s", flexShrink: 0 }}>{initials}</button>
+          <button onClick={onProfile} title="Profile" style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--accent)", color: "white", fontSize: 10, fontWeight: 700, border: screen === "profile" ? "2px solid var(--accent)" : "2px solid transparent", outline: screen === "profile" ? "2px solid var(--bg)" : "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s", flexShrink: 0 }}>SJ</button>
           <button onClick={onLogout} title="Sign out" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, color: "var(--text-3)", background: "transparent", cursor: "pointer", transition: "all 0.12s", border: "none" }}
             onMouseEnter={e => { e.currentTarget.style.background = "var(--hover-bg)"; e.currentTarget.style.color = "var(--risk-high)"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "var(--text-3)"; }}>
@@ -290,11 +256,9 @@ function App() {
     document.documentElement.style.setProperty("--h-font", serifHeaders ? "var(--font-serif)" : "var(--font-sans)");
   }, [isDark, accent, density, serifHeaders]);
 
-  const [loggedIn, setLoggedIn] = React.useState(() => Boolean(window.verdictApi.currentUser()));
+  const [loggedIn, setLoggedIn] = React.useState(false);
   const [screen, setScreen] = React.useState("dashboard");
   const [selectedContractId, setSelectedContractId] = React.useState(null);
-  const [selectedRunId, setSelectedRunId] = React.useState(null);
-  const [pendingError, setPendingError] = React.useState(null);
   const [fileName, setFileName] = React.useState("");
   const [processingStage, setProcessingStage] = React.useState(0);
   const [tweakPanelVisible, setTweakPanelVisible] = React.useState(false);
@@ -325,52 +289,24 @@ function App() {
     return () => clearInterval(t);
   }, [screen]);
 
-  function navigate(s, id = null, runId = null) {
+  function navigate(s, id = null) {
     setSelectedContractId(id);
-    setSelectedRunId(runId);
     setScreen(s);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingStage, pendingError };
+  const screenProps = { screen, navigate, selectedContractId, fileName, processingStage };
 
   if (!loggedIn) return <AuthScreen onLogin={() => setLoggedIn(true)} />;
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", transition: "background 0.3s, color 0.3s" }}>
-      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={async () => { await window.verdictApi.logout(); setLoggedIn(false); }} />
+      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={() => setLoggedIn(false)} />
 
       <main style={{ flex: 1, maxWidth: 1400, margin: "0 auto", width: "100%", padding: "0 52px" }}>
         {screen === "dashboard"        && <DashboardScreen {...screenProps} />}
-        {screen === "contract_detail"  && <ContractDetailScreen {...screenProps} onViewRun={(runId) => navigate("verdict", selectedContractId, runId)} onAddVersion={async (file) => {
-          if (!selectedContractId || !file) return;
-          setFileName(file.name);
-          setPendingError(null);
-          navigate("processing");
-          try {
-            const result = await window.verdictApi.addContractVersion(selectedContractId, file);
-            setTimeout(() => navigate("contract_detail", result.contract_id), 600);
-          } catch (err) {
-            setPendingError(err.message || "Upload failed");
-            navigate("processing");
-          }
-        }} />}
-        {screen === "new_contract"     && <NewContractScreen {...screenProps} onSubmit={async (name, file) => {
-          setFileName(file?.name ?? name + ".pdf");
-          setPendingError(null);
-          navigate("processing");
-          try {
-            const workspaces = await window.verdictApi.listWorkspaces();
-            const workspaceId = workspaces[0]?.workspace_id;
-            if (!workspaceId) throw new Error("No workspace is available for this account.");
-            const contract = await window.verdictApi.createContract(name, workspaceId);
-            await window.verdictApi.addContractVersion(contract.id, file);
-            setTimeout(() => navigate("contract_detail", contract.id), 600);
-          } catch (err) {
-            setPendingError(err.message || "Upload failed");
-            navigate("processing");
-          }
-        }} />}
+        {screen === "contract_detail"  && <ContractDetailScreen {...screenProps} onViewRun={() => navigate("verdict")} onAddVersion={() => { setFileName("Contract_v" + (Date.now() % 9 + 2) + ".pdf"); navigate("processing"); }} />}
+        {screen === "new_contract"     && <NewContractScreen {...screenProps} onSubmit={(name, file) => { setFileName(file?.name ?? name + ".pdf"); navigate("processing"); }} />}
         {screen === "processing"       && <ProcessingScreen {...screenProps} />}
         {screen === "verdict"          && <VerdictScreen {...screenProps} onApprove={() => navigate("contract_detail", selectedContractId ?? 2)} onReject={() => navigate("contract_detail", selectedContractId ?? 2)} />}
         {screen === "history" && <HistoryScreen {...screenProps} />}

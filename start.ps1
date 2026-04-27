@@ -35,6 +35,18 @@ function Wait-ForHttp {
 $backendReady = $false
 $frontendReady = $NoFrontend
 
+# Kill any leftover process on a port so we can bind cleanly
+function Clear-Port {
+    param([int]$Port)
+    $hits = netstat -ano 2>$null | Select-String ":$Port\s.*LISTENING"
+    foreach ($line in $hits) {
+        $pid = ($line.Line.Trim() -split '\s+')[-1]
+        if ($pid -match '^\d+$' -and [int]$pid -gt 0) {
+            Stop-Process -Id ([int]$pid) -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # ── 1. PostgreSQL ─────────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -54,27 +66,17 @@ if ($LASTEXITCODE -eq 0) {
 
 Write-Host ""
 Write-Yellow "── Backend (uvicorn :8000) ─────────────────────────────────────"
-try {
-    $null = Invoke-WebRequest -Uri "http://localhost:8000/api/health" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
-    Write-Green "✓ Backend already running"
-} catch {
-    $backendLog = "$LogDir\backend.log"
-    $backendProc = Start-Process -FilePath "cmd.exe" `
-        -ArgumentList "/c", "python -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000 --env-file app/backend/.env --no-access-log >> `"$backendLog`" 2>&1" `
-        -WorkingDirectory $ProjectRoot `
-        -PassThru -NoNewWindow
-    $backendProc.Id | Set-Content "$LogDir\backend.pid"
-    $backendReady = Wait-ForHttp -Url "http://127.0.0.1:8000/api/health" -Label "Backend"
-    if (-not $backendReady) {
-        Write-Yellow "  Last backend log lines:"
-        Get-Content -Path $backendLog -Tail 25 -ErrorAction SilentlyContinue
-    }
-}
+Clear-Port -Port 8000
+$backendLog = "$LogDir\backend.log"
+$backendProc = Start-Process -FilePath "cmd.exe" `
+    -ArgumentList "/c", "python -m uvicorn app.backend.main:app --host 127.0.0.1 --port 8000 --env-file app/backend/.env --no-access-log >> `"$backendLog`" 2>&1" `
+    -WorkingDirectory $ProjectRoot `
+    -PassThru -NoNewWindow
+$backendProc.Id | Set-Content "$LogDir\backend.pid"
+$backendReady = Wait-ForHttp -Url "http://127.0.0.1:8000/api/health" -Label "Backend"
 if (-not $backendReady) {
-    try {
-        $null = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
-        $backendReady = $true
-    } catch {}
+    Write-Yellow "  Last backend log lines:"
+    Get-Content -Path $backendLog -Tail 25 -ErrorAction SilentlyContinue
 }
 
 # ── 3. Worker ────────────────────────────────────────────────────────────────
@@ -94,23 +96,18 @@ Write-Green "✓ Worker started (PID $($workerProc.Id))"
 if (-not $NoFrontend) {
     Write-Host ""
     Write-Yellow "── Frontend (Vite :5173) ───────────────────────────────────────"
-    try {
-        $null = Invoke-WebRequest -Uri "http://127.0.0.1:5173" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
-        Write-Green "✓ Frontend already running"
-        $frontendReady = $true
-    } catch {
-        $frontendLog = "$LogDir\frontend.log"
-        "" | Set-Content $frontendLog
-        $frontendProc = Start-Process -FilePath "cmd.exe" `
-            -ArgumentList "/c", "cd /d `"$ProjectRoot\app\frontend`" && .\node_modules\.bin\vite.cmd --host 127.0.0.1 --port 5173 >> `"$frontendLog`" 2>&1" `
-            -WorkingDirectory "$ProjectRoot\app\frontend" `
-            -PassThru -NoNewWindow
-        $frontendProc.Id | Set-Content "$LogDir\frontend.pid"
-        $frontendReady = Wait-ForHttp -Url "http://127.0.0.1:5173" -Label "Frontend"
-        if (-not $frontendReady) {
-            Write-Yellow "  Last frontend log lines:"
-            Get-Content -Path $frontendLog -Tail 25 -ErrorAction SilentlyContinue
-        }
+    Clear-Port -Port 5173
+    $frontendLog = "$LogDir\frontend.log"
+    "" | Set-Content $frontendLog
+    $frontendProc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList "/c", "cd /d `"$ProjectRoot\app\frontend`" && .\node_modules\.bin\vite.cmd --host 127.0.0.1 --port 5173 >> `"$frontendLog`" 2>&1" `
+        -WorkingDirectory "$ProjectRoot\app\frontend" `
+        -PassThru -NoNewWindow
+    $frontendProc.Id | Set-Content "$LogDir\frontend.pid"
+    $frontendReady = Wait-ForHttp -Url "http://127.0.0.1:5173" -Label "Frontend"
+    if (-not $frontendReady) {
+        Write-Yellow "  Last frontend log lines:"
+        Get-Content -Path $frontendLog -Tail 25 -ErrorAction SilentlyContinue
     }
 }
 

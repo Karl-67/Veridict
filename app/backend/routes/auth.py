@@ -8,7 +8,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.backend.db.models import OrgInviteRecord, OrganizationRecord, PolicyVersionRecord, UserRecord, WorkspaceMemberRecord
+from app.backend.db.models import OrgInviteRecord, OrganizationRecord, PolicyVersionRecord, UserRecord, WorkspaceMemberRecord, WorkspaceRecord
 from app.backend.db.session import DbSession
 from app.backend.services.auth_service import (
     check_account_lockout,
@@ -159,6 +159,22 @@ async def create_org(body: CreateOrgRequest, response: Response, db: DbSession) 
         rules_payload={"rules": []},
     )
     db.add(default_policy)
+    await db.flush()
+
+    ws = WorkspaceRecord(
+        id=str(uuid.uuid4()),
+        org_id=org.id,
+        name="General",
+        description="Default workspace",
+    )
+    db.add(ws)
+    await db.flush()
+    db.add(WorkspaceMemberRecord(
+        id=str(uuid.uuid4()),
+        workspace_id=ws.id,
+        user_id=user.id,
+        role="workspace_admin",
+    ))
     await db.flush()
 
     refresh = await create_refresh_token(db, user.id)

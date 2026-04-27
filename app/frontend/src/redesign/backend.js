@@ -13,8 +13,50 @@ function authHeaders(json = false) {
 
 async function readJson(res, fallback) {
   const data = await res.json().catch(() => ({ detail: fallback }));
-  if (!res.ok) throw new Error(data.detail || fallback);
+  if (!res.ok) {
+    const detail = data.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : Array.isArray(detail)
+        ? detail.map(item => item?.msg ?? JSON.stringify(item)).join("; ")
+        : detail
+          ? JSON.stringify(detail)
+          : fallback;
+    throw new Error(message);
+  }
   return data;
+}
+
+// Try to refresh the access token using the httpOnly refresh cookie.
+// Returns true on success, false if the refresh token is also expired/missing.
+async function tryRefreshToken() {
+  try {
+    const res = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
+    if (!res.ok) return false;
+    const data = await res.json();
+    const user = mapAuthUser(data);
+    localStorage.setItem("veridict_token", user.token);
+    localStorage.setItem("veridict_user", JSON.stringify(user));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Fetch wrapper that retries once after auto-refreshing the access token on 401.
+async function apiFetch(url, options = {}) {
+  let res = await fetch(url, { ...options, credentials: "include" });
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      // Rebuild Authorization header with new token
+      const newHeaders = { ...(options.headers || {}) };
+      const t = token();
+      if (t) newHeaders.Authorization = `Bearer ${t}`;
+      res = await fetch(url, { ...options, headers: newHeaders, credentials: "include" });
+    }
+  }
+  return res;
 }
 
 function mapAuthUser(data) {
@@ -68,6 +110,24 @@ async function createOrg(payload) {
   return saveAuth(await readJson(res, "Account creation failed"));
 }
 
+async function invitePreview(token) {
+  const res = await fetch(`${API_BASE}/auth/invite-preview/${encodeURIComponent(token)}`, {
+    headers: authHeaders(),
+    credentials: "include",
+  });
+  return readJson(res, "Invite not found or expired");
+}
+
+async function registerFromInvite(payload) {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: "POST",
+    headers: authHeaders(true),
+    credentials: "include",
+    body: JSON.stringify(payload),
+  });
+  return saveAuth(await readJson(res, "Invite registration failed"));
+}
+
 async function logout() {
   await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
   localStorage.removeItem("veridict_token");
@@ -106,22 +166,22 @@ function mapContractDetail(c) {
 }
 
 async function listContracts() {
-  const res = await fetch(`${API_BASE}/contracts`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/contracts`, { headers: authHeaders() });
   return (await readJson(res, "Failed to load contracts")).map(mapContract);
 }
 
 async function getContract(id) {
-  const res = await fetch(`${API_BASE}/contracts/${id}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/contracts/${id}`, { headers: authHeaders() });
   return mapContractDetail(await readJson(res, "Failed to load contract"));
 }
 
 async function listWorkspaces() {
-  const res = await fetch(`${API_BASE}/workspaces`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/workspaces`, { headers: authHeaders() });
   return readJson(res, "Failed to load workspaces");
 }
 
 async function createContract(name, workspaceId) {
-  const res = await fetch(`${API_BASE}/contracts`, {
+  const res = await apiFetch(`${API_BASE}/contracts`, {
     method: "POST",
     headers: authHeaders(true),
     body: JSON.stringify({ name, workspace_id: workspaceId }),
@@ -136,7 +196,7 @@ async function addContractVersion(contractId, file) {
   formData.append("policy_version", "1");
   formData.append("jurisdiction", "US");
   formData.append("regime", "general");
-  const res = await fetch(`${API_BASE}/contracts/${contractId}/versions`, {
+  const res = await apiFetch(`${API_BASE}/contracts/${contractId}/versions`, {
     method: "POST",
     headers: authHeaders(),
     body: formData,
@@ -224,12 +284,12 @@ async function deleteRagDocument(documentId) {
 }
 
 async function adminGet(path) {
-  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}${path}`, { headers: authHeaders() });
   return readJson(res, "Admin request failed");
 }
 
 async function adminSend(method, path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await apiFetch(`${API_BASE}${path}`, {
     method,
     headers: authHeaders(Boolean(body)),
     body: body ? JSON.stringify(body) : undefined,
@@ -242,6 +302,8 @@ window.verdictApi = {
   API_BASE,
   login,
   createOrg,
+  invitePreview,
+  registerFromInvite,
   logout,
   currentUser,
   listContracts,

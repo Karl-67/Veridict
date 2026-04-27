@@ -20,7 +20,7 @@ from app.backend.services.auth_service import require_org_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-INVITE_EXPIRE_HOURS = 48
+INVITE_EXPIRE_HOURS = 168  # 7 days
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +111,27 @@ def _user_out(u: UserRecord) -> UserOut:
     )
 
 
+def _clean_workspace_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="Workspace name is required")
+    if len(cleaned) > 255:
+        raise HTTPException(status_code=400, detail="Workspace name must be 255 characters or fewer")
+    return cleaned
+
+
+def _validate_workspace_role(role: str) -> None:
+    if role not in {"workspace_admin", "reviewer", "viewer"}:
+        raise HTTPException(status_code=400, detail="Invalid workspace role")
+
+
+async def _get_org_workspace(db: DbSession, workspace_id: str, org_id: str) -> WorkspaceRecord:
+    ws = await db.get(WorkspaceRecord, workspace_id)
+    if not ws or ws.org_id != org_id:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    return ws
+
+
 # ---------------------------------------------------------------------------
 # Organisation info
 # ---------------------------------------------------------------------------
@@ -175,6 +196,14 @@ async def remove_user(user_id: str, db: DbSession, token: dict = Depends(require
 
 @router.post("/invites", response_model=InviteOut, status_code=status.HTTP_201_CREATED)
 async def create_invite(body: InviteRequest, db: DbSession, token: dict = Depends(require_org_admin)) -> InviteOut:
+    _validate_workspace_role(body.workspace_role)
+    if body.org_role not in {"org_admin", "member"}:
+        raise HTTPException(status_code=400, detail="Invalid organisation role")
+    ws_name: str | None = None
+    if body.workspace_id:
+        ws = await _get_org_workspace(db, body.workspace_id, token["org_id"])
+        ws_name = ws.name
+
     # Check if user already in org
     existing = (await db.execute(
         select(UserRecord).where(UserRecord.email == body.email.lower().strip(), UserRecord.org_id == token["org_id"])
@@ -200,10 +229,6 @@ async def create_invite(body: InviteRequest, db: DbSession, token: dict = Depend
 
     invite_token = secrets.token_urlsafe(32)
     expires_at = datetime.utcnow() + timedelta(hours=INVITE_EXPIRE_HOURS)
-    ws_name: str | None = None
-    if body.workspace_id:
-        ws = await db.get(WorkspaceRecord, body.workspace_id)
-        ws_name = ws.name if ws else None
 
     invite = OrgInviteRecord(
         id=str(uuid.uuid4()),
@@ -307,14 +332,25 @@ async def list_workspaces(db: DbSession, token: dict = Depends(require_org_admin
 
 @router.post("/workspaces", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)
 async def create_workspace(body: CreateWorkspaceRequest, db: DbSession, token: dict = Depends(require_org_admin)) -> WorkspaceOut:
+    name = _clean_workspace_name(body.name)
+    existing = (await db.execute(
+        select(WorkspaceRecord).where(
+            WorkspaceRecord.org_id == token["org_id"],
+            WorkspaceRecord.name == name,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="A workspace with this name already exists")
+
+    now = datetime.utcnow()
     ws = WorkspaceRecord(
         id=str(uuid.uuid4()),
         org_id=token["org_id"],
-        name=body.name.strip(),
-        description=body.description,
+        name=name,
+        description=body.description.strip() if body.description else None,
+        created_at=now,
     )
     db.add(ws)
-    # Add creator as workspace_admin
     await db.flush()
     db.add(WorkspaceMemberRecord(
         id=str(uuid.uuid4()),
@@ -323,14 +359,12 @@ async def create_workspace(body: CreateWorkspaceRequest, db: DbSession, token: d
         role="workspace_admin",
     ))
     await db.flush()
-    return WorkspaceOut(workspace_id=ws.id, name=ws.name, description=ws.description, member_count=1, created_at=ws.created_at.isoformat())
+    return WorkspaceOut(workspace_id=ws.id, name=ws.name, description=ws.description, member_count=1, created_at=now.isoformat())
 
 
 @router.get("/workspaces/{workspace_id}/members", response_model=list[WorkspaceMemberOut])
 async def list_workspace_members(workspace_id: str, db: DbSession, token: dict = Depends(require_org_admin)) -> list[WorkspaceMemberOut]:
-    ws = await db.get(WorkspaceRecord, workspace_id)
-    if not ws or ws.org_id != token["org_id"]:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    await _get_org_workspace(db, workspace_id, token["org_id"])
     result = await db.execute(
         select(WorkspaceMemberRecord).where(WorkspaceMemberRecord.workspace_id == workspace_id)
     )
@@ -355,9 +389,8 @@ async def list_workspace_members(workspace_id: str, db: DbSession, token: dict =
 async def add_workspace_member(
     workspace_id: str, body: AddWorkspaceMemberRequest, db: DbSession, token: dict = Depends(require_org_admin)
 ) -> WorkspaceMemberOut:
-    ws = await db.get(WorkspaceRecord, workspace_id)
-    if not ws or ws.org_id != token["org_id"]:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+    _validate_workspace_role(body.role)
+    await _get_org_workspace(db, workspace_id, token["org_id"])
     user = await db.get(UserRecord, body.user_id)
     if not user or user.org_id != token["org_id"]:
         raise HTTPException(status_code=404, detail="User not found in organisation")
@@ -382,6 +415,8 @@ async def update_workspace_member_role(
     workspace_id: str, user_id: str, body: UpdateWorkspaceMemberRoleRequest,
     db: DbSession, token: dict = Depends(require_org_admin)
 ) -> WorkspaceMemberOut:
+    _validate_workspace_role(body.role)
+    await _get_org_workspace(db, workspace_id, token["org_id"])
     member = (await db.execute(
         select(WorkspaceMemberRecord).where(
             WorkspaceMemberRecord.workspace_id == workspace_id,
@@ -393,6 +428,8 @@ async def update_workspace_member_role(
     member.role = body.role
     await db.flush()
     user = await db.get(UserRecord, user_id)
+    if not user or user.org_id != token["org_id"]:
+        raise HTTPException(status_code=404, detail="User not found in organisation")
     return WorkspaceMemberOut(
         user_id=user.id, email=user.email, display_name=user.display_name,
         job_title=user.job_title, department=user.department, avatar_color=user.avatar_color, role=member.role,
@@ -403,6 +440,7 @@ async def update_workspace_member_role(
 async def remove_workspace_member(
     workspace_id: str, user_id: str, db: DbSession, token: dict = Depends(require_org_admin)
 ) -> None:
+    await _get_org_workspace(db, workspace_id, token["org_id"])
     member = (await db.execute(
         select(WorkspaceMemberRecord).where(
             WorkspaceMemberRecord.workspace_id == workspace_id,
