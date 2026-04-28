@@ -16,14 +16,16 @@ function DashboardScreen({ navigate }) {
     return () => { active = false; };
   }, []);
 
+  const IN_PROGRESS_STATES = ["processing", "under_review"];
+
   const total     = contracts.length;
   const awaiting  = contracts.filter(c => c.latestRunState === "awaiting_human_review").length;
-  const inProg    = contracts.filter(c => c.latestRunState === "processing").length;
+  const inProg    = contracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState)).length;
   const finalized = contracts.filter(c => c.latestRunState === "finalized").length;
 
   const filtered = filter === "all"      ? contracts
     : filter === "review"   ? contracts.filter(c => c.latestRunState === "awaiting_human_review")
-    : filter === "progress" ? contracts.filter(c => c.latestRunState === "processing")
+    : filter === "progress" ? contracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState))
     : contracts.filter(c => c.latestRunState === "finalized");
 
   return (
@@ -31,7 +33,7 @@ function DashboardScreen({ navigate }) {
       {/* Page header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 40 }}>
         <div>
-          <p style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 6 }}>{greeting()}, Sarah</p>
+          <p style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 6 }}>{greeting()}, {(window.verdictApi.currentUser()?.display_name || "").split(" ")[0] || "there"}</p>
           <h1 style={{ fontFamily: "var(--h-font)", fontSize: 42, fontWeight: 700, letterSpacing: "-0.025em", color: "var(--text)", lineHeight: 1 }}>Contracts</h1>
         </div>
         <button onClick={() => navigate("new_contract")} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 8, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", transition: "opacity 0.15s", flexShrink: 0 }}
@@ -71,7 +73,7 @@ function DashboardScreen({ navigate }) {
       {!loading && filtered.map((c, i) => {
         const status   = stateLabel(c.latestRunState);
         const isAction = c.latestRunState === "awaiting_human_review";
-        const isProc   = c.latestRunState === "processing";
+        const isProc   = IN_PROGRESS_STATES.includes(c.latestRunState);
         return (
           <div key={c.id} onClick={() => navigate("contract_detail", c.id)}
             style={{ display: "grid", gridTemplateColumns: "1fr 76px 164px 96px 96px 32px", gap: "0 16px", padding: "15px 10px", borderBottom: "1px solid var(--border-light)", cursor: "pointer", transition: "background 0.1s", animation: `fadeIn 0.3s ${i * 0.04}s both` }}
