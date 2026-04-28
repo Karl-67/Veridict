@@ -296,7 +296,7 @@ function App() {
   const [selectedRunId, setSelectedRunId] = React.useState(null);
   const [pendingError, setPendingError] = React.useState(null);
   const [fileName, setFileName] = React.useState("");
-  const [processingStage, setProcessingStage] = React.useState(0);
+  const [processingRunId, setProcessingRunId] = React.useState(null);
   const [tweakPanelVisible, setTweakPanelVisible] = React.useState(false);
 
   // Tweaks panel protocol
@@ -310,19 +310,8 @@ function App() {
     return () => window.removeEventListener("message", handler);
   }, []);
 
-  // Simulate processing
   React.useEffect(() => {
-    if (screen !== "processing") { setProcessingStage(0); return; }
-    let s = 0;
-    const t = setInterval(() => {
-      s++;
-      setProcessingStage(s);
-      if (s >= MOCK_PIPELINE_STAGES.length) {
-        clearInterval(t);
-        setTimeout(() => navigate("verdict"), 600);
-      }
-    }, 1200);
-    return () => clearInterval(t);
+    if (screen !== "processing") setProcessingRunId(null);
   }, [screen]);
 
   function navigate(s, id = null, runId = null) {
@@ -332,7 +321,7 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingStage, pendingError };
+  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingRunId, pendingError };
 
   if (!loggedIn) return <AuthScreen onLogin={() => setLoggedIn(true)} />;
 
@@ -349,10 +338,10 @@ function App() {
           navigate("processing");
           try {
             const result = await window.verdictApi.addContractVersion(selectedContractId, file);
-            setTimeout(() => navigate("contract_detail", result.contract_id), 600);
+            setProcessingRunId(result.run_id ?? null);
+            setSelectedContractId(result.contract_id ?? selectedContractId);
           } catch (err) {
             setPendingError(err.message || "Upload failed");
-            navigate("processing");
           }
         }} />}
         {screen === "new_contract"     && <NewContractScreen {...screenProps} onSubmit={async (name, file) => {
@@ -364,11 +353,11 @@ function App() {
             const workspaceId = workspaces[0]?.workspace_id;
             if (!workspaceId) throw new Error("No workspace is available for this account.");
             const contract = await window.verdictApi.createContract(name, workspaceId);
-            await window.verdictApi.addContractVersion(contract.id, file);
-            setTimeout(() => navigate("contract_detail", contract.id), 600);
+            const result = await window.verdictApi.addContractVersion(contract.id, file);
+            setSelectedContractId(contract.id);
+            setProcessingRunId(result.run_id ?? null);
           } catch (err) {
             setPendingError(err.message || "Upload failed");
-            navigate("processing");
           }
         }} />}
         {screen === "processing"       && <ProcessingScreen {...screenProps} />}
@@ -412,6 +401,7 @@ function PlaceholderScreen({ title, desc }) {
 Object.assign(window, {
   App, Header, PlaceholderScreen,
   MOCK_CONTRACTS, MOCK_CONTRACT_DETAIL, MOCK_VERDICT, MOCK_PIPELINE_STAGES, TWEAK_DEFAULTS,
+  STAGE_LABELS: undefined,
   timeAgo, greeting, riskColor, riskLabel, stateLabel,
   IconArrowLeft, IconArrowRight, IconPlus, IconCheck, IconChevronDown
 });

@@ -134,7 +134,31 @@ function ContractDetailScreen({ navigate, selectedContractId, onViewRun, onAddVe
     let active = true;
     setDetail(null); setLoadErr(false);
     window.verdictApi.getContract(selectedContractId)
-      .then(data => { if (active) setDetail(data); })
+      .then(data => {
+        if (!active) return;
+        setDetail(data);
+        // Load real finding counts for versions that have a run
+        const versionsWithRun = data.versions.filter(v => v.runId);
+        if (versionsWithRun.length === 0) return;
+        Promise.all(
+          versionsWithRun.map(v =>
+            window.verdictApi.getRunFindings(v.runId)
+              .then(f => ({ runId: v.runId, count: f.length }))
+              .catch(() => ({ runId: v.runId, count: 0 }))
+          )
+        ).then(results => {
+          if (!active) return;
+          const counts = {};
+          results.forEach(r => { counts[r.runId] = r.count; });
+          setDetail(prev => prev ? {
+            ...prev,
+            versions: prev.versions.map(v => ({
+              ...v,
+              findingCount: v.runId != null ? (counts[v.runId] ?? v.findingCount) : v.findingCount,
+            })),
+          } : prev);
+        });
+      })
       .catch(() => { if (active) setLoadErr(true); });
     return () => { active = false; };
   }, [selectedContractId]);
@@ -287,9 +311,74 @@ function NewContractScreen({ navigate, onSubmit }) {
 
 // ── Processing Screen ─────────────────────────────────────────────────────────
 
-function ProcessingScreen({ navigate, fileName, processingStage, pendingError }) {
-  const stages = MOCK_PIPELINE_STAGES;
-  const pct = Math.round((processingStage / stages.length) * 100);
+const STAGE_LABELS = {
+  create_run:             "Creating Run",
+  ingest_pdf:             "Document Ingestion",
+  parse_ocr_normalize:    "Parsing & OCR",
+  clause_index:           "Clause Indexing",
+  harvey_context_load:    "Loading Policy Context",
+  harvey_review_block:    "AI Review",
+  kira_review_block:      "Compliance Review",
+  admin_merge:            "Merging Analysis",
+  final_review_block:     "Final Review",
+  awaiting_human_review:  "Ready for Human Review",
+};
+
+const DISPLAY_STAGE_NAMES = [
+  "ingest_pdf",
+  "parse_ocr_normalize",
+  "clause_index",
+  "harvey_context_load",
+  "harvey_review_block",
+  "kira_review_block",
+  "admin_merge",
+  "awaiting_human_review",
+];
+
+function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, selectedContractId }) {
+  const [runStages, setRunStages] = React.useState([]);
+  const [runState, setRunState]   = React.useState(null);
+
+  React.useEffect(() => {
+    if (!processingRunId) return;
+    let active = true;
+
+    async function poll() {
+      try {
+        const run = await window.verdictApi.getRun(processingRunId);
+        if (!active) return;
+        setRunState(run.state);
+        setRunStages(run.stages ?? []);
+        const done = ["awaiting_human_review", "finalized", "failed", "blocked"].includes(run.state);
+        if (done) {
+          setTimeout(() => { if (active) navigate("contract_detail", run.contract_id ?? selectedContractId); }, 800);
+        } else {
+          setTimeout(poll, 3000);
+        }
+      } catch {
+        if (active) setTimeout(poll, 5000);
+      }
+    }
+
+    poll();
+    return () => { active = false; };
+  }, [processingRunId]);
+
+  // Build display list from real backend stage data
+  const stageMap = {};
+  runStages.forEach(s => { stageMap[s.stage_name] = s.state; });
+
+  const displayStages = DISPLAY_STAGE_NAMES.map(name => {
+    const state = stageMap[name] ?? "pending";
+    return { name, label: STAGE_LABELS[name] ?? name, state };
+  });
+
+  const doneCount  = displayStages.filter(s => s.state === "done").length;
+  const totalCount = displayStages.length;
+  const pct        = Math.round((doneCount / totalCount) * 100);
+
+  const isFailed  = runState === "failed" || runState === "blocked";
+  const isReady   = runState === "awaiting_human_review" || runState === "finalized";
 
   return (
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, maxWidth: 520, margin: "0 auto", animation: "fadeIn 0.35s ease both" }}>
@@ -298,26 +387,33 @@ function ProcessingScreen({ navigate, fileName, processingStage, pendingError })
         <h1 style={{ fontFamily: "var(--h-font)", fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 10 }}>Processing your contract</h1>
         <p style={{ fontSize: 14, color: "var(--text-2)" }}>{fileName || "Your document"} is being analyzed by the AI engine.</p>
         {pendingError && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>{pendingError}</p>}
+        {isReady && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-low)" }}>Analysis complete — redirecting…</p>}
+        {isFailed && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>Analysis encountered an error.</p>}
       </div>
 
       {/* Stage list */}
       <div style={{ marginBottom: 40 }}>
-        {stages.map((stage, i) => {
-          const isDone    = i < processingStage;
-          const isRunning = i === processingStage;
+        {displayStages.map((stage, i) => {
+          const isDone    = stage.state === "done";
+          const isRunning = stage.state === "running" || stage.state === "retrying";
+          const isFail    = stage.state === "failed" || stage.state === "blocked";
           return (
-            <div key={stage.name} style={{ display: "flex", alignItems: "center", gap: 16, padding: "13px 0", borderBottom: i < stages.length - 1 ? "1px solid var(--border-light)" : "none", opacity: i > processingStage ? 0.28 : 1, transition: "opacity 0.4s" }}>
+            <div key={stage.name} style={{ display: "flex", alignItems: "center", gap: 16, padding: "13px 0", borderBottom: i < displayStages.length - 1 ? "1px solid var(--border-light)" : "none", opacity: stage.state === "pending" ? 0.28 : 1, transition: "opacity 0.4s" }}>
               <div style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {isDone ? (
                   <span style={{ color: "var(--risk-low)" }}><IconCheck size={16} /></span>
+                ) : isFail ? (
+                  <span style={{ fontSize: 13, color: "var(--risk-high)" }}>✕</span>
                 ) : isRunning ? (
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", display: "block" }} className="pulse" />
                 ) : (
                   <span style={{ width: 7, height: 7, borderRadius: "50%", border: "1.5px solid var(--border)", display: "block" }} />
                 )}
               </div>
-              <span style={{ fontSize: 14, fontWeight: isRunning ? 600 : 400, color: isRunning ? "var(--text)" : isDone ? "var(--text-2)" : "var(--text-3)", transition: "color 0.3s" }}>{stage.label}</span>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: isDone ? "var(--text-3)" : isRunning ? "var(--accent)" : "transparent", transition: "color 0.3s" }}>{isDone ? "Done" : isRunning ? "Running" : "—"}</span>
+              <span style={{ fontSize: 14, fontWeight: isRunning ? 600 : 400, color: isRunning ? "var(--text)" : isDone ? "var(--text-2)" : isFail ? "var(--risk-high)" : "var(--text-3)", transition: "color 0.3s" }}>{stage.label}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: isDone ? "var(--text-3)" : isRunning ? "var(--accent)" : isFail ? "var(--risk-high)" : "transparent", transition: "color 0.3s" }}>
+                {isDone ? "Done" : isRunning ? "Running" : isFail ? "Failed" : "—"}
+              </span>
             </div>
           );
         })}
@@ -325,7 +421,7 @@ function ProcessingScreen({ navigate, fileName, processingStage, pendingError })
 
       {/* Progress bar */}
       <div style={{ height: 2, background: "var(--border)", borderRadius: 1, marginBottom: 32, overflow: "hidden" }}>
-        <div style={{ height: "100%", background: "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
+        <div style={{ height: "100%", background: isFailed ? "var(--risk-high)" : "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
       </div>
 
       <div style={{ textAlign: "center" }}>

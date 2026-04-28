@@ -283,6 +283,29 @@ async function deleteRagDocument(documentId) {
   return readJson(res, "Delete failed");
 }
 
+async function listRunComments(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/comments`, { headers: authHeaders() });
+  return readJson(res, "Failed to load comments");
+}
+
+async function postRunComment(runId, body) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/comments`, {
+    method: "POST",
+    headers: authHeaders(true),
+    body: JSON.stringify({ body }),
+  });
+  return readJson(res, "Failed to post comment");
+}
+
+async function deleteRunComment(runId, commentId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/comments/${commentId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (res.status === 204) return null;
+  return readJson(res, "Failed to delete comment");
+}
+
 async function adminGet(path) {
   const res = await apiFetch(`${API_BASE}${path}`, { headers: authHeaders() });
   return readJson(res, "Admin request failed");
@@ -321,6 +344,9 @@ window.verdictApi = {
   listRagDocuments,
   getRagIngestionStatus,
   deleteRagDocument,
+  listRunComments,
+  postRunComment,
+  deleteRunComment,
   adminGet,
   adminSend,
 };
