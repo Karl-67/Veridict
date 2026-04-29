@@ -1,0 +1,91 @@
+name: Build and Deploy to AKS
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_REGISTRY: verdictacr.azurecr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Log in to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          tags: |
+            ${{ env.ACR_REGISTRY }}/verdict-api:${{ steps.meta.outputs.tag }}
+            ${{ env.ACR_REGISTRY }}/verdict-api:latest
+
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: true
+          tags: |
+            ${{ env.ACR_REGISTRY }}/verdict-worker:${{ steps.meta.outputs.tag }}
+            ${{ env.ACR_REGISTRY }}/verdict-worker:latest
+
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: true
+          tags: |
+            ${{ env.ACR_REGISTRY }}/verdict-frontend:${{ steps.meta.outputs.tag }}
+            ${{ env.ACR_REGISTRY }}/verdict-frontend:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: verdict-rg
+          cluster-name: verdict-aks
+          admin: false
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Pin image tags in manifests
+        run: |
+          TAG=${{ needs.build-and-push.outputs.image_tag }}
+          sed -i "s|verdictacr.azurecr.io/verdict-api:latest|verdictacr.azurecr.io/verdict-api:$TAG|g" k8s/api.yaml
+          sed -i "s|verdictacr.azurecr.io/verdict-worker:latest|verdictacr.azurecr.io/verdict-worker:$TAG|g" k8s/worker.yaml
+          sed -i "s|verdictacr.azurecr.io/verdict-frontend:latest|verdictacr.azurecr.io/verdict-frontend:$TAG|g" k8s/frontend.yaml
+
+      - name: Apply Kubernetes manifests
+        run: kubectl apply -k k8s/
+
+      - name: Wait for API rollout
+        run: kubectl rollout status deployment/verdict-api -n verdict --timeout=5m
+
+      - name: Wait for Worker rollout
+        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=3m
+
+      - name: Wait for Frontend rollout
+        run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=3m

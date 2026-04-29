@@ -1,0 +1,36 @@
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+*.egg-info
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node
+app/frontend/node_modules
+app/frontend/dist
+app/frontend/.vite
+
+# Runtime data — use volumes instead
+storage/
+logs/
+
+# Training artifacts — large, not needed in API/worker image
+data/
+scripts/fine_tune/output/
+scripts/distill/output/
+
+# Secrets — injected at runtime via K8s Secrets or docker-compose env
+app/backend/.env
+.env
+
+# Misc
+*.log
+*.tmp

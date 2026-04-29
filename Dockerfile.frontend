@@ -3,8 +3,14 @@ WORKDIR /srv/verdict/app/frontend
 COPY app/frontend/package*.json ./
 RUN npm ci
 COPY app/frontend ./
+
+# In K8s the Ingress proxies /api → backend, so a relative URL works.
+# For local docker-compose the default fallback in code (http://127.0.0.1:8000/api) is used.
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 FROM nginx:alpine
 COPY --from=build /srv/verdict/app/frontend/dist /usr/share/nginx/html
+COPY app/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

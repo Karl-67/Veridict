@@ -19,7 +19,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    env_file: .env
+    env_file: app/backend/.env
     environment:
       POSTGRES_DSN: postgresql://verdict:verdict@postgres:5432/verdict
       OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
@@ -29,6 +29,10 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    volumes:
+      - verdict_documents:/srv/verdict/storage/documents
+      - verdict_rag:/srv/verdict/storage/rag
+      - fine_tune_output:/srv/verdict/scripts/fine_tune/output
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
@@ -39,13 +43,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    env_file: .env
+    env_file: app/backend/.env
     environment:
       POSTGRES_DSN: postgresql://verdict:verdict@postgres:5432/verdict
       OLLAMA_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - verdict_documents:/srv/verdict/storage/documents
+      - verdict_rag:/srv/verdict/storage/rag
 
   frontend:
     build:
@@ -64,3 +71,6 @@ services:
 
 volumes:
   postgres_data:
+  verdict_documents:
+  verdict_rag:
+  fine_tune_output:

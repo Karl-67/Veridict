@@ -17,7 +17,7 @@ Agents are split into two categories that must never be conflated:
 Current assignments
 -------------------
   KiraWorker          → FineTunableAgent  (dataset: LEDGAR)
-  KiraPanelReviewer   → BaselineAgent     (reviews fine-tuned worker output)
+  KiraPanelReviewer   → FineTunableAgent  (same fine-tuned weights as KiraWorker, distinct prompts)
   HarveyReviewer      → FineTunableAgent  (dataset: CUAD — second priority)
   AdminMergeAgent     → BaselineAgent     (structural synthesis, not domain reasoning)
   KiraValidatorAgent  → BaselineAgent     (hallucination detection)

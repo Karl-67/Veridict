@@ -1,0 +1,21 @@
+# Apply everything with: kubectl apply -k k8s/
+# Deployment order is not guaranteed by kustomization — apply migration-job separately
+# after the API Deployment is healthy:
+#   kubectl apply -f k8s/migration-job.yaml -n verdict
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: verdict
+
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - configmap.yaml
+  - storage.yaml
+  - postgres.yaml
+  - vllm-base.yaml
+  - vllm-kira.yaml
+  - api.yaml
+  - worker.yaml
+  - frontend.yaml
+  - ingress.yaml

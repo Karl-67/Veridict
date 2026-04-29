@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verdict-config
+  namespace: verdict
+data:
+  LLM_PROVIDER: "vllm"
+  VLLM_BASE_URL: "http://verdict-vllm-base:8000/v1"
+  VLLM_BASE_MODEL: "google/gemma-4-26B-A4B-it"
+  KIRA_MODEL_URL: "http://verdict-vllm-kira:8000/v1"
+  KIRA_MODEL_NAME: "google/gemma-4-26B-A4B-it"
+
+  # RAG / embeddings
+  EMBEDDING_PROVIDER: "local"
+  EMBEDDING_MODEL_NAME: "sentence-transformers/all-MiniLM-L6-v2"
+  EMBEDDING_DIMENSIONS: "1536"
+  PGVECTOR_ENABLED: "true"
+  RAG_MAX_FILE_MB: "50"
+  RAG_MAX_PAGES: "500"
+  RAG_CHUNK_SIZE: "800"
+  RAG_CHUNK_OVERLAP: "100"
+  RAG_TOP_K: "20"
+  RAG_RERANK_TOP_K: "5"
+
+  # Storage paths inside containers
+  DOCUMENT_STORAGE_PATH: "/data/documents"
+  RAG_STORAGE_PATH: "/data/rag"
+
+  # Parser
+  PARSER_PRIMARY: "docling"
+  PARSER_VERSION: "docling-1"
+  ENABLE_OCR_FALLBACK: "true"
+  OCR_ENABLED: "true"
+  PDFPLUMBER_FALLBACK_ENABLED: "true"
+
+  # Pipeline tuning
+  WORKER_LEASE_DURATION_SECONDS: "60"
+  MAX_STAGE_RETRIES: "3"
+  REVIEWER_TEMPERATURE: "0.2"
+  VALIDATOR_TEMPERATURE: "0.1"
+
+  # CORS — update with your Azure domain
+  CORS_ORIGINS: '["https://verdict.verdictacr.azurewebsites.net"]'
+  ALLOWED_FRONTEND_ORIGINS: '["https://verdict.verdictacr.azurewebsites.net"]'
+
+  # Observability
+  METRICS_ENABLED: "true"
+  MODEL_REGISTRY_PATH: "configs/models.yaml"

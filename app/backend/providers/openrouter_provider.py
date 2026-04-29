@@ -334,3 +334,28 @@ def build_ollama_provider(
         base_backoff_seconds=1.0,
         max_backoff_seconds=10.0,  # Local — no real rate limits
     )
+
+
+def build_vllm_provider(
+    *,
+    base_url: str,
+    model_name: str = "google/gemma-4-26B-A4B-it",
+    temperature: float = 0.3,
+    max_output_tokens: int = 8192,
+    max_retries: int = 3,
+) -> OpenRouterProvider:
+    """Build a provider pointing at a cluster-internal vLLM server (OpenAI-compatible API).
+
+    vLLM requires a non-empty api_key but ignores its value for unauthenticated
+    cluster-internal endpoints.
+    """
+    return OpenRouterProvider(
+        api_key="vllm",
+        base_url=base_url,
+        model_name=model_name,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        max_retries=max_retries,
+        base_backoff_seconds=2.0,
+        max_backoff_seconds=30.0,
+    )

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Trash2, UserPlus, Copy, Check, Shield, Users, Briefcase, Loader2, ChevronRight, Unlock, FileText } from "lucide-react";
+import { Plus, Trash2, UserPlus, Copy, Check, Shield, Users, Briefcase, Loader2, ChevronRight, Unlock, FileText, Cpu } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 import RagDocumentPanel from "./RagDocumentPanel";
+import FineTunePanel from "./FineTunePanel";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
 
@@ -66,7 +67,7 @@ function RoleBadge({ role }: { role: string }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-type Tab = "users" | "workspaces" | "invites" | "rag";
+type Tab = "users" | "workspaces" | "invites" | "rag" | "fine-tune";
 
 export default function AdminPage({ onBack }: { onBack: () => void }) {
   const { user } = useAuth();
@@ -196,6 +197,7 @@ export default function AdminPage({ onBack }: { onBack: () => void }) {
     { id: "workspaces", label: "Workspaces", icon: Briefcase },
     { id: "invites", label: "Pending Invites", icon: UserPlus },
     { id: "rag", label: "RAG", icon: FileText },
+    { id: "fine-tune", label: "Fine-Tune Kira", icon: Cpu },
   ];
 
   return (
@@ -457,6 +459,7 @@ export default function AdminPage({ onBack }: { onBack: () => void }) {
           )}
 
           {tab === "rag" && <RagDocumentPanel />}
+          {tab === "fine-tune" && <FineTunePanel />}
         </>
       )}
     </motion.div>

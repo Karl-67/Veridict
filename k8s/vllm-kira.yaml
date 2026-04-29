@@ -1,0 +1,114 @@
+---
+# vLLM inference server — fine-tuned Kira Gemma 4 26B
+# Serves: KiraWorker×1, KiraPanelReviewer×3
+# All four Kira agents share these weights; each has its own distinct system prompt.
+# GPU requirement: 1× NVIDIA A100 80GB (Standard_NC24ads_A100_v4)
+#
+# Fine-tuning: run `python -m scripts.fine_tune.launch` to train on RunPod and
+# upload the LoRA adapter to the verdict-fine-tune-output PVC.
+# The pod will automatically load the adapter on next rollout restart.
+#
+# Until training completes, this pod serves the base model (no --lora-modules flag).
+# After training: kubectl rollout restart deployment/verdict-vllm-kira -n verdict
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verdict-vllm-kira
+  namespace: verdict
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: verdict-vllm-kira
+  template:
+    metadata:
+      labels:
+        app: verdict-vllm-kira
+    spec:
+      nodeSelector:
+        sku: gpu
+      tolerations:
+        - key: sku
+          operator: Equal
+          value: gpu
+          effect: NoSchedule
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - --model
+            - google/gemma-4-26B-A4B-it
+            - --dtype
+            - auto
+            - --max-model-len
+            - "4096"
+            - --tensor-parallel-size
+            - "1"
+            - --port
+            - "8000"
+            - --host
+            - "0.0.0.0"
+            - --disable-log-requests
+            # Uncomment after LoRA adapter is uploaded to the PVC:
+            # - --enable-lora
+            # - --lora-modules
+            # - kira=/mnt/kira-adapter
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: verdict-secrets
+                  key: HF_TOKEN
+            - name: HF_HOME
+              value: /root/.cache/huggingface
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: kira-adapter
+              mountPath: /mnt/kira-adapter
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 300
+            periodSeconds: 15
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 360
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 32Gi
+              nvidia.com/gpu: "1"
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: verdict-vllm-kira-cache
+        - name: kira-adapter
+          persistentVolumeClaim:
+            claimName: verdict-fine-tune-output
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verdict-vllm-kira
+  namespace: verdict
+spec:
+  selector:
+    app: verdict-vllm-kira
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

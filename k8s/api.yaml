@@ -1,0 +1,97 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verdict-api
+  namespace: verdict
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: verdict-api
+  template:
+    metadata:
+      labels:
+        app: verdict-api
+    spec:
+      containers:
+        - name: api
+          image: verdictacr.azurecr.io/verdict-api:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: verdict-config
+            - secretRef:
+                name: verdict-secrets
+          volumeMounts:
+            - name: documents
+              mountPath: /data/documents
+            - name: rag
+              mountPath: /data/rag
+            - name: fine-tune-output
+              mountPath: /srv/verdict/scripts/fine_tune/output
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: documents
+          persistentVolumeClaim:
+            claimName: verdict-documents
+        - name: rag
+          persistentVolumeClaim:
+            claimName: verdict-rag
+        - name: fine-tune-output
+          persistentVolumeClaim:
+            claimName: verdict-fine-tune-output
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verdict-api
+  namespace: verdict
+spec:
+  selector:
+    app: verdict-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: verdict-api
+  namespace: verdict
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: verdict-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

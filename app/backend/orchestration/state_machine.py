@@ -134,7 +134,9 @@ def mark_run_blocked(session: Session, run: RunRecord, blocked_reason: str) -> N
 
 
 def _provider(settings: Settings):
-    from app.backend.providers.openrouter_provider import build_openrouter_provider, build_ollama_provider
+    from app.backend.providers.openrouter_provider import (
+        build_openrouter_provider, build_ollama_provider, build_vllm_provider,
+    )
 
     if settings.llm_provider == "ollama":
         return build_ollama_provider(
@@ -142,11 +144,29 @@ def _provider(settings: Settings):
             model_name=settings.ollama_model,
             max_retries=settings.max_stage_retries,
         )
+    if settings.llm_provider == "vllm":
+        return build_vllm_provider(
+            base_url=settings.vllm_base_url,
+            model_name=settings.vllm_base_model,
+            max_retries=settings.max_stage_retries,
+        )
     return build_openrouter_provider(
         api_key=settings.openrouter_api_key,
         model_name=settings.openrouter_model,
         max_retries=settings.max_stage_retries,
     )
+
+
+def _kira_provider(settings: Settings):
+    """Returns a provider for Kira. Uses the fine-tuned cloud endpoint when configured."""
+    if settings.kira_model_url:
+        from app.backend.providers.openrouter_provider import build_ollama_provider
+        return build_ollama_provider(
+            base_url=settings.kira_model_url,
+            model_name=settings.kira_model_name,
+            max_retries=settings.max_stage_retries,
+        )
+    return _provider(settings)
 
 
 def _load_clause_index(session: Session, run_id: str) -> list[dict]:
@@ -321,7 +341,7 @@ async def _run_kira_review_block(
     4. If 2+ reject → aggregate feedback → worker revises → repeat from step 2.
     5. After max_iterations, pass whatever the worker last produced.
     """
-    provider = _provider(settings)
+    provider = _kira_provider(settings)
     try:
         worker = KiraWorker(provider)
         panel = [KiraPanelReviewer(provider, i) for i in (1, 2, 3)]
@@ -487,7 +507,7 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 findings=final_findings,
                 raw_response_id=None,
             )
-            validator = KiraValidatorAgent(_provider(settings))
+            validator = KiraValidatorAgent(_kira_provider(settings))
             validated = asyncio.run(
                 validator.validate(
                     [aggregate_output],

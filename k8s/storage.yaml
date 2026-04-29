@@ -1,0 +1,81 @@
+# Persistent volumes for AKS deployment.
+# Uses Azure Managed Disk (Premium SSD) via the managed-premium StorageClass.
+# For multi-replica API pods change accessModes to ReadWriteMany and use
+# storageClassName: azurefile-csi (Azure Files supports RWX).
+---
+# Azure Premium SSD StorageClass for model weights and LoRA adapters
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: verdict-premium-ssd
+provisioner: disk.csi.azure.com
+parameters:
+  skuName: Premium_LRS
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdict-documents
+  namespace: verdict
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdict-rag
+  namespace: verdict
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# Fine-tune adapter output — expanded to hold LoRA weights + merged checkpoint
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdict-fine-tune-output
+  namespace: verdict
+spec:
+  storageClassName: verdict-premium-ssd
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# HuggingFace model cache for the base Gemma 4 26B vLLM pod
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdict-vllm-base-cache
+  namespace: verdict
+spec:
+  storageClassName: verdict-premium-ssd
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 60Gi
+
+---
+# HuggingFace model cache for the Kira vLLM pod
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verdict-vllm-kira-cache
+  namespace: verdict
+spec:
+  storageClassName: verdict-premium-ssd
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 60Gi

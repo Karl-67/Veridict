@@ -1,0 +1,40 @@
+# Azure Application Gateway Ingress Controller (AGIC).
+# Prerequisites:
+#   az aks enable-addons --addons ingress-appgw \
+#     --resource-group verdict-rg --name verdict-aks \
+#     --appgw-name verdict-appgw --appgw-subnet-cidr "10.225.0.0/16"
+#
+# For TLS: add a certificate to the App Gateway and uncomment the tls block below.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: verdict
+  namespace: verdict
+  annotations:
+    kubernetes.io/ingress.class: azure/application-gateway
+    appgw.ingress.kubernetes.io/request-timeout: "300"         # long-running AI stages
+    appgw.ingress.kubernetes.io/connection-draining: "true"
+    appgw.ingress.kubernetes.io/connection-draining-timeout: "30"
+spec:
+  # tls:
+  #   - hosts:
+  #       - verdict.yourdomain.com
+  #     secretName: verdict-tls
+  rules:
+    - host: verdict.yourdomain.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: verdict-api
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: verdict-frontend
+                port:
+                  number: 80

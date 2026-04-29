@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM provider selection: "ollama" or "openrouter"
+    # LLM provider selection: "ollama", "openrouter", or "vllm"
     llm_provider: str = Field("ollama", alias="LLM_PROVIDER")
 
     # Ollama (local)
@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # OpenRouter (cloud fallback — only required when LLM_PROVIDER=openrouter)
     openrouter_api_key: str = Field("", alias="OPENROUTER_API_KEY")
     openrouter_model: str = Field("google/gemma-4-31b-it:free", alias="OPENROUTER_MODEL")
+
+    # vLLM (cluster-internal inference server — used when LLM_PROVIDER=vllm)
+    # Points to the base Gemma 4 26B vLLM pod (Harvey, admin, validators)
+    vllm_base_url: str = Field("", alias="VLLM_BASE_URL")
+    vllm_base_model: str = Field("google/gemma-4-26B-A4B-it", alias="VLLM_BASE_MODEL")
 
     # Gemini / LLM provider (kept for backwards compat — no longer used)
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")
@@ -75,6 +80,12 @@ class Settings(BaseSettings):
     metrics_enabled: bool = Field(True, alias="METRICS_ENABLED")
     reviewer_temperature: float = Field(0.2, alias="REVIEWER_TEMPERATURE")
     validator_temperature: float = Field(0.1, alias="VALIDATOR_TEMPERATURE")
+
+    # Kira fine-tuned model (set after training is deployed to cloud)
+    # If kira_model_url is set, Kira uses this endpoint instead of the default provider.
+    # Example: KIRA_MODEL_URL=http://kira-service:8080/v1
+    kira_model_url: str = Field("", alias="KIRA_MODEL_URL")
+    kira_model_name: str = Field("kira-gemma4-26b", alias="KIRA_MODEL_NAME")
 
 
 @lru_cache(maxsize=1)

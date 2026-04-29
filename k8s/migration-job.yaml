@@ -1,0 +1,29 @@
+# Run once after each deploy to apply Alembic schema migrations.
+# Usage: kubectl apply -f k8s/migration-job.yaml -n verdict
+# Check: kubectl logs job/verdict-migrate -n verdict
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verdict-migrate
+  namespace: verdict
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: verdictacr.azurecr.io/verdict-api:latest  # same image as the API
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: verdict-config
+            - secretRef:
+                name: verdict-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

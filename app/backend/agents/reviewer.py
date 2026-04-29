@@ -19,9 +19,11 @@ Kira — worker + panel loop:
   2+ rejections → aggregate feedback → worker revises → panel re-reviews (max 3 iterations)
 
 Fine-tuning contract: see agents/base.py.
-  KiraWorker      → FineTunableAgent (LEDGAR, priority 1)
-  HarveyReviewer  → FineTunableAgent (CUAD, priority 2)
-  KiraPanelReviewer → BaselineAgent (reviews fine-tuned worker)
+  KiraWorker        → FineTunableAgent (LEDGAR, priority 1)
+  HarveyReviewer    → FineTunableAgent (CUAD, priority 2)
+  KiraPanelReviewer → FineTunableAgent (same fine-tuned weights as KiraWorker; each has a
+                       distinct prompt — worker produces findings, panel votes on them;
+                       all four Kira agents share one LoRA checkpoint via verdict-vllm-kira)
 """
 
 from __future__ import annotations
@@ -801,19 +803,18 @@ class KiraWorker(FineTunableAgent):
 # ---------------------------------------------------------------------------
 
 
-class KiraPanelReviewer(BaselineAgent):
+class KiraPanelReviewer(FineTunableAgent):
     """Reviews KiraWorker output. Votes approve/reject with specific feedback.
 
-    MUST STAY BASELINE — do not fine-tune this agent.
-    The panel's value is precisely that it is an unbiased model reviewing a fine-tuned
-    worker. A fine-tuned panel shares the worker's biases and blind spots and will
-    not catch hallucinations or drift introduced by fine-tuning.
+    Fine-tuned on the same LEDGAR checkpoint as KiraWorker — all four Kira agents
+    (worker + 3 panel reviewers) share one LoRA adapter served by verdict-vllm-kira.
+    Each agent has its own distinct system prompt, making them functionally distinct
+    despite sharing weights.
     """
 
-    baseline_reason = (
-        "Acts as quality gate against fine-tuned KiraWorker. "
-        "Must stay baseline to catch worker hallucinations and fine-tuning drift."
-    )
+    fine_tune_dataset = "LEDGAR"
+    fine_tune_priority = 1
+    fine_tune_checkpoint: str | None = None
 
     temperature: float = DEFAULT_REVIEWER_TEMPERATURE
 

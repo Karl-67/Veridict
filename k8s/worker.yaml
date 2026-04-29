@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verdict-worker
+  namespace: verdict
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: verdict-worker
+  template:
+    metadata:
+      labels:
+        app: verdict-worker
+    spec:
+      containers:
+        - name: worker
+          image: verdictacr.azurecr.io/verdict-worker:latest
+          envFrom:
+            - configMapRef:
+                name: verdict-config
+            - secretRef:
+                name: verdict-secrets
+          volumeMounts:
+            - name: documents
+              mountPath: /data/documents
+            - name: rag
+              mountPath: /data/rag
+          # No liveness probe — the worker is a polling loop, not an HTTP server.
+          # Restart policy handles crashes automatically.
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+      volumes:
+        - name: documents
+          persistentVolumeClaim:
+            claimName: verdict-documents
+        - name: rag
+          persistentVolumeClaim:
+            claimName: verdict-rag
