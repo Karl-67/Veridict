@@ -289,10 +289,11 @@ async function listRunComments(runId) {
 }
 
 async function postRunComment(runId, body) {
+  const payload = typeof body === "string" ? { body } : body;
   const res = await apiFetch(`${API_BASE}/runs/${runId}/comments`, {
     method: "POST",
     headers: authHeaders(true),
-    body: JSON.stringify({ body }),
+    body: JSON.stringify(payload),
   });
   return readJson(res, "Failed to post comment");
 }

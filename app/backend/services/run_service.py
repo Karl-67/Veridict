@@ -18,11 +18,13 @@ from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, HumanReviewRecord, RunRecord, StageExecutionRecord
 from app.backend.models.schemas import (
     AdminMergeOutput,
+    ContractEvidence,
     EvidenceRef,
     Finding,
     FinalVerdict,
     HumanReviewPayload,
     HumanReviewResult,
+    RagCitation,
     ReviewBlockResult,
     RunCreateResponse,
     RunDetail,
@@ -86,6 +88,54 @@ def _map_stage_state(record: StageExecutionRecord) -> str:
     return mapping.get(record.status, "pending")
 
 
+def _coerce_contract_evidence(raw_items: list | None, fallback_clause_uid: str) -> list[ContractEvidence]:
+    coerced: list[ContractEvidence] = []
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text") or item.get("excerpt") or item.get("normalized_text") or ""
+        if not text:
+            continue
+        try:
+            coerced.append(
+                ContractEvidence.model_construct(
+                    schema_version=item.get("schema_version", 2),
+                    clause_id=item.get("clause_id") or item.get("clause_uid") or fallback_clause_uid,
+                    page=item.get("page") or 1,
+                    span=item.get("span"),
+                    text=text,
+                    confidence=item.get("confidence", item.get("extraction_confidence", 1.0)),
+                )
+            )
+        except Exception:
+            continue
+
+    return coerced
+
+
+def _coerce_rag_citations(raw_items: list | None) -> list[RagCitation]:
+    coerced: list[RagCitation] = []
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            coerced.append(
+                RagCitation.model_construct(
+                    schema_version=item.get("schema_version", 2),
+                    chunk_id=item.get("chunk_id", ""),
+                    document_id=item.get("document_id", item.get("source_document_id", "")),
+                    version=item.get("version", item.get("version_label", "")),
+                    page=item.get("page") or 1,
+                    source_path=item.get("source_path", ""),
+                    chunk_hash=item.get("chunk_hash", ""),
+                    score=item.get("score", 0.0),
+                )
+            )
+        except Exception:
+            continue
+    return coerced
+
+
 def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
     """Convert a FindingRecord DB row into a Finding schema object."""
     try:
@@ -93,33 +143,39 @@ def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
         clause_uid = fr.clause_uid or "unknown"
         agent = fr.source_agent or "unknown"
         branch = "kira" if agent.startswith("kira") else "harvey"
+        contract_evidence = _coerce_contract_evidence(fr.contract_evidence, clause_uid)
+        rag_citations = _coerce_rag_citations(fr.rag_citations)
         return Finding.model_construct(
             finding_id=str(fr.id),
             clause_uid=clause_uid,
             issue_type="liability_exposure",
             severity=fr.severity,  # type: ignore[arg-type]
-            exploitability="medium",
-            business_impact="medium",
+            exploitability=fr.exploitability or "medium",
+            business_impact=fr.business_impact or "medium",
             description=fr.issue,
             recommendation="negotiate",
             recommendation_detail=fr.recommendation or "",
+            contract_evidence=contract_evidence,
+            rag_citations=rag_citations,
             evidence=[
                 EvidenceRef.model_construct(
                     schema_version=1,
                     document_hash="",
                     parser_version="",
                     clause_uid=clause_uid,
-                    page=1,
+                    page=evidence.page,
                     bbox=[0.0, 0.0, 0.0, 0.0],
-                    normalized_text=clause_text,
-                    extraction_confidence=1.0,
+                    normalized_text=evidence.text,
+                    extraction_confidence=evidence.confidence,
                 )
+                for evidence in contract_evidence
             ],
             branch=branch,
             agent_role=agent,
             round_number=fr.round_number or 1,
-            consensus_status=None,
-            unresolved_by_consensus=False,
+            consensus_status=fr.consensus_state,
+            consensus_state=fr.consensus_state,
+            unresolved_by_consensus=fr.unresolved_by_consensus,
             human_edited=False,
             human_edit_delta=None,
         )

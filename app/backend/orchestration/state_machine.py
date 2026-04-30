@@ -239,6 +239,18 @@ def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
         recommendation=finding.recommendation_detail,
         is_disputed=finding.consensus_status == "disputed" or finding.unresolved_by_consensus,
         is_confirmed=finding.consensus_status == "consensus",
+        contract_evidence=[
+            e.model_dump(mode="json") if hasattr(e, "model_dump") else e
+            for e in (getattr(finding, "contract_evidence", None) or [])
+        ],
+        rag_citations=[
+            c.model_dump(mode="json") if hasattr(c, "model_dump") else c
+            for c in (getattr(finding, "rag_citations", None) or [])
+        ],
+        consensus_state=finding.consensus_status,
+        business_impact=getattr(finding, "business_impact", None),
+        exploitability=getattr(finding, "exploitability", None),
+        unresolved_by_consensus=getattr(finding, "unresolved_by_consensus", False),
     )
 
 

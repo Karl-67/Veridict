@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from app.backend.core.config import SettingsDep
 from app.backend.db.session import DbSession, get_session_factory
 from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail
 from app.backend.services.event_stream import list_run_events, stream_run_events
-from app.backend.db.models import RunRecord
+from app.backend.db.models import ParsedClauseRecord, RunRecord
 from app.backend.services.run_service import create_run, get_run_detail, submit_human_review, _load_full_findings
 from app.backend.services.auth_service import require_auth
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 router = APIRouter(prefix="/api", tags=["runs"])
 
@@ -143,6 +146,61 @@ async def get_run_findings(run_id: str, db: DbSession):
         raise HTTPException(status_code=404, detail="Run not found")
     findings = await _load_full_findings(db, run_id)
     return [f.model_dump(mode="json") for f in findings]
+
+
+class EditorSavePayload(BaseModel):
+    content: str
+    author_name: str | None = None
+
+
+@router.get("/runs/{run_id}/editor")
+async def get_editor_content(run_id: str, db: DbSession):
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    editor_state = (run.verdict_payload or {}).get("editor_state")
+    if editor_state:
+        return editor_state
+
+    # Bootstrap from parsed clauses (ordered by page then vertical position)
+    clauses_result = await db.execute(
+        select(ParsedClauseRecord)
+        .where(ParsedClauseRecord.run_id == run_id)
+        .order_by(ParsedClauseRecord.page_number, ParsedClauseRecord.bbox_y0)
+    )
+    clauses = clauses_result.scalars().all()
+    if clauses:
+        paragraphs = [f"<p>{c.normalized_text}</p>" for c in clauses if c.normalized_text.strip()]
+        content = "\n".join(paragraphs)
+    else:
+        content = "<p>Contract text not yet extracted. Run the pipeline first.</p>"
+
+    return {"content": content, "last_edited_by": None, "last_edited_at": None, "version": 0}
+
+
+@router.put("/runs/{run_id}/editor")
+async def save_editor_content(run_id: str, body: EditorSavePayload, db: DbSession):
+    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
+    run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    current = dict(run.verdict_payload or {})
+    current_version = (current.get("editor_state") or {}).get("version", 0) or 0
+    new_state = {
+        "content": body.content,
+        "last_edited_by": body.author_name or "Unknown",
+        "last_edited_at": datetime.utcnow().isoformat(),
+        "version": current_version + 1,
+    }
+    current["editor_state"] = new_state
+    run.verdict_payload = current
+    flag_modified(run, "verdict_payload")
+    db.add(run)
+    await db.commit()
+    return new_state
 
 
 @router.get("/runs/{run_id}/file")

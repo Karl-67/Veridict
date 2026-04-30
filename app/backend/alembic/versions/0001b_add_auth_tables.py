@@ -96,13 +96,20 @@ def upgrade() -> None:
         "contract_comments",
         sa.Column("id", sa.String(36), primary_key=True, nullable=False),
         sa.Column("run_id", sa.String(36), sa.ForeignKey("runs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("workspace_id", sa.String(36), nullable=True),
+        sa.Column("contract_id", sa.String(36), nullable=True),
         sa.Column("author_id", sa.String(36), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("body", sa.Text(), nullable=False),
+        sa.Column("page_number", sa.Integer(), nullable=True),
+        sa.Column("selected_text", sa.Text(), nullable=True),
+        sa.Column("anchor", sa.JSON(), nullable=True),
         sa.Column("is_deleted", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("ix_contract_comments_run_id", "contract_comments", ["run_id"])
+    op.create_index("ix_contract_comments_workspace_id", "contract_comments", ["workspace_id"])
+    op.create_index("ix_contract_comments_contract_id", "contract_comments", ["contract_id"])
 
     op.create_table(
         "finding_comments",

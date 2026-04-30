@@ -266,10 +266,15 @@ def _format_findings_for_admin(findings: list[Finding], label: str) -> str:
     lines = [f"{label}:"]
     for f in findings:
         rec = f.recommended_change or f.recommendation_detail or ""
+        evidence = "; ".join(
+            getattr(e, "text", "") if not isinstance(e, dict) else str(e.get("text") or "")
+            for e in (getattr(f, "contract_evidence", None) or [])[:3]
+        )
         lines.append(
             f"  finding_id={f.finding_id} clause={f.clause_uid} "
             f"severity={f.severity} type={f.issue_type}\n"
             f"  description: {f.description}\n"
+            f"  contract_evidence: {evidence or '(none)'}\n"
             f"  recommended_change: {rec}"
         )
     return "\n".join(lines)
@@ -299,6 +304,9 @@ ClauseVerdict entry containing:
 
 Rules:
 - One ClauseVerdict per clause_uid. Deduplicate overlapping findings across branches.
+- Keep every contributing finding grounded in the supplied contract_evidence; do not move
+  a finding to a title, heading, party name, or signature label unless that quoted evidence
+  is itself the legal issue.
 - Write comments in plain English for a senior lawyer to act on immediately.
 - Do NOT include chain-of-thought. Return strict JSON only."""
 
