@@ -4,8 +4,11 @@ and document annotations (anchored comments / suggestions).
 """
 from __future__ import annotations
 
+import html
+import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import io
@@ -35,6 +38,35 @@ router = APIRouter(prefix="/api", tags=["editor"])
 # Schemas
 # ---------------------------------------------------------------------------
 
+class CommentAnchorOut(BaseModel):
+    annotation_id: str
+    from_pos: int
+    to_pos: int
+
+
+class PendingSuggestionOut(BaseModel):
+    finding_id: str
+    severity: str
+    description: str
+    replacement_text: str
+
+
+class DraftBlockOut(BaseModel):
+    block_id: str
+    clause_uid: str
+    page_number: int
+    style: str  # heading1 | heading2 | heading3 | body | list_item
+    text: str           # current text (after accepted edits)
+    original_text: str  # original parsed text
+    marks: list[dict]   # [{type, from_pos, to_pos}]
+    pending_suggestion: Optional[PendingSuggestionOut]
+    comment_anchors: list[CommentAnchorOut]
+
+
+class DocumentDraftOut(BaseModel):
+    blocks: list[DraftBlockOut]
+    revision: int
+
 
 class ClauseOut(BaseModel):
     clause_uid: str
@@ -45,6 +77,11 @@ class ClauseOut(BaseModel):
 
 class ClauseEditBody(BaseModel):
     text: str
+    plain_text: Optional[str] = None
+    rich_text: Optional[list[dict]] = None
+    page: Optional[int] = None
+    rects: Optional[list[dict]] = None
+    anchor_text: Optional[str] = None
 
 
 class ContractEditsOut(BaseModel):
@@ -53,6 +90,168 @@ class ContractEditsOut(BaseModel):
 
 class AcceptFindingBody(BaseModel):
     custom_text: Optional[str] = None  # override replacement text
+
+
+class PdfRectOut(BaseModel):
+    page: int
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
+class PdfPageOut(BaseModel):
+    page: int
+    width: float
+    height: float
+
+
+class DocumentLayoutOut(BaseModel):
+    pages: list[PdfPageOut]
+    finding_rects: dict[str, list[PdfRectOut]]
+    annotation_rects: dict[str, list[PdfRectOut]]
+    clause_rects: dict[str, list[PdfRectOut]]
+
+
+# ---------------------------------------------------------------------------
+# PDF text anchoring helpers
+# ---------------------------------------------------------------------------
+
+
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)?")
+# Matches ASCII quotes plus Unicode curly/smart quotes (U+2018-U+201D)
+_QUOTE_RE = re.compile(
+    "[''""\x27\x22]"
+    "([^''""\x27\x22]{4,100})"
+    "[''""\x27\x22]"
+)
+
+
+def _tokens(text: str) -> list[str]:
+    return [m.group(0).lower() for m in _TOKEN_RE.finditer(text or "")]
+
+
+def _escape_pdf_text(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _words_to_line_rects(page_num: int, words: list[dict]) -> list[PdfRectOut]:
+    if not words:
+        return []
+    lines: list[list[dict]] = []
+    for word in words:
+        placed = False
+        mid = (float(word["top"]) + float(word["bottom"])) / 2
+        for line in lines:
+            line_mid = (float(line[0]["top"]) + float(line[0]["bottom"])) / 2
+            if abs(mid - line_mid) <= 3:
+                line.append(word)
+                placed = True
+                break
+        if not placed:
+            lines.append([word])
+    rects: list[PdfRectOut] = []
+    for line in lines:
+        rects.append(
+            PdfRectOut(
+                page=page_num,
+                x0=min(float(w["x0"]) for w in line),
+                top=min(float(w["top"]) for w in line),
+                x1=max(float(w["x1"]) for w in line),
+                bottom=max(float(w["bottom"]) for w in line),
+            )
+        )
+    return rects
+
+
+def _find_text_rects(page_num: int, words: list[dict], needle: str, *, max_tokens: int = 80) -> list[PdfRectOut]:
+    needle_tokens = _tokens(needle)
+    if not needle_tokens or len(needle_tokens) > max_tokens:
+        return []
+    word_tokens = [_tokens(str(w.get("text", "")))[0] if _tokens(str(w.get("text", ""))) else "" for w in words]
+    if len(needle_tokens) > len(word_tokens):
+        return []
+    for idx in range(0, len(word_tokens) - len(needle_tokens) + 1):
+        if word_tokens[idx:idx + len(needle_tokens)] == needle_tokens:
+            return _words_to_line_rects(page_num, words[idx:idx + len(needle_tokens)])
+    return []
+
+
+def _candidate_needles_from_finding(finding) -> list[str]:
+    candidates: list[str] = []
+    source_text = " ".join(
+        [
+            getattr(finding, "description", "") or "",
+            getattr(finding, "recommendation_detail", "") or "",
+            getattr(finding, "recommended_change", "") or "",
+        ]
+    )
+    # Use global _QUOTE_RE that handles ASCII and Unicode smart quotes
+    for quoted in _QUOTE_RE.findall(source_text):
+        stripped = quoted.strip()
+        if stripped:
+            candidates.append(stripped)
+
+    def _add_evidence_needles(text: str) -> None:
+        toks = _tokens(text)
+        if not toks:
+            return
+        # Prefer a short precise phrase; take first 10 tokens for highlight precision
+        needle = " ".join(text.split()[:min(10, len(toks))])
+        candidates.append(needle)
+        # Also try the full text if it's short enough for an exact match
+        if len(toks) <= 60 and len(toks) > 10:
+            candidates.append(text)
+
+    for ev in getattr(finding, "contract_evidence", []) or []:
+        text = (getattr(ev, "text", "") or "").strip()
+        if text:
+            _add_evidence_needles(text)
+    for ev in getattr(finding, "evidence", []) or []:
+        text = (getattr(ev, "normalized_text", "") or "").strip()
+        if text:
+            _add_evidence_needles(text)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        key = " ".join(_tokens(candidate))
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _rects_to_pdf_content(rects: list[PdfRectOut], page_height: float, rgb: tuple[float, float, float], alpha_hint: float = 0.22) -> str:
+    # pypdf cannot add transparency without a heavier graphics-state setup. Use pale fills.
+    lines = []
+    r, g, b = rgb
+    for rect in rects:
+        x = rect.x0
+        y = page_height - rect.bottom
+        w = max(0.0, rect.x1 - rect.x0)
+        h = max(0.0, rect.bottom - rect.top)
+        if w <= 0 or h <= 0:
+            continue
+        lines.append(f"q {r:.3f} {g:.3f} {b:.3f} rg {x:.2f} {y:.2f} {w:.2f} {h:.2f} re f Q")
+    return "\n".join(lines)
+
+
+def _plain_text_from_edit(edit: dict | str) -> str:
+    if isinstance(edit, str):
+        return edit
+    if not isinstance(edit, dict):
+        return ""
+    value = edit.get("plain_text") or edit.get("text") or ""
+    return re.sub(r"<[^>]+>", "", str(value)).replace("&nbsp;", " ").strip()
+
+
+def _safe_rich_text_to_plain(text: str) -> str:
+    text = html.unescape(text or "")
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(p|div)>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -92,12 +291,16 @@ async def get_contract_edits(run_id: str, db: DbSession) -> dict:
     return run.contract_edits or {}
 
 
-@router.get("/runs/{run_id}/export-edited")
-async def export_edited_contract(run_id: str, db: DbSession) -> StreamingResponse:
-    """Export the contract as a DOCX with AI findings inline and all clause edits applied."""
+@router.get("/runs/{run_id}/document-layout", response_model=DocumentLayoutOut)
+async def get_document_layout(run_id: str, db: DbSession) -> DocumentLayoutOut:
+    """Resolve pages, clause boxes, and exact finding/comment highlight rectangles."""
     run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    path = Path(run.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
 
     clauses = (await db.execute(
         select(ParsedClauseRecord)
@@ -105,10 +308,83 @@ async def export_edited_contract(run_id: str, db: DbSession) -> StreamingRespons
         .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
-    findings_rows = (await db.execute(
-        select(FindingRecord)
-        .where(FindingRecord.run_id == run_id, FindingRecord.dismissed_at.is_(None))
-        .order_by(FindingRecord.severity.asc())
+    annotations = (await db.execute(
+        select(DocumentAnnotationRecord).where(
+            DocumentAnnotationRecord.run_id == run_id,
+            DocumentAnnotationRecord.status.not_in(["accepted", "dismissed", "deleted"]),
+        )
+    )).scalars().all()
+
+    from app.backend.services.run_service import _load_full_findings
+    import pdfplumber
+
+    pages: list[PdfPageOut] = []
+    words_by_page: dict[int, list[dict]] = {}
+    with pdfplumber.open(str(path)) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            pages.append(PdfPageOut(page=page_num, width=float(page.width), height=float(page.height)))
+            words_by_page[page_num] = page.extract_words() or []
+
+    clause_rects: dict[str, list[PdfRectOut]] = {}
+    for clause in clauses:
+        page_words = words_by_page.get(clause.page_number, [])
+        rects = _find_text_rects(clause.page_number, page_words, clause.normalized_text, max_tokens=180)
+        if rects:
+            clause_rects[clause.clause_uid] = rects
+
+    finding_rects: dict[str, list[PdfRectOut]] = {}
+    for finding in await _load_full_findings(db, run_id):
+        page_num = 1
+        if getattr(finding, "contract_evidence", None):
+            page_num = finding.contract_evidence[0].page
+        elif getattr(finding, "evidence", None):
+            page_num = finding.evidence[0].page
+        page_words = words_by_page.get(page_num, [])
+        for needle in _candidate_needles_from_finding(finding):
+            rects = _find_text_rects(page_num, page_words, needle, max_tokens=80)
+            if rects:
+                finding_rects[finding.finding_id] = rects
+                break
+
+    annotation_rects: dict[str, list[PdfRectOut]] = {}
+    for ann in annotations:
+        if not ann.selected_text:
+            continue
+        page_num = ann.page_number or 1
+        rects = _find_text_rects(page_num, words_by_page.get(page_num, []), ann.selected_text, max_tokens=80)
+        if not rects:
+            for pn, words in words_by_page.items():
+                if pn == page_num:
+                    continue
+                rects = _find_text_rects(pn, words, ann.selected_text, max_tokens=80)
+                if rects:
+                    break
+        if rects:
+            annotation_rects[ann.id] = rects
+
+    return DocumentLayoutOut(
+        pages=pages,
+        finding_rects=finding_rects,
+        annotation_rects=annotation_rects,
+        clause_rects=clause_rects,
+    )
+
+
+@router.get("/runs/{run_id}/export-edited")
+async def export_edited_contract(run_id: str, db: DbSession) -> StreamingResponse:
+    """Export the original PDF with accepted/manual edits and exact highlights overlaid."""
+    run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    path = Path(run.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    clauses = (await db.execute(
+        select(ParsedClauseRecord)
+        .where(ParsedClauseRecord.run_id == run_id)
+        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     annotations_rows = (await db.execute(
@@ -120,135 +396,203 @@ async def export_edited_contract(run_id: str, db: DbSession) -> StreamingRespons
         .order_by(DocumentAnnotationRecord.created_at.asc())
     )).scalars().all()
 
-    # Index findings and annotations by clause_uid for quick lookup
-    findings_by_clause: dict[str, list] = {}
-    for f in findings_rows:
-        findings_by_clause.setdefault(f.clause_uid or "", []).append(f)
-
-    annotations_by_clause: dict[str, list] = {}
-    for a in annotations_rows:
-        annotations_by_clause.setdefault(a.clause_uid or "", []).append(a)
-
     edits: dict = run.contract_edits or {}
+    from app.backend.services.run_service import _load_full_findings
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
+    import pdfplumber
 
-    try:
-        from docx import Document
-        from docx.shared import Pt, RGBColor
-        from docx.enum.text import WD_COLOR_INDEX
+    pages: dict[int, dict] = {}
+    with pdfplumber.open(str(path)) as pdf:
+        for page_num, page in enumerate(pdf.pages, start=1):
+            pages[page_num] = {
+                "width": float(page.width),
+                "height": float(page.height),
+                "words": page.extract_words() or [],
+            }
 
-        doc = Document()
-        doc.core_properties.title = run.original_filename or "Contract"
+    clause_by_uid = {c.clause_uid: c for c in clauses}
+    content_by_page: dict[int, list[str]] = {}
 
-        # Title
-        title_para = doc.add_heading(run.original_filename or "Contract", level=1)
+    # Annotation highlights go BEFORE the original content stream (prepend) so
+    # the original text renders on top and remains readable.
+    highlights_by_page: dict[int, list[str]] = {}
+    # Edit overlays go AFTER the original content stream (append) so they
+    # white-out original text and show the replacement on top.
+    edits_by_page: dict[int, list[str]] = {}
 
-        _SEV_COLOR = {
-            "critical": RGBColor(0xC4, 0x43, 0x2B),
-            "high":     RGBColor(0xC4, 0x43, 0x2B),
-            "medium":   RGBColor(0xC8, 0x97, 0x3E),
-            "low":      RGBColor(0x3D, 0x8B, 0x5E),
-        }
+    for ann in annotations_rows:
+        if not ann.selected_text:
+            continue
+        page_num = ann.page_number or 1
+        page_info = pages.get(page_num)
+        rects = _find_text_rects(page_num, (page_info or {}).get("words", []), ann.selected_text, max_tokens=80) if page_info else []
+        actual_page = page_num
+        if not rects:
+            for pn, pi in pages.items():
+                if pn == page_num:
+                    continue
+                rects = _find_text_rects(pn, pi["words"], ann.selected_text, max_tokens=80)
+                if rects:
+                    actual_page = pn
+                    page_info = pi
+                    break
+        if rects and page_info:
+            highlights_by_page.setdefault(actual_page, []).append(
+                _rects_to_pdf_content(rects, page_info["height"], (0.82, 0.89, 1.0))
+            )
 
-        current_page = None
-        for clause in clauses:
-            if clause.page_number != current_page:
-                current_page = clause.page_number
-                doc.add_paragraph(f"─── Page {current_page} ───", style="Heading 2")
+    for clause_uid, raw_edit in edits.items():
+        clause = clause_by_uid.get(clause_uid)
+        if not clause:
+            continue
+        page_num = int((raw_edit or {}).get("page") or clause.page_number) if isinstance(raw_edit, dict) else clause.page_number
+        page_info = pages.get(page_num)
+        if not page_info:
+            continue
+        edit_text = _plain_text_from_edit(raw_edit)
+        if not edit_text:
+            continue
+        anchor_text = (raw_edit or {}).get("anchor_text", "") if isinstance(raw_edit, dict) else ""
+        rects: list[PdfRectOut] = []
+        if isinstance(raw_edit, dict) and raw_edit.get("rects"):
+            rects = [PdfRectOut(**r) for r in raw_edit["rects"]]
+        if not rects:
+            rects = _find_text_rects(page_num, page_info["words"], clause.normalized_text, max_tokens=180)
+        if not rects and anchor_text:
+            rects = _find_text_rects(page_num, page_info["words"], anchor_text, max_tokens=180)
 
-            clause_edit = edits.get(clause.clause_uid)
-            clause_findings = findings_by_clause.get(clause.clause_uid or "", [])
-            clause_annotations = annotations_by_clause.get(clause.clause_uid or "", [])
+        # Skip edits we cannot locate in the PDF — avoid random placement
+        if not rects:
+            continue
 
-            # Clause body paragraph
-            para = doc.add_paragraph()
-            run_obj = para.add_run(clause.normalized_text)
-            run_obj.font.size = Pt(10)
+        x0 = min(r.x0 for r in rects)
+        top = min(r.top for r in rects)
+        x1 = max(r.x1 for r in rects)
+        bottom = max(r.bottom for r in rects)
+        orig_h = max(14.0, bottom - top)
+        orig_w = max(120.0, x1 - x0)
 
-            # If there's an accepted edit, add it below in green
-            if clause_edit:
-                edit_para = doc.add_paragraph()
-                edit_run = edit_para.add_run("✎ Accepted edit: ")
-                edit_run.bold = True
-                edit_run.font.color.rgb = RGBColor(0x3D, 0x8B, 0x5E)
-                edit_run.font.size = Pt(9)
-                body_run = edit_para.add_run(clause_edit["text"])
-                body_run.font.color.rgb = RGBColor(0x3D, 0x8B, 0x5E)
-                body_run.font.size = Pt(9)
+        # --- Redline: strikethrough over original text area ---
+        # Draw horizontal lines at roughly 40% height of each "line" in the bounding box
+        line_height_est = 12.0
+        num_orig_lines = max(1, round(orig_h / line_height_est))
+        overlay: list[str] = []
+        for li in range(num_orig_lines):
+            line_mid_top = top + (li + 0.55) * (orig_h / num_orig_lines)
+            strike_y = page_info["height"] - line_mid_top
+            overlay.append(
+                f"q 0.8 0.1 0.1 RG 0.8 w {x0:.2f} {strike_y:.2f} m {x1:.2f} {strike_y:.2f} l S Q"
+            )
 
-            # AI findings for this clause
-            for f in clause_findings:
-                color = _SEV_COLOR.get(f.severity or "medium", RGBColor(0x44, 0x44, 0x44))
-                finding_para = doc.add_paragraph()
-                label = finding_para.add_run(f"⚠ AI [{(f.severity or 'medium').upper()}]: ")
-                label.bold = True
-                label.font.color.rgb = color
-                label.font.size = Pt(9)
-                issue_run = finding_para.add_run(f.issue or "")
-                issue_run.font.color.rgb = color
-                issue_run.font.size = Pt(9)
-                if f.recommended_change:
-                    rec_para = doc.add_paragraph()
-                    rec_label = rec_para.add_run("  → Suggested rewrite: ")
-                    rec_label.italic = True
-                    rec_label.font.size = Pt(8.5)
-                    rec_label.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
-                    rec_text = rec_para.add_run(f.recommended_change)
-                    rec_text.font.size = Pt(8.5)
-                    rec_text.font.color.rgb = RGBColor(0x33, 0x33, 0x99)
+        # --- Replacement box immediately below original ---
+        gap = 4.0
+        font_size = 9.5
+        repl_line_h = 12.0
+        max_chars = max(30, int(orig_w / 5.5))
+        words_list = edit_text.split()
+        lines: list[str] = []
+        current = ""
+        for word in words_list:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > max_chars:
+                if current:
+                    lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
 
-            # Human annotations for this clause
-            for ann in clause_annotations:
-                ann_para = doc.add_paragraph()
-                prefix = "💬 Comment" if ann.annotation_type == "comment" else "✏ Suggestion"
-                ann_label = ann_para.add_run(f"{prefix}: ")
-                ann_label.bold = True
-                ann_label.font.size = Pt(9)
-                ann_label.font.color.rgb = RGBColor(0x44, 0x44, 0x99)
-                ann_body = ann_para.add_run(ann.body or "")
-                ann_body.font.size = Pt(9)
-                if ann.suggested_replacement:
-                    sug_para = doc.add_paragraph()
-                    sug_label = sug_para.add_run("  → Replacement: ")
-                    sug_label.italic = True
-                    sug_label.font.size = Pt(8.5)
-                    sug_label.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
-                    sug_text = sug_para.add_run(ann.suggested_replacement)
-                    sug_text.font.size = Pt(8.5)
-                    sug_text.font.color.rgb = RGBColor(0x33, 0x33, 0x99)
+        repl_h = len(lines) * repl_line_h + 14.0
+        repl_top = bottom + gap
+        repl_y_pdf = page_info["height"] - repl_top - repl_h
 
-            doc.add_paragraph()  # blank line between clauses
-
-        buf = io.BytesIO()
-        doc.save(buf)
-        buf.seek(0)
-
-        base = (run.original_filename or "contract").rsplit(".", 1)[0]
-        filename = f"{base}-edited.docx"
-        return StreamingResponse(
-            buf,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        # Light green-tinted background for the replacement box
+        overlay.append(f"q 0.94 0.99 0.95 rg {x0:.2f} {repl_y_pdf:.2f} {orig_w:.2f} {repl_h:.2f} re f Q")
+        # Blue left-edge bar
+        overlay.append(f"q 0.149 0.392 0.863 rg {x0:.2f} {repl_y_pdf:.2f} 2.5 {repl_h:.2f} re f Q")
+        # "Replacement" label
+        label_y = page_info["height"] - repl_top - 8.0
+        overlay.append(
+            f"BT /FvHelvetica 7 Tf 0.149 0.392 0.863 rg "
+            f"1 0 0 1 {x0 + 6:.2f} {label_y:.2f} Tm (REPLACEMENT) Tj ET"
         )
+        # Replacement text lines
+        for idx, line in enumerate(lines[:25]):
+            line_y = page_info["height"] - repl_top - 14.0 - (idx * repl_line_h)
+            if line_y < 10:
+                break
+            overlay.append(
+                f"BT /FvHelvetica {font_size} Tf 0.067 0.247 0.067 rg "
+                f"1 0 0 1 {x0 + 6:.2f} {line_y:.2f} Tm ({_escape_pdf_text(line)}) Tj ET"
+            )
+        edits_by_page.setdefault(page_num, []).append("\n".join(overlay))
 
-    except ImportError:
-        # Fallback to plain text if python-docx is not installed
-        lines = [run.original_filename or "Contract", ""]
-        current_page = None
-        for clause in clauses:
-            if clause.page_number != current_page:
-                current_page = clause.page_number
-                lines.append(f"--- Page {current_page} ---")
-            clause_edit = edits.get(clause.clause_uid)
-            text = clause_edit["text"] if clause_edit else clause.normalized_text
-            lines.append(text)
-            for f in findings_by_clause.get(clause.clause_uid or "", []):
-                lines.append(f"  [AI {f.severity}] {f.issue}")
-            lines.append("")
-        base = (run.original_filename or "contract").rsplit(".", 1)[0]
-        return PlainTextResponse(
-            "\n".join(lines),
-            headers={"Content-Disposition": f'attachment; filename="{base}-edited.txt"'},
-        )
+    reader = PdfReader(str(path))
+    writer = PdfWriter()
+
+    def _setup_font(out_page):
+        resources_obj = out_page.get("/Resources")
+        resources = resources_obj.get_object() if hasattr(resources_obj, "get_object") else (resources_obj or DictionaryObject())
+        fonts_obj = resources.get("/Font") if resources else None
+        fonts = fonts_obj.get_object() if hasattr(fonts_obj, "get_object") else (fonts_obj or DictionaryObject())
+        fonts[NameObject("/FvHelvetica")] = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        resources[NameObject("/Font")] = fonts
+        out_page[NameObject("/Resources")] = resources
+
+    def _prepend_stream(out_page, data: str):
+        """Insert stream BEFORE original content so original text renders on top."""
+        obj = DecodedStreamObject()
+        obj.set_data(data.encode("utf-8"))
+        ref = writer._add_object(obj)
+        contents = out_page.get("/Contents")
+        if contents is None:
+            out_page[NameObject("/Contents")] = ref
+        elif isinstance(contents, ArrayObject):
+            contents.insert(0, ref)
+        else:
+            out_page[NameObject("/Contents")] = ArrayObject([ref, contents])
+
+    def _append_stream(out_page, data: str):
+        """Append stream AFTER original content so it paints over the original."""
+        obj = DecodedStreamObject()
+        obj.set_data(data.encode("utf-8"))
+        ref = writer._add_object(obj)
+        contents = out_page.get("/Contents")
+        if contents is None:
+            out_page[NameObject("/Contents")] = ref
+        elif isinstance(contents, ArrayObject):
+            contents.append(ref)
+        else:
+            out_page[NameObject("/Contents")] = ArrayObject([contents, ref])
+
+    for index, page in enumerate(reader.pages, start=1):
+        writer.add_page(page)
+        hl = highlights_by_page.get(index, [])
+        ed = edits_by_page.get(index, [])
+        if not hl and not ed:
+            continue
+        out_page = writer.pages[index - 1]
+        _setup_font(out_page)
+        if hl:
+            _prepend_stream(out_page, "\n".join(hl))
+        if ed:
+            _append_stream(out_page, "\n".join(ed))
+
+    buf = io.BytesIO()
+    writer.write(buf)
+    buf.seek(0)
+    base = (run.original_filename or "contract").rsplit(".", 1)[0]
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{base}-edited.pdf"'},
+    )
 
 
 @router.put("/runs/{run_id}/contract-edits/{clause_uid}", status_code=status.HTTP_200_OK)
@@ -263,11 +607,22 @@ async def save_clause_edit(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     edits: dict = dict(run.contract_edits or {})
-    edits[clause_uid] = {"text": body.text, "edited_at": datetime.utcnow().isoformat()}
+    plain_text = body.plain_text or _safe_rich_text_to_plain(body.text)
+    edit_payload = {
+        "schema_version": 2,
+        "text": body.text,
+        "plain_text": plain_text,
+        "rich_text": body.rich_text or [],
+        "page": body.page,
+        "rects": body.rects or [],
+        "anchor_text": body.anchor_text,
+        "edited_at": datetime.utcnow().isoformat(),
+    }
+    edits[clause_uid] = edit_payload
     run.contract_edits = edits
     flag_modified(run, "contract_edits")
     await db.commit()
-    return {"clause_uid": clause_uid, "text": body.text}
+    return {"clause_uid": clause_uid, **edit_payload}
 
 
 # ---------------------------------------------------------------------------
@@ -286,20 +641,33 @@ async def accept_finding(
     finding = (await db.execute(
         select(FindingRecord).where(FindingRecord.id == finding_id, FindingRecord.run_id == run_id)
     )).scalar_one_or_none()
+    full_finding = None
     if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+        from app.backend.services.run_service import _load_full_findings
+        full_finding = next((f for f in await _load_full_findings(db, run_id) if f.finding_id == finding_id), None)
+        if full_finding is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
 
     # Determine replacement text: explicit override -> finding.recommended_change -> None
     body = body or AcceptFindingBody()
-    replacement_text = body.custom_text or finding.recommended_change
+    replacement_text = body.custom_text or (
+        finding.recommended_change if finding else getattr(full_finding, "recommended_change", None)
+    )
+    clause_uid = finding.clause_uid if finding else getattr(full_finding, "clause_uid", None)
 
     applied_text: str | None = None
-    if replacement_text and finding.clause_uid:
+    if replacement_text and clause_uid:
         run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
         if run:
             edits: dict = dict(run.contract_edits or {})
-            edits[finding.clause_uid] = {
+            edits[clause_uid] = {
+                "schema_version": 2,
                 "text": replacement_text,
+                "plain_text": _safe_rich_text_to_plain(replacement_text),
+                "rich_text": [],
+                "page": None,
+                "rects": [],
+                "anchor_text": None,
                 "edited_at": datetime.utcnow().isoformat(),
             }
             run.contract_edits = edits
@@ -307,7 +675,8 @@ async def accept_finding(
             applied_text = replacement_text
 
     # Mark finding as accepted so it disappears from the review queue
-    finding.accepted_at = datetime.utcnow()
+    if finding:
+        finding.accepted_at = datetime.utcnow()
     annotation_result = await db.execute(
         select(DocumentAnnotationRecord).where(
             DocumentAnnotationRecord.run_id == run_id,
@@ -319,22 +688,23 @@ async def accept_finding(
         annotation.status = "accepted"
 
     # Audit trail
-    record = HumanReviewRecord(
-        id=str(uuid.uuid4()),
-        run_id=run_id,
-        finding_id=finding_id,
-        reviewer_id=token["sub"],
-        reviewer_role="human_reviewer",
-        action="edit",
-        original_finding_snapshot={"issue": finding.issue, "severity": finding.severity},
-        edited_finding_snapshot={
-            "accepted_recommendation": finding.recommendation,
-            "applied_text": applied_text,
-        },
-        edit_justification="accepted",
-        is_run_level=False,
-    )
-    db.add(record)
+    if finding:
+        record = HumanReviewRecord(
+            id=str(uuid.uuid4()),
+            run_id=run_id,
+            finding_id=finding_id,
+            reviewer_id=token["sub"],
+            reviewer_role="human_reviewer",
+            action="edit",
+            original_finding_snapshot={"issue": finding.issue, "severity": finding.severity},
+            edited_finding_snapshot={
+                "accepted_recommendation": finding.recommendation,
+                "applied_text": applied_text,
+            },
+            edit_justification="accepted",
+            is_run_level=False,
+        )
+        db.add(record)
     await db.commit()
     return {"finding_id": finding_id, "accepted": True, "applied_text": applied_text}
 
@@ -350,7 +720,13 @@ async def dismiss_finding(
         select(FindingRecord).where(FindingRecord.id == finding_id, FindingRecord.run_id == run_id)
     )).scalar_one_or_none()
     if not finding:
-        raise HTTPException(status_code=404, detail="Finding not found")
+        # Some active UI findings come directly from admin structured output and
+        # do not have a one-to-one FindingRecord row. Let the UI dismiss them
+        # locally instead of failing the action.
+        from app.backend.services.run_service import _load_full_findings
+        if not any(f.finding_id == finding_id for f in await _load_full_findings(db, run_id)):
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return {"finding_id": finding_id, "dismissed": True}
 
     finding.dismissed_at = datetime.utcnow()
     annotation_result = await db.execute(
@@ -481,3 +857,215 @@ async def delete_annotation(
         raise HTTPException(status_code=403, detail="Cannot delete another user's annotation")
     record.status = "deleted"
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Document draft — computed from existing parsed data, no extra table needed
+# ---------------------------------------------------------------------------
+
+_HEADING1_RE = re.compile(r"^(ARTICLE|SECTION|SCHEDULE|EXHIBIT|ANNEX|PART|CHAPTER)\s+", re.I)
+_HEADING2_NUM_RE = re.compile(r"^\d+\.\s+[A-Z]")
+_HEADING3_NUM_RE = re.compile(r"^\d+\.\d+[\s.]+")
+_LIST_RE = re.compile(r"^\([a-z]\)\s|^[a-z]\)\s+|\(i[ivx]*\)\s")
+
+
+def _infer_block_style(text: str) -> str:
+    t = text.strip()
+    if not t:
+        return "body"
+    if t.isupper() and 3 < len(t) <= 70:
+        return "heading1"
+    if _HEADING1_RE.match(t) and len(t) <= 150:
+        return "heading1"
+    # Tighten heading2/3 to ≤75 chars so "7. Governing Law This Agreement shall…"
+    # (heading title + body text inlined) falls through to body style instead of bold.
+    if _HEADING2_NUM_RE.match(t) and len(t) <= 75 and not t.endswith(","):
+        return "heading2"
+    if _HEADING3_NUM_RE.match(t) and len(t) <= 75:
+        return "heading3"
+    if _LIST_RE.match(t):
+        return "list_item"
+    return "body"
+
+
+
+def _compute_comment_anchors(original_text: str, anns: list) -> list[CommentAnchorOut]:
+    result = []
+    norm_orig = " ".join(original_text.lower().split())
+    for ann in anns:
+        if not ann.selected_text:
+            continue
+        if ann.span_start is not None and ann.span_end is not None:
+            result.append(CommentAnchorOut(annotation_id=ann.id, from_pos=ann.span_start, to_pos=ann.span_end))
+            continue
+        norm_sel = " ".join(ann.selected_text.lower().split())
+        idx = norm_orig.find(norm_sel)
+        if idx >= 0:
+            result.append(CommentAnchorOut(annotation_id=ann.id, from_pos=idx, to_pos=idx + len(norm_sel)))
+    return result
+
+
+@router.get("/runs/{run_id}/document-draft", response_model=DocumentDraftOut)
+async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
+    """Return structured document blocks for the Google-Docs-style editor."""
+    run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    clauses = (await db.execute(
+        select(ParsedClauseRecord)
+        .where(ParsedClauseRecord.run_id == run_id)
+        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+    )).scalars().all()
+
+    annotations = (await db.execute(
+        select(DocumentAnnotationRecord).where(
+            DocumentAnnotationRecord.run_id == run_id,
+            DocumentAnnotationRecord.status.not_in(["accepted", "dismissed", "deleted"]),
+        )
+    )).scalars().all()
+    ann_by_clause: dict[str, list] = {}
+    for ann in annotations:
+        ann_by_clause.setdefault(ann.clause_uid, []).append(ann)
+
+    # Pending findings: not accepted, not dismissed, has replacement text
+    pending_findings = (await db.execute(
+        select(FindingRecord).where(
+            FindingRecord.run_id == run_id,
+            FindingRecord.dismissed_at.is_(None),
+            FindingRecord.accepted_at.is_(None),
+            FindingRecord.recommended_change.isnot(None),
+        )
+    )).scalars().all()
+    finding_by_clause: dict[str, FindingRecord] = {}
+    for f in pending_findings:
+        if f.clause_uid and f.clause_uid not in finding_by_clause and (f.recommended_change or "").strip():
+            finding_by_clause[f.clause_uid] = f
+
+    edits: dict = run.contract_edits or {}
+    revision = len(edits)
+
+    blocks: list[DraftBlockOut] = []
+    for clause in clauses:
+        raw_edit = edits.get(clause.clause_uid)
+        if raw_edit and isinstance(raw_edit, dict):
+            current_text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
+        else:
+            current_text = clause.normalized_text
+        original_text = clause.normalized_text
+        style = _infer_block_style(original_text)
+
+        pending = finding_by_clause.get(clause.clause_uid)
+        pending_out: Optional[PendingSuggestionOut] = None
+        # Never attach AI suggestions to heading blocks — they contain the clause number/title
+        # and should remain untouched by the AI review pipeline.
+        if pending and style not in ("heading1", "heading2", "heading3"):
+            pending_out = PendingSuggestionOut(
+                finding_id=pending.id,
+                severity=pending.severity or "medium",
+                description=pending.issue or "",
+                replacement_text=(pending.recommended_change or "").strip(),
+            )
+
+        clause_anns = ann_by_clause.get(clause.clause_uid, [])
+        comment_anchors = _compute_comment_anchors(original_text, clause_anns)
+
+        blocks.append(DraftBlockOut(
+            block_id=f"block_{clause.clause_uid}",
+            clause_uid=clause.clause_uid,
+            page_number=clause.page_number,
+            style=style,
+            text=current_text,
+            original_text=original_text,
+            marks=[],
+            pending_suggestion=pending_out,
+            comment_anchors=comment_anchors,
+        ))
+
+    return DocumentDraftOut(blocks=blocks, revision=revision)
+
+
+# ---------------------------------------------------------------------------
+# DOCX export — export clean document draft as a Word file
+# ---------------------------------------------------------------------------
+
+
+@router.get("/runs/{run_id}/export-docx")
+async def export_docx(run_id: str, db: DbSession) -> StreamingResponse:
+    """Export the current document draft (accepted edits applied) as a DOCX file."""
+    run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    clauses = (await db.execute(
+        select(ParsedClauseRecord)
+        .where(ParsedClauseRecord.run_id == run_id)
+        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+    )).scalars().all()
+
+    edits: dict = run.contract_edits or {}
+
+    try:
+        from docx import Document as DocxDocument
+        from docx.shared import Pt, Inches
+    except ImportError:
+        raise HTTPException(status_code=501, detail="python-docx not installed; run: pip install python-docx")
+
+    doc = DocxDocument()
+
+    # Disable revision/track-changes recording so accepted edits don't appear
+    # as blue insertions when the file is opened in Word.
+    try:
+        from docx.oxml.ns import qn as _qn
+        settings_el = doc.settings.element
+        for tag in ("w:trackChanges", "w:revisionView"):
+            for el in settings_el.findall(_qn(tag)):
+                settings_el.remove(el)
+    except Exception:
+        pass
+
+    # Letter page margins
+    for section in doc.sections:
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1.25)
+        section.right_margin = Inches(1.25)
+
+    _STYLE_MAP = {
+        "heading1": "Heading 1",
+        "heading2": "Heading 2",
+        "heading3": "Heading 3",
+        "body": "Normal",
+        "list_item": "Normal",
+    }
+
+    base = (run.original_filename or "contract").rsplit(".", 1)[0]
+
+    for clause in clauses:
+        raw_edit = edits.get(clause.clause_uid)
+        if raw_edit and isinstance(raw_edit, dict):
+            text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
+        else:
+            text = clause.normalized_text
+        # Strip markdown bold/italic that the LLM may have included
+        text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text).strip()
+        if not text.strip():
+            continue
+
+        style_key = _infer_block_style(clause.normalized_text)
+        word_style = _STYLE_MAP.get(style_key, "Normal")
+        try:
+            p = doc.add_paragraph(text, style=word_style)
+        except (KeyError, ValueError):
+            p = doc.add_paragraph(text)
+        if style_key == "body":
+            p.paragraph_format.space_after = Pt(6)
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{base}-edited.docx"'},
+    )

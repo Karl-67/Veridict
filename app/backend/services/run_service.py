@@ -215,7 +215,7 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
     )
     stage = stage_result.scalars().first()
     merged_findings: list[Finding] = []
-    seen_clause_uids: set[str] = set()
+    seen_finding_keys: set[tuple[str, str, str]] = set()
     if stage and stage.structured_output:
         for f in stage.structured_output.get("merged_findings", []):
             try:
@@ -223,7 +223,7 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
                 if finding.finding_id in inactive_finding_ids:
                     continue
                 merged_findings.append(finding)
-                seen_clause_uids.add(finding.clause_uid)
+                seen_finding_keys.add((finding.clause_uid, finding.issue_type, finding.description))
             except Exception:
                 continue
 
@@ -253,20 +253,21 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
         for row in clause_result.all()
     }
 
-    best_by_clause: dict[str, FindingRecord] = {}
+    selected_records: list[FindingRecord] = []
+    seen_db_keys: set[tuple[str, str, str]] = set()
     for fr in db_findings:
-        uid = fr.clause_uid or str(fr.id)
-        if uid in seen_clause_uids:
-            continue
         agent = fr.source_agent or ""
         # final_reviewer is not a valid source in the current topology.
         if agent.startswith("final_reviewer"):
             continue
-        existing = best_by_clause.get(uid)
-        if existing is None or _source_priority(fr.source_agent) < _source_priority(existing.source_agent):
-            best_by_clause[uid] = fr
+        key = (fr.clause_uid or str(fr.id), "liability_exposure", fr.issue or "")
+        if key in seen_finding_keys or key in seen_db_keys:
+            continue
+        seen_db_keys.add(key)
+        selected_records.append(fr)
 
-    for fr in best_by_clause.values():
+    selected_records.sort(key=lambda fr: (_source_priority(fr.source_agent), fr.created_at))
+    for fr in selected_records:
         finding = _finding_record_to_finding(fr, clause_lookup=clause_lookup)
         if finding is not None:
             merged_findings.append(finding)

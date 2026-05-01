@@ -462,7 +462,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
                         const url = window.verdictApi.getRunExportUrl(selectedRunId);
                         const a = document.createElement("a");
                         a.href = url;
-                        a.download = fileName.replace(/\.pdf$/i, "-edited.docx");
+                        a.download = fileName.replace(/\.pdf$/i, "-edited.pdf");
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);

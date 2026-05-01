@@ -160,7 +160,9 @@ def _score_evidence_quality(finding: Finding) -> float:
     evidence = getattr(finding, "contract_evidence", getattr(finding, "evidence", []))
     if not evidence:
         return 0.0
-    return sum(ev.extraction_confidence for ev in evidence) / len(evidence)
+    def confidence(ev: Any) -> float:
+        return float(getattr(ev, "extraction_confidence", getattr(ev, "confidence", 0.0)) or 0.0)
+    return sum(confidence(ev) for ev in evidence) / len(evidence)
 
 
 def _deduplicate_overlapping_findings(findings: list[Finding], finding_verdicts: list[dict]) -> list[Finding]:
@@ -186,7 +188,8 @@ def _deduplicate_overlapping_findings(findings: list[Finding], finding_verdicts:
         for finding in group:
             ev_list = getattr(finding, "contract_evidence", getattr(finding, "evidence", []))
             for evidence in ev_list:
-                key = (evidence.clause_uid, evidence.page)
+                clause_id = getattr(evidence, "clause_uid", getattr(evidence, "clause_id", ""))
+                key = (clause_id, evidence.page)
                 if key not in seen_keys:
                     seen_keys.add(key)
                     merged_evidence.append(evidence)

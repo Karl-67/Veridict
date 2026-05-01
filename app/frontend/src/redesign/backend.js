@@ -321,11 +321,16 @@ async function getContractEdits(runId) {
   return readJson(res, "Failed to load edits");
 }
 
-async function saveClauseEdit(runId, clauseUid, text) {
+async function getDocumentLayout(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/document-layout`, { headers: authHeaders() });
+  return readJson(res, "Failed to load document layout");
+}
+
+async function saveClauseEdit(runId, clauseUid, text, metadata = {}) {
   const res = await apiFetch(`${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`, {
     method: "PUT",
     headers: authHeaders(true),
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...metadata }),
   });
   return readJson(res, "Failed to save edit");
 }
@@ -415,6 +420,7 @@ window.verdictApi = {
   deleteRunComment,
   listRunClauses,
   getContractEdits,
+  getDocumentLayout,
   saveClauseEdit,
   acceptFinding,
   dismissFinding,

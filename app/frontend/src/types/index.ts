@@ -96,9 +96,71 @@ export interface ClauseData {
   bbox: number[];
 }
 
+export interface PdfRect {
+  page: number;
+  x0: number;
+  top: number;
+  x1: number;
+  bottom: number;
+}
+
+export interface PdfPageLayout {
+  page: number;
+  width: number;
+  height: number;
+}
+
+export interface DocumentLayout {
+  pages: PdfPageLayout[];
+  finding_rects: Record<string, PdfRect[]>;
+  annotation_rects: Record<string, PdfRect[]>;
+  clause_rects: Record<string, PdfRect[]>;
+}
+
 export interface ContractEdit {
   text: string;
+  plain_text?: string | null;
+  rich_text?: Array<Record<string, unknown>> | null;
+  page?: number | null;
+  rects?: PdfRect[] | null;
+  anchor_text?: string | null;
   edited_at: string;
+}
+
+// ============================================================================
+// Document draft — Google Docs-style structured editor
+// ============================================================================
+
+export interface CommentAnchor {
+  annotation_id: string;
+  from_pos: number;
+  to_pos: number;
+}
+
+export interface PendingSuggestion {
+  finding_id: string;
+  severity: string;
+  description: string;
+  replacement_text: string;
+}
+
+export type BlockStyle = "heading1" | "heading2" | "heading3" | "body" | "list_item";
+
+export interface DraftBlock {
+  block_id: string;
+  clause_uid: string;
+  page_number: number;
+  style: BlockStyle;
+  text: string;
+  original_text: string;
+  marks: Array<{ type: string; from_pos: number; to_pos: number }>;
+  pending_suggestion: PendingSuggestion | null;
+  comment_anchors: CommentAnchor[];
+}
+
+export interface DocumentDraft {
+  blocks: DraftBlock[];
+  revision: number;
 }
 
 export interface DocumentAnnotation {

@@ -4,6 +4,8 @@ import type {
   ContractDetail,
   ContractEdit,
   ContractSummary,
+  DocumentDraft,
+  DocumentLayout,
   DocumentAnnotation,
   Finding,
   FinalVerdict,
@@ -196,11 +198,22 @@ export async function getContractEdits(runId: string): Promise<Record<string, Co
   return response.json();
 }
 
-export async function saveClauseEdit(runId: string, clauseUid: string, text: string): Promise<{ clause_uid: string; text: string }> {
+export async function getDocumentLayout(runId: string): Promise<DocumentLayout> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/document-layout`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to load document layout");
+  return response.json();
+}
+
+export async function saveClauseEdit(
+  runId: string,
+  clauseUid: string,
+  text: string,
+  metadata: Partial<ContractEdit> = {}
+): Promise<{ clause_uid: string; text: string }> {
   const response = await fetch(`${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...metadata }),
   });
   if (!response.ok) throw new Error("Failed to save edit");
   return response.json();
@@ -266,6 +279,32 @@ export async function deleteAnnotation(runId: string, annotationId: string): Pro
     headers: authHeaders(),
   });
   if (!response.ok && response.status !== 204) throw new Error("Failed to delete annotation");
+}
+
+export async function getDocumentDraft(runId: string): Promise<DocumentDraft> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/document-draft`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to load document draft");
+  return response.json();
+}
+
+export async function saveBlockEdit(
+  runId: string,
+  clauseUid: string,
+  plainText: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ text: plainText, plain_text: plainText }),
+    },
+  );
+  if (!response.ok) throw new Error("Failed to save block edit");
+}
+
+export function getDocxExportUrl(runId: string): string {
+  return `${API_BASE}/runs/${runId}/export-docx`;
 }
 
 export async function uploadRagDocument(payload: {
