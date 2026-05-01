@@ -1,36 +1,26 @@
 ---
-# vLLM inference server — fine-tuned Kira Gemma 4 26B  [BLUE slot]
-# Serves: KiraWorker×1, KiraPanelReviewer×3
-# All four Kira agents share these weights; each has its own distinct system prompt.
-# GPU requirement: 1× NVIDIA A100 80GB (Standard_NC24ads_A100_v4)
-#
-# Blue-green deployment:
-#   Active slot is determined by the Service selector (slot: blue or slot: green).
-#   To promote a new model version use: python scripts/blue_green_switch.py --to green
-#   Only one slot runs at a time (the other stays at replicas: 0) to avoid double GPU cost.
-#
-# Fine-tuning: run `python -m scripts.fine_tune.launch` to train on RunPod and
-# upload the LoRA adapter to the verdict-fine-tune-output PVC.
-# After training: python scripts/blue_green_switch.py --to green --image <new-tag>
+# vLLM inference server — fine-tuned Kira Gemma 4 26B  [GREEN slot]
+# Starts at replicas: 0 — scaled up by blue_green_switch.py during promotion.
+# Only one slot (blue or green) runs at a time to avoid double GPU cost.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: verdict-vllm-kira-blue
+  name: verdict-vllm-kira-green
   namespace: verdict
   labels:
     app: verdict-vllm-kira
-    slot: blue
+    slot: green
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: verdict-vllm-kira
-      slot: blue
+      slot: green
   template:
     metadata:
       labels:
         app: verdict-vllm-kira
-        slot: blue
+        slot: green
     spec:
       nodeSelector:
         sku: gpu
@@ -101,25 +91,7 @@ spec:
       volumes:
         - name: hf-cache
           persistentVolumeClaim:
-            claimName: verdict-vllm-kira-cache
+            claimName: verdict-vllm-kira-cache-green
         - name: kira-adapter
           persistentVolumeClaim:
             claimName: verdict-fine-tune-output
-
----
-# Service selector is patched by blue_green_switch.py on every promotion.
-# Current active slot: blue (initial value — updated automatically on switch).
-apiVersion: v1
-kind: Service
-metadata:
-  name: verdict-vllm-kira
-  namespace: verdict
-  labels:
-    app: verdict-vllm-kira
-spec:
-  selector:
-    slot: blue
-  ports:
-    - port: 8000
-      targetPort: 8000
-  type: ClusterIP

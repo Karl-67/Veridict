@@ -20,21 +20,40 @@ function SectionLabel({ children, style = {} }) {
   );
 }
 
-// Normalize raw backend findings so ContractReader always has evidence data
+// Normalize raw backend findings so ContractReader gets Admin evidence anchors first.
 function toReaderFindings(rawFindings) {
-  return rawFindings.map(f => ({
-    ...f,
-    evidence: f.evidence?.length > 0 ? f.evidence
-      : (f.contract_evidence ?? []).map(ce => ({
-          page: ce.page ?? 1,
-          normalized_text: ce.text ?? "",
-          document_hash: "",
-          parser_version: "",
-          clause_uid: f.clause_uid ?? "",
-          bbox: [],
-          extraction_confidence: ce.confidence ?? 1,
-        })),
-  }));
+  const isFocusedEvidence = text => {
+    const normalized = (text ?? "").replace(/\s+/g, " ").trim();
+    return normalized.length > 0 && normalized.length <= 900;
+  };
+
+  return rawFindings.map(f => {
+    const contractEvidence = (f.contract_evidence ?? [])
+      .map(ce => ({
+        page: ce.page ?? 1,
+        normalized_text: ce.text ?? ce.excerpt ?? ce.normalized_text ?? "",
+        document_hash: "",
+        parser_version: "",
+        clause_uid: ce.clause_id ?? ce.clause_uid ?? f.clause_uid ?? "",
+        bbox: ce.bbox ?? [],
+        extraction_confidence: ce.confidence ?? ce.extraction_confidence ?? 1,
+      }))
+      .filter(e => isFocusedEvidence(e.normalized_text));
+
+    const legacyEvidence = (f.evidence ?? [])
+      .map(e => ({
+        ...e,
+        page: e.page ?? 1,
+        normalized_text: e.normalized_text ?? e.text ?? "",
+        clause_uid: e.clause_uid ?? f.clause_uid ?? "",
+      }))
+      .filter(e => isFocusedEvidence(e.normalized_text));
+
+    return {
+      ...f,
+      evidence: contractEvidence.length > 0 ? contractEvidence : legacyEvidence,
+    };
+  });
 }
 
 // ── Comments panel ────────────────────────────────────────────────────────────
@@ -211,6 +230,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
   const [rejectReason, setRejectReason] = React.useState("");
   const [approved, setApproved]       = React.useState(false);
   const [activeTab, setActiveTab]     = React.useState("analysis");
+  const currentUser = window.verdictApi.currentUser();
 
   // Cross-tab finding navigation: set to finding 1-based index to jump in ContractReader
   const [jumpToFinding, setJumpToFinding] = React.useState(null);
@@ -334,6 +354,9 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
               findings={readerFindings}
               jumpToIndex={jumpToFinding}
               onJumpHandled={() => setJumpToFinding(null)}
+              contractId={selectedContractId}
+              filename={fileName}
+              currentUserName={currentUser?.display_name || currentUser?.full_name || "Unknown"}
             />
           ) : (
             <div style={{ padding: "48px 0", color: "var(--text-3)", fontSize: 14 }}>Document viewer not available.</div>

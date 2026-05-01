@@ -11,6 +11,7 @@ Failed rows are kept with ds_labeled=False, ds_error=str(e).
 Usage:
   python -m scripts.distill.label_with_deepseek --dry-run
   python -m scripts.distill.label_with_deepseek --split train
+  python -m scripts.distill.label_with_deepseek --split train --workers 10
   python -m scripts.distill.label_with_deepseek --split all
 """
 
@@ -19,6 +20,9 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -137,14 +141,33 @@ def _get_client() -> OpenAI:
 
 
 def _call_deepseek(client: OpenAI, model: str, messages: list) -> dict:
-    resp = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=0.1,
-        max_tokens=450,
-        response_format={"type": "json_object"},
-    )
-    return json.loads(resp.choices[0].message.content)
+    for attempt in range(5):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.6,
+                max_tokens=8000,
+                reasoning_effort="high",
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                wait = 2 ** attempt
+                log.warning("Rate limited — retrying in %ds (attempt %d/5)", wait, attempt + 1)
+                time.sleep(wait)
+                continue
+            raise
+        content = resp.choices[0].message.content
+        if not content:
+            finish = resp.choices[0].finish_reason
+            raise ValueError(f"Empty response from DeepSeek (finish_reason={finish!r}) "
+                             f"for model='{model}'")
+        text = content.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
+    raise RuntimeError("DeepSeek rate limit exceeded after 5 retries")
 
 
 def label_row(client: OpenAI, model: str, row: dict) -> dict:
@@ -223,7 +246,7 @@ def _load_raw(path: Path) -> list[dict]:
 
 # ── Main labeling loop ────────────────────────────────────────────────────────
 
-def process_split(split: str, dry_run: bool = False) -> None:
+def process_split(split: str, dry_run: bool = False, workers: int = 1, limit: int = 0) -> None:
     raw_path     = KIRA_RAW_DIR     / f"{split}.jsonl"
     labeled_path = KIRA_LABELED_DIR / f"{split}.jsonl"
 
@@ -237,9 +260,12 @@ def process_split(split: str, dry_run: bool = False) -> None:
     already   = _load_labeled(labeled_path)
     remaining = [r for r in rows if r.get("id") not in already]
 
+    if limit:
+        remaining = remaining[:limit]
+
     log.info(
-        "Split=%s  total=%d  already_labeled=%d  remaining=%d",
-        split, len(rows), len(already), len(remaining),
+        "Split=%s  total=%d  already_labeled=%d  remaining=%d  workers=%d",
+        split, len(rows), len(already), len(remaining), workers,
     )
 
     if dry_run:
@@ -262,8 +288,10 @@ def process_split(split: str, dry_run: bool = False) -> None:
     client = _get_client()
 
     buffer: list[dict] = []
-    errors  = 0
+    lock    = threading.Lock()
     labeled = 0
+    skipped = 0
+    done    = 0
 
     def _flush(buf: list[dict]) -> None:
         if not buf:
@@ -272,32 +300,39 @@ def process_split(split: str, dry_run: bool = False) -> None:
             for r in buf:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    for i, row in enumerate(remaining):
-        try:
-            result = label_row(client, model, row)
-            buffer.append(result)
-            labeled += 1
-        except Exception as e:
-            log.error("Error on row %s: %s", row.get("id"), e)
-            row["ds_labeled"] = False
-            row["ds_error"]   = str(e)
-            buffer.append(row)
-            errors += 1
+    def _process(row: dict) -> dict:
+        return label_row(client, model, row)
 
-        if len(buffer) >= CHECKPOINT_EVERY:
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_process, row): row for row in remaining}
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception as e:
+                    log.error("Skipping row (will retry next run): %s", e)
+                    with lock:
+                        skipped += 1
+                        done += 1
+                    continue
+                with lock:
+                    buffer.append(result)
+                    labeled += 1
+                    done += 1
+
+                    if len(buffer) >= CHECKPOINT_EVERY:
+                        _flush(buffer)
+                        buffer.clear()
+                        log.info("Checkpoint: %d/%d done  labeled=%d  skipped=%d",
+                                 done, len(remaining), labeled, skipped)
+    except KeyboardInterrupt:
+        log.info("Interrupted — flushing buffer (%d rows)...", len(buffer))
+    finally:
+        with lock:
             _flush(buffer)
             buffer.clear()
-            log.info("Checkpoint: %d/%d labeled, %d errors", labeled, len(remaining), errors)
 
-    _flush(buffer)
-
-    total_in_file = len(already) + labeled + errors
-    full_count = labeled + errors
-    log.info(
-        "Split=%s done. Labeled=%d  Errors=%d  Error-rate=%.1f%%",
-        split, labeled, errors,
-        100 * errors / max(full_count, 1),
-    )
+    log.info("Split=%s done. Labeled=%d  Skipped=%d", split, labeled, skipped)
 
     # Report full-contract usage rate
     all_labeled = _load_raw(labeled_path)
@@ -310,12 +345,17 @@ def process_split(split: str, dry_run: bool = False) -> None:
     )
 
 
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Label Kira raw rows with DeepSeek")
     parser.add_argument("--split",   default="train", choices=["train", "val", "test", "all"])
     parser.add_argument("--dry-run", action="store_true", help="Label 5 rows and print, no write")
+    parser.add_argument("--workers", type=int, default=10,
+                        help="Number of parallel API calls (default: 10)")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Cap processing to N rows (0 = no limit, for testing)")
     args = parser.parse_args()
 
     if not os.getenv("DEEPSEEK_API_KEY"):
@@ -325,7 +365,7 @@ def main() -> None:
 
     splits = ["train", "val", "test"] if args.split == "all" else [args.split]
     for s in splits:
-        process_split(s, dry_run=args.dry_run)
+        process_split(s, dry_run=args.dry_run, workers=args.workers, limit=args.limit)
 
 
 if __name__ == "__main__":

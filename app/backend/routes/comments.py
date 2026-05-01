@@ -22,11 +22,17 @@ router = APIRouter(prefix="/api", tags=["comments"])
 
 class CommentOut(BaseModel):
     id: str
+    run_id: str
+    workspace_id: str | None = None
+    contract_id: str | None = None
     author_id: str
     author_name: str
     job_title: str | None
     avatar_color: str
     body: str
+    page_number: int | None = None
+    selected_text: str | None = None
+    anchor: dict | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -35,6 +41,11 @@ class CommentOut(BaseModel):
 
 class CommentCreate(BaseModel):
     body: str
+    workspace_id: str | None = None
+    contract_id: str | None = None
+    page_number: int | None = None
+    selected_text: str | None = None
+    anchor: dict | None = None
 
 
 class CommentUpdate(BaseModel):
@@ -58,11 +69,17 @@ async def list_contract_comments(run_id: str, db: DbSession, token: dict = Depen
     return [
         CommentOut(
             id=r.id,
+            run_id=r.run_id,
+            workspace_id=r.workspace_id,
+            contract_id=r.contract_id,
             author_id=r.author_id,
             author_name=r.author.display_name or "Unknown",
             job_title=r.author.job_title,
             avatar_color=r.author.avatar_color or "#6366f1",
             body=r.body,
+            page_number=r.page_number,
+            selected_text=r.selected_text,
+            anchor=r.anchor,
             created_at=r.created_at,
             updated_at=r.updated_at,
         )
@@ -80,19 +97,30 @@ async def create_contract_comment(
     record = ContractCommentRecord(
         id=str(uuid.uuid4()),
         run_id=run_id,
+        workspace_id=body.workspace_id,
+        contract_id=body.contract_id,
         author_id=token["sub"],
         body=body.body.strip(),
+        page_number=body.page_number,
+        selected_text=body.selected_text.strip() if body.selected_text else None,
+        anchor=body.anchor,
     )
     db.add(record)
     await db.flush()
     await db.refresh(record, ["author"])
     return CommentOut(
         id=record.id,
+        run_id=record.run_id,
+        workspace_id=record.workspace_id,
+        contract_id=record.contract_id,
         author_id=record.author_id,
         author_name=record.author.display_name or "Unknown",
         job_title=record.author.job_title,
         avatar_color=record.author.avatar_color or "#6366f1",
         body=record.body,
+        page_number=record.page_number,
+        selected_text=record.selected_text,
+        anchor=record.anchor,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -121,11 +149,13 @@ async def update_contract_comment(
     await db.flush()
     await db.refresh(record, ["author"])
     return CommentOut(
-        id=record.id, author_id=record.author_id,
+        id=record.id, run_id=record.run_id, workspace_id=record.workspace_id,
+        contract_id=record.contract_id, author_id=record.author_id,
         author_name=record.author.display_name or "Unknown",
         job_title=record.author.job_title,
         avatar_color=record.author.avatar_color or "#6366f1",
-        body=record.body, created_at=record.created_at, updated_at=record.updated_at,
+        body=record.body, page_number=record.page_number, selected_text=record.selected_text,
+        anchor=record.anchor, created_at=record.created_at, updated_at=record.updated_at,
     )
 
 
@@ -169,7 +199,9 @@ async def list_finding_comments(run_id: str, finding_id: str, db: DbSession) -> 
     rows = result.scalars().all()
     return [
         CommentOut(
-            id=r.id, author_id=r.author_id, author_name=r.author.display_name, job_title=r.author.job_title, avatar_color=r.author.avatar_color, body=r.body, created_at=r.created_at, updated_at=r.updated_at,
+            id=r.id, run_id=r.run_id, author_id=r.author_id, author_name=r.author.display_name,
+            job_title=r.author.job_title, avatar_color=r.author.avatar_color, body=r.body,
+            created_at=r.created_at, updated_at=r.updated_at,
         )
         for r in rows
     ]
@@ -194,7 +226,7 @@ async def create_finding_comment(
     await db.flush()
     await db.refresh(record, ["author"])
     return CommentOut(
-        id=record.id, author_id=record.author_id, author_name=record.author.display_name,
+        id=record.id, run_id=record.run_id, author_id=record.author_id, author_name=record.author.display_name,
         job_title=record.author.job_title,
         avatar_color=record.author.avatar_color,
         body=record.body, created_at=record.created_at, updated_at=record.updated_at,
@@ -222,7 +254,7 @@ async def update_finding_comment(
     await db.flush()
     await db.refresh(record, ["author"])
     return CommentOut(
-        id=record.id, author_id=record.author_id, author_name=record.author.display_name,
+        id=record.id, run_id=record.run_id, author_id=record.author_id, author_name=record.author.display_name,
         job_title=record.author.job_title,
         avatar_color=record.author.avatar_color,
         body=record.body, created_at=record.created_at, updated_at=record.updated_at,

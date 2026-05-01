@@ -33,6 +33,12 @@ def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_co
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.backend.services.metrics import (
+    finding_severity_total,
+    findings_per_run,
+    kira_iterations_per_run,
+    kira_panel_votes_total,
+)
 from app.backend.agents.admin import AdminMergeAgent, ReviewBlockAggregator
 from app.backend.agents.reviewer import (
     HarveyReviewer,
@@ -244,6 +250,18 @@ def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
         recommended_change=getattr(finding, "recommended_change", None),
         is_disputed=finding.consensus_status == "disputed" or finding.unresolved_by_consensus,
         is_confirmed=finding.consensus_status == "consensus",
+        contract_evidence=[
+            e.model_dump(mode="json") if hasattr(e, "model_dump") else e
+            for e in (getattr(finding, "contract_evidence", None) or [])
+        ],
+        rag_citations=[
+            c.model_dump(mode="json") if hasattr(c, "model_dump") else c
+            for c in (getattr(finding, "rag_citations", None) or [])
+        ],
+        consensus_state=finding.consensus_status,
+        business_impact=getattr(finding, "business_impact", None),
+        exploitability=getattr(finding, "exploitability", None),
+        unresolved_by_consensus=getattr(finding, "unresolved_by_consensus", False),
     )
 
 
@@ -382,6 +400,11 @@ async def _run_kira_review_block(
         # Prefer current_findings; fall back to best non-empty set if revision zeroed out results
         final = current_findings if current_findings else best_findings
 
+        for iter_data in iterations:
+            for d in iter_data["decisions"]:
+                kira_panel_votes_total.labels(decision=d["decision"]).inc()
+        kira_iterations_per_run.observe(len(iterations))
+
         return {
             "final_findings": [f.model_dump(mode="json") for f in final],
             "iterations": iterations,
@@ -495,9 +518,12 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number)
             )
             from app.backend.models.schemas import Finding as _HarveyFinding
-            for finding_dict in result.get("aggregated_findings", []):
+            aggregated = result.get("aggregated_findings", [])
+            for finding_dict in aggregated:
                 finding_obj = _HarveyFinding.model_validate(finding_dict) if isinstance(finding_dict, dict) else finding_dict
                 session.add(_to_finding_record(stage, finding_obj))
+                finding_severity_total.labels(severity=finding_obj.severity, branch="harvey").inc()
+            findings_per_run.labels(branch="harvey").observe(len(aggregated))
             advance_stage(session, stage, result)
             return
 
@@ -541,6 +567,8 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             )
             for finding in validated.validated_findings:
                 session.add(_to_finding_record(stage, finding))
+                finding_severity_total.labels(severity=finding.severity, branch="kira").inc()
+            findings_per_run.labels(branch="kira").observe(len(validated.validated_findings))
             advance_stage(
                 session,
                 stage,

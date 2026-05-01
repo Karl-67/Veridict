@@ -1,0 +1,201 @@
+{
+  "title": "Veridict LLMOps",
+  "uid": "veridict-llmops",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["veridict", "llmops"],
+  "panels": [
+    { "id": 1, "type": "row", "title": "Pipeline Overview", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 2, "type": "stat", "title": "Runs Finalized (1h)",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "targets": [{ "expr": "increase(runs_total{status=\"finalized\"}[1h])", "legendFormat": "finalized" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } }
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Runs Failed (1h)",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "targets": [{ "expr": "increase(runs_total{status=\"failed\"}[1h])", "legendFormat": "failed" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } } }
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "JSON Repairs (1h)",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "targets": [{ "expr": "increase(json_repair_total[1h])", "legendFormat": "repairs" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 20 }] } } }
+    },
+
+    {
+      "id": 5, "type": "stat", "title": "Kira Panel Approval Rate",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "sum(kira_panel_votes_total{decision=\"approve\"}) / (sum(kira_panel_votes_total{decision=\"approve\"}) + sum(kira_panel_votes_total{decision=\"reject\"}))", "legendFormat": "approval rate" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "red", "value": 0 }, { "color": "yellow", "value": 0.5 }, { "color": "green", "value": 0.7 }] } } }
+    },
+
+    {
+      "id": 6, "type": "stat", "title": "Queue Age p95 (5m)",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(queue_age_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 30 }, { "color": "red", "value": 120 }] } } }
+    },
+
+    {
+      "id": 7, "type": "stat", "title": "Worker Lease Expiries (1h)",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": "Prometheus",
+      "options": { "colorMode": "background" },
+      "targets": [{ "expr": "increase(worker_lease_expiry_total[1h])", "legendFormat": "expiries" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "red", "value": 1 }] } } }
+    },
+
+    { "id": 10, "type": "row", "title": "LLM Provider Performance", "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 11, "type": "timeseries", "title": "LLM Provider Latency p95",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(provider_latency_seconds_bucket[5m])) by (model, le))", "legendFormat": "{{model}}" }],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "lineWidth": 2 } } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 12, "type": "timeseries", "title": "LLM Provider Failure Rate",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "sum(rate(provider_failures_total[5m])) by (model)", "legendFormat": "{{model}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "fixedColor": "red", "mode": "fixed" }, "custom": { "lineWidth": 2 } } }
+    },
+
+    { "id": 20, "type": "row", "title": "Kira ML Quality", "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 21, "type": "piechart", "title": "Kira Panel Votes",
+      "gridPos": { "x": 0, "y": 15, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "options": { "pieType": "donut", "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        { "expr": "sum(kira_panel_votes_total{decision=\"approve\"})", "legendFormat": "Approve" },
+        { "expr": "sum(kira_panel_votes_total{decision=\"reject\"})", "legendFormat": "Reject" }
+      ]
+    },
+
+    {
+      "id": 22, "type": "bargauge", "title": "Kira Iterations Distribution",
+      "gridPos": { "x": 8, "y": 15, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "sum(kira_iterations_per_run_bucket{le=\"1\"})", "legendFormat": "1 iteration" },
+        { "expr": "sum(kira_iterations_per_run_bucket{le=\"2\"}) - sum(kira_iterations_per_run_bucket{le=\"1\"})", "legendFormat": "2 iterations" },
+        { "expr": "sum(kira_iterations_per_run_bucket{le=\"3\"}) - sum(kira_iterations_per_run_bucket{le=\"2\"})", "legendFormat": "3 iterations" }
+      ]
+    },
+
+    {
+      "id": 23, "type": "timeseries", "title": "Citation Validation Failures by Code",
+      "gridPos": { "x": 16, "y": 15, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "sum(rate(citation_validation_failures_total[5m])) by (code)", "legendFormat": "{{code}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+
+    { "id": 30, "type": "row", "title": "Findings", "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 31, "type": "piechart", "title": "Finding Severity Distribution",
+      "gridPos": { "x": 0, "y": 24, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "options": { "pieType": "pie", "legend": { "displayMode": "table", "placement": "right" } },
+      "targets": [
+        { "expr": "sum(finding_severity_total{severity=\"critical\"}) by (branch)", "legendFormat": "critical ({{branch}})" },
+        { "expr": "sum(finding_severity_total{severity=\"high\"}) by (branch)", "legendFormat": "high ({{branch}})" },
+        { "expr": "sum(finding_severity_total{severity=\"medium\"}) by (branch)", "legendFormat": "medium ({{branch}})" },
+        { "expr": "sum(finding_severity_total{severity=\"low\"}) by (branch)", "legendFormat": "low ({{branch}})" }
+      ]
+    },
+
+    {
+      "id": 32, "type": "timeseries", "title": "Findings Per Run p95",
+      "gridPos": { "x": 8, "y": 24, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(findings_per_run_bucket[30m])) by (branch, le))", "legendFormat": "p95 {{branch}}" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+
+    {
+      "id": 33, "type": "timeseries", "title": "Stage Duration p95",
+      "gridPos": { "x": 16, "y": 24, "w": 8, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(stage_duration_seconds_bucket[5m])) by (stage, le))", "legendFormat": "{{stage}}" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+
+    { "id": 40, "type": "row", "title": "vLLM GPU (Kira)", "gridPos": { "x": 0, "y": 32, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 41, "type": "timeseries", "title": "GPU Cache Utilization — Kira",
+      "gridPos": { "x": 0, "y": 33, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "vllm:gpu_cache_usage_perc{job=\"verdict-vllm-kira\"}", "legendFormat": "gpu cache %" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 0.7 }, { "color": "red", "value": 0.9 }] } } }
+    },
+
+    {
+      "id": 42, "type": "timeseries", "title": "Token Throughput — Kira",
+      "gridPos": { "x": 6, "y": 33, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "rate(vllm:num_generation_tokens_total{job=\"verdict-vllm-kira\"}[5m])", "legendFormat": "tokens/s" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+
+    {
+      "id": 43, "type": "timeseries", "title": "Time to First Token p95 — Kira",
+      "gridPos": { "x": 12, "y": 33, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket{job=\"verdict-vllm-kira\"}[5m])) by (le))", "legendFormat": "p95 TTFT" }],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 2 }, { "color": "red", "value": 4 }] } } }
+    },
+
+    {
+      "id": 44, "type": "timeseries", "title": "Running Requests — Kira",
+      "gridPos": { "x": 18, "y": 33, "w": 6, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "vllm:num_requests_running{job=\"verdict-vllm-kira\"}", "legendFormat": "running" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+
+    { "id": 50, "type": "row", "title": "Stage Retries & RAG", "gridPos": { "x": 0, "y": 41, "w": 24, "h": 1 }, "collapsed": false },
+
+    {
+      "id": 51, "type": "timeseries", "title": "Stage Retry Rate",
+      "gridPos": { "x": 0, "y": 42, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "sum(rate(retry_total[5m])) by (stage)", "legendFormat": "{{stage}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+
+    {
+      "id": 52, "type": "timeseries", "title": "RAG Retrieval Hits",
+      "gridPos": { "x": 12, "y": 42, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [{ "expr": "rate(retrieval_hits_total[5m])", "legendFormat": "rag hits/s" }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    }
+  ]
+}

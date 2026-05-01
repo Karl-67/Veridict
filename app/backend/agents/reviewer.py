@@ -34,7 +34,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.backend.agents.base import BaselineAgent, FineTunableAgent
-from app.backend.models.schemas import BranchReviewOutput, EvidenceRef, Finding, ReviewerVote
+from app.backend.models.schemas import BranchReviewOutput, ContractEvidence, EvidenceRef, Finding, RagCitation, ReviewerVote
 from app.backend.providers.base import StructuredLLMProvider
 
 # ---------------------------------------------------------------------------
@@ -187,6 +187,76 @@ def _is_concrete_rewrite(value: str | None) -> bool:
     return True
 
 
+def _contract_evidence_from_raw(raw_items: list, clause: dict) -> list[ContractEvidence]:
+    evidence: list[ContractEvidence] = []
+    clause_text = str(clause.get("normalized_text", ""))
+    clause_uid = str(clause.get("clause_uid", ""))
+    page = int(clause.get("page") or 1)
+    confidence = float(clause.get("extraction_confidence") or 1.0)
+
+    for raw in raw_items:
+        if isinstance(raw, str):
+            text = raw.strip()
+            span = None
+        elif isinstance(raw, dict):
+            text = str(raw.get("text") or raw.get("excerpt") or raw.get("normalized_text") or "").strip()
+            span = raw.get("span")
+        else:
+            continue
+
+        if not text:
+            continue
+
+        normalized_text = " ".join(text.split())
+        normalized_clause = " ".join(clause_text.split())
+        if normalized_text not in normalized_clause:
+            # Keep anchors grounded in the selected parser clause. If the model
+            # cannot quote text from that clause, fall back to the clause itself
+            # rather than hallucinating a span elsewhere in the PDF.
+            normalized_text = normalized_clause
+            span = None
+
+        evidence.append(
+            ContractEvidence(
+                clause_id=clause_uid,
+                page=page,
+                span=span,
+                text=normalized_text,
+                confidence=confidence,
+            )
+        )
+
+    return evidence
+
+
+def _rag_citations_from_raw(raw_items: list) -> list[RagCitation]:
+    citations: list[RagCitation] = []
+    for raw in raw_items:
+        if isinstance(raw, str):
+            chunk_id = raw
+            item: dict = {}
+        elif isinstance(raw, dict):
+            item = raw
+            chunk_id = str(item.get("chunk_id") or "")
+        else:
+            continue
+        if not chunk_id:
+            continue
+        citations.append(
+            RagCitation.model_construct(
+                schema_version=item.get("schema_version", 2),
+                chunk_id=chunk_id,
+                document_id=item.get("document_id", ""),
+                version=item.get("version", ""),
+                page=item.get("page") or 1,
+                source_path=item.get("source_path", ""),
+                chunk_hash=item.get("chunk_hash", ""),
+                score=item.get("score", 0.0),
+            )
+        )
+    return citations
+
+
 # ---------------------------------------------------------------------------
 # JSON schemas for structured LLM output
 # ---------------------------------------------------------------------------
@@ -219,6 +289,11 @@ _FINDING_ITEM_SCHEMA_BASE: dict = {
         "contract_evidence": {
             "type": "array",
             "items": {"type": "string"},
+            "description": (
+                "Exact short quote(s) copied verbatim from the selected clause text. "
+                "Do not summarize. Do not quote headings, document titles, party names, "
+                "or signature labels unless that exact text is the legal issue."
+            ),
         },
         "rationale": {"type": "string"},
         "uncertainty": {"type": "boolean"},
@@ -604,6 +679,12 @@ def _assemble_branch_output(
                 continue
         if require_rag_citations and not item.get("rag_citations"):
             continue
+        contract_evidence = _contract_evidence_from_raw(item.get("contract_evidence", []), clause)
+        if require_contract_evidence and not contract_evidence:
+            continue
+        rag_citations = _rag_citations_from_raw(item.get("rag_citations", []))
+        if require_rag_citations and not rag_citations:
+            continue
 
         findings.append(
             Finding(
@@ -616,6 +697,8 @@ def _assemble_branch_output(
                 description=item.get("description", ""),
                 recommendation=item["recommendation"],
                 recommendation_detail=item.get("recommendation_detail", ""),
+                contract_evidence=contract_evidence,
+                rag_citations=rag_citations,
                 evidence=[
                     EvidenceRef(
                         document_hash=clause["document_hash"],

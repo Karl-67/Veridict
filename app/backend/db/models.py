@@ -660,8 +660,13 @@ class ContractCommentRecord(Base):
 
     id: str = Column(String(36), primary_key=True, default=_uuid)
     run_id: str = Column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    workspace_id: str = Column(String(36), nullable=True, index=True)
+    contract_id: str = Column(String(36), nullable=True, index=True)
     author_id: str = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     body: str = Column(Text, nullable=False)
+    page_number: int = Column(Integer, nullable=True)
+    selected_text: str = Column(Text, nullable=True)
+    anchor: dict = Column(JSON, nullable=True)
     is_deleted: bool = Column(Boolean, nullable=False, default=False)
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)

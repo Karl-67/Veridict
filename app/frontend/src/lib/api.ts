@@ -419,7 +419,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 // Comments
 // ----------------------------------------------------------------------------
 
-import type { Comment } from "@/types";
+import type { Comment, DocumentComment } from "@/types";
 
 export async function listContractComments(runId: string): Promise<Comment[]> {
   const res = await fetch(`${API_BASE}/runs/${runId}/comments`, { headers: authHeaders() });
@@ -427,13 +427,34 @@ export async function listContractComments(runId: string): Promise<Comment[]> {
   return res.json();
 }
 
-export async function createContractComment(runId: string, body: string): Promise<Comment> {
+export async function createContractComment(
+  runId: string,
+  body: string | (Partial<DocumentComment> & { body?: string })
+): Promise<Comment> {
+  const payload = typeof body === "string" ? { body } : {
+    body: body.note ?? body.body ?? "",
+    workspace_id: body.workspaceId,
+    contract_id: body.contractId == null ? undefined : String(body.contractId),
+    page_number: body.pageNumber,
+    selected_text: body.selectedText,
+    anchor: body.anchor,
+  };
   const res = await fetch(`${API_BASE}/runs/${runId}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ body }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("Failed to post comment");
+  return res.json();
+}
+
+export async function updateContractComment(runId: string, commentId: string, body: string): Promise<Comment> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/comments/${commentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error("Failed to update comment");
   return res.json();
 }
 
@@ -449,6 +470,33 @@ export async function listFindingComments(runId: string, findingId: string): Pro
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch finding comments");
+  return res.json();
+}
+
+// ----------------------------------------------------------------------------
+// Contract Editor
+// ----------------------------------------------------------------------------
+
+export interface EditorState {
+  content: string;
+  last_edited_by: string | null;
+  last_edited_at: string | null;
+  version: number;
+}
+
+export async function getEditorContent(runId: string): Promise<EditorState> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/editor`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch editor content");
+  return res.json();
+}
+
+export async function saveEditorContent(runId: string, content: string, authorName?: string): Promise<EditorState> {
+  const res = await fetch(`${API_BASE}/runs/${runId}/editor`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ content, author_name: authorName }),
+  });
+  if (!res.ok) throw new Error("Failed to save editor content");
   return res.json();
 }
 

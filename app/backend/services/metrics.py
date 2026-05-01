@@ -41,6 +41,29 @@ queue_age_seconds = Histogram("queue_age_seconds", "Queue age at dequeue.")
 retry_total = Counter("retry_total", "Stage retry count.", ["stage"])
 worker_lease_expiry_total = Counter("worker_lease_expiry_total", "Expired worker leases.")
 
+# ML-specific signals
+kira_panel_votes_total = Counter(
+    "kira_panel_votes_total",
+    "Kira panel reviewer votes by decision.",
+    ["decision"],  # approve | reject
+)
+kira_iterations_per_run = Histogram(
+    "kira_iterations_per_run",
+    "Number of Kira worker/panel iterations per pipeline run.",
+    buckets=[1, 2, 3],
+)
+finding_severity_total = Counter(
+    "finding_severity_total",
+    "Findings produced by severity and branch.",
+    ["severity", "branch"],  # low/medium/high/critical, harvey/kira
+)
+findings_per_run = Histogram(
+    "findings_per_run",
+    "Number of validated findings produced per pipeline run.",
+    ["branch"],
+    buckets=[0, 1, 5, 10, 25, 50, 100],
+)
+
 
 @contextmanager
 def record_provider_call(provider: str, model: str) -> Iterator[None]:
@@ -58,3 +81,12 @@ def setup_metrics(app: FastAPI) -> None:
     @app.get("/metrics", include_in_schema=False)
     async def metrics() -> Response:
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def start_metrics_server(port: int = 9100) -> None:
+    """Start a standalone Prometheus HTTP server for non-FastAPI processes (e.g. worker)."""
+    try:
+        from prometheus_client import start_http_server
+        start_http_server(port)
+    except ImportError:
+        pass
