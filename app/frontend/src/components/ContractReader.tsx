@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
+  ChevronDown,
+  Download,
   Edit3,
-  ExternalLink,
+  FileText,
   GitCompare,
   MessageSquare,
   Trash2,
@@ -14,6 +16,7 @@ import {
   deleteAnnotation,
   dismissFinding,
   getDocxExportUrl,
+  getEditedPdfUrl,
   getRunFileUrl,
   listAnnotations,
 } from "@/lib/api";
@@ -143,7 +146,18 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
   const [draftRefreshKey, setDraftRefreshKey] = useState(0);
 
   const fileUrl = getRunFileUrl(runId);
-  const docxUrl = getDocxExportUrl(runId);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
 
   const ordered = useMemo(
     () => orderFindings(findings.filter((f) => !hiddenFindingIds.has(f.finding_id))),
@@ -230,21 +244,91 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <a
-            href={fileUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-text-secondary/40 hover:text-text-primary"
-          >
-            <ExternalLink className="h-3 w-3" /> Original PDF
-          </a>
-          <a
-            href={docxUrl}
-            download
-            className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-text-secondary/40 hover:text-text-primary"
-          >
-            Export DOCX
-          </a>
+          {/* Export dropdown */}
+          <div ref={exportRef} className="relative">
+            <button
+              onClick={() => setExportOpen((v) => !v)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                exportOpen
+                  ? "border-accent/50 bg-accent/8 text-accent"
+                  : "border-border text-text-secondary hover:border-text-secondary/40 hover:text-text-primary",
+              )}
+            >
+              <Download className="h-3 w-3" />
+              Export
+              <ChevronDown
+                className={cn("h-3 w-3 transition-transform duration-150", exportOpen && "rotate-180")}
+              />
+            </button>
+
+            {exportOpen && (
+              <div className="absolute right-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
+                {/* Section: Original */}
+                <div className="border-b border-border px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/50">
+                    Original Contract
+                  </p>
+                </div>
+                <a
+                  href={fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">PDF</div>
+                    <div className="text-[10px] text-text-secondary/60">As uploaded</div>
+                  </div>
+                </a>
+                <a
+                  href={getDocxExportUrl(runId, true)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 border-b border-border px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">DOCX</div>
+                    <div className="text-[10px] text-text-secondary/60">Original formatting</div>
+                  </div>
+                </a>
+
+                {/* Section: Modified */}
+                <div className="px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/50">
+                    Modified Contract
+                  </p>
+                </div>
+                <a
+                  href={getEditedPdfUrl(runId)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">PDF</div>
+                    <div className="text-[10px] text-text-secondary/60">With accepted edits</div>
+                  </div>
+                </a>
+                <a
+                  href={getDocxExportUrl(runId)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">DOCX</div>
+                    <div className="text-[10px] text-text-secondary/60">With accepted edits</div>
+                  </div>
+                </a>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setShowRedlines((v) => !v)}
             className={cn(

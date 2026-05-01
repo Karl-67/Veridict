@@ -444,8 +444,24 @@ async def export_edited_contract(run_id: str, db: DbSession) -> StreamingRespons
 
     for clause_uid, raw_edit in edits.items():
         clause = clause_by_uid.get(clause_uid)
+        # Sub-block UID (e.g. parent__p2): find parent clause then reconstruct sub-block text
+        original_needle_text: str | None = None
+        if not clause and "__p" in clause_uid:
+            parent_uid = clause_uid.rsplit("__p", 1)[0]
+            clause = clause_by_uid.get(parent_uid)
+            if clause:
+                sub_blocks = _split_contract_blob(clause.normalized_text, parent_uid, clause.page_number)
+                for sub_uid, _sub_style, sub_text in sub_blocks:
+                    if sub_uid == clause_uid:
+                        original_needle_text = sub_text
+                        break
+
         if not clause:
             continue
+
+        if original_needle_text is None:
+            original_needle_text = clause.normalized_text
+
         page_num = int((raw_edit or {}).get("page") or clause.page_number) if isinstance(raw_edit, dict) else clause.page_number
         page_info = pages.get(page_num)
         if not page_info:
@@ -458,9 +474,34 @@ async def export_edited_contract(run_id: str, db: DbSession) -> StreamingRespons
         if isinstance(raw_edit, dict) and raw_edit.get("rects"):
             rects = [PdfRectOut(**r) for r in raw_edit["rects"]]
         if not rects:
-            rects = _find_text_rects(page_num, page_info["words"], clause.normalized_text, max_tokens=180)
+            rects = _find_text_rects(page_num, page_info["words"], original_needle_text, max_tokens=180)
         if not rects and anchor_text:
             rects = _find_text_rects(page_num, page_info["words"], anchor_text, max_tokens=180)
+        # For long text the full needle exceeds max_tokens — locate via progressively shorter prefix
+        if not rects:
+            needle_words = original_needle_text.split()
+            for prefix_len in (40, 20, 10):
+                if len(needle_words) >= prefix_len:
+                    prefix = " ".join(needle_words[:prefix_len])
+                    rects = _find_text_rects(page_num, page_info["words"], prefix, max_tokens=prefix_len + 5)
+                    if rects:
+                        break
+        # Try across all pages when the stored page_num is wrong
+        if not rects:
+            needle_words = original_needle_text.split()
+            for pn, pi in pages.items():
+                if pn == page_num:
+                    continue
+                for prefix_len in (40, 20):
+                    if len(needle_words) >= prefix_len:
+                        prefix = " ".join(needle_words[:prefix_len])
+                        rects = _find_text_rects(pn, pi["words"], prefix, max_tokens=prefix_len + 5)
+                        if rects:
+                            page_num = pn
+                            page_info = pi
+                            break
+                if rects:
+                    break
 
         # Skip edits we cannot locate in the PDF — avoid random placement
         if not rects:
@@ -659,8 +700,46 @@ async def accept_finding(
     if replacement_text and clause_uid:
         run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
         if run:
+            # Determine the correct UID to store the edit under.
+            # For large-blob clauses the viewer splits into sub-blocks (synthetic __pN UIDs).
+            # We match the finding's evidence text against those sub-blocks so the edit is
+            # stored under the sub-block UID, keeping it consistent with manual editor edits.
+            target_uid = clause_uid
+            clause_rec = (await db.execute(
+                select(ParsedClauseRecord).where(
+                    ParsedClauseRecord.run_id == run_id,
+                    ParsedClauseRecord.clause_uid == clause_uid,
+                )
+            )).scalar_one_or_none()
+            if clause_rec and len(clause_rec.normalized_text or "") > 300:
+                evidence_text = ""
+                ev_list = (getattr(finding, "contract_evidence", None) or
+                           getattr(full_finding, "contract_evidence", None) or [])
+                for ev in ev_list:
+                    excerpt = (ev or {}).get("excerpt") or (ev or {}).get("text") or ""
+                    if excerpt:
+                        evidence_text = excerpt
+                        break
+                if not evidence_text:
+                    ev_list2 = (getattr(finding, "evidence", None) or
+                                getattr(full_finding, "evidence", None) or [])
+                    for ev in ev_list2:
+                        excerpt = (ev or {}).get("normalized_text") or (ev or {}).get("text") or ""
+                        if excerpt:
+                            evidence_text = excerpt
+                            break
+                if evidence_text:
+                    sub_blocks = _split_contract_blob(
+                        clause_rec.normalized_text, clause_uid, clause_rec.page_number
+                    )
+                    needle = evidence_text[:120].lower()
+                    for sub_uid, _sub_style, sub_text in sub_blocks:
+                        if needle[:60] in sub_text.lower():
+                            target_uid = sub_uid
+                            break
+
             edits: dict = dict(run.contract_edits or {})
-            edits[clause_uid] = {
+            edits[target_uid] = {
                 "schema_version": 2,
                 "text": replacement_text,
                 "plain_text": _safe_rich_text_to_plain(replacement_text),
@@ -889,6 +968,94 @@ def _infer_block_style(text: str) -> str:
 
 
 
+# ---------------------------------------------------------------------------
+# Contract blob splitter — breaks a single giant clause into styled sub-blocks
+# ---------------------------------------------------------------------------
+
+_HEADING2_BODY_SPLIT = re.compile(
+    r'^(\d+\.(?:\d+\.)?\s+[A-Z][A-Za-z ,\-–—]{1,80}?)\s+(?=(?:The|This|For|A\b|An\b|Any\b|Each\b|Upon|All\b|No\b|In\b|If\b|When\b|Where\b|Except|Subject|Notwithstanding|It\b|At\b|By\b|Such\b|Under\b|Pursuant|With\b|Without|Recipient|Neither)\b)'
+)
+
+
+def _split_contract_blob(text: str, base_uid: str, page_number: int) -> list[tuple[str, str, str]]:
+    """Split a large contract blob into (sub_uid, style, sub_text) tuples."""
+    results: list[tuple[str, str, str]] = []
+    counter = [0]
+
+    def next_uid(first: bool = False) -> str:
+        if first:
+            return base_uid
+        counter[0] += 1
+        return f"{base_uid}__p{counter[0]}"
+
+    remaining = text.strip()
+    if not remaining:
+        return [(base_uid, "body", text)]
+
+    # 1. Extract leading ALL-CAPS title
+    caps_m = re.match(r'^([A-Z][A-Z\s\-–—\(\)]{3,80}?)(?=\s+[A-Z][a-z]|\s+[a-z0-9])', remaining)
+    if caps_m:
+        title = caps_m.group(1).strip()
+        if not re.search(r'[a-z]', title):  # truly all caps
+            uid = next_uid(first=len(results) == 0)
+            results.append((uid, "heading1", title))
+            remaining = remaining[caps_m.end():].strip()
+
+    # 2. Extract subtitle (short mixed-case before body)
+    if remaining:
+        sub_m = re.match(
+            r'^([A-Z][A-Za-z0-9\-\s]{3,55}?)(?=\s+(?:This|The|A\b|An\b|For\b|In\b|These\b|Each\b|It\b))',
+            remaining
+        )
+        if sub_m and '.' not in sub_m.group(1) and not re.match(r'^\d+\.', sub_m.group(1)) and len(sub_m.group(1)) <= 60:
+            subtitle = sub_m.group(1).strip()
+            uid = next_uid(first=len(results) == 0)
+            results.append((uid, "subtitle", subtitle))
+            remaining = remaining[sub_m.end():].strip()
+
+    # 3. Split on "IN WITNESS WHEREOF" boundary
+    witness_marker = "IN WITNESS WHEREOF"
+    witness_idx = remaining.find(witness_marker)
+    if witness_idx >= 0:
+        main_body = remaining[:witness_idx].strip()
+        witness_block = remaining[witness_idx:].strip()
+    else:
+        main_body = remaining
+        witness_block = None
+
+    # 4. Split main body on numbered section patterns
+    if main_body:
+        parts = re.split(r'(?<=[."\'\)])\s+(?=\d+\.\s+[A-Z])', main_body)
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            # 5. For each part try to split heading from body
+            hm = _HEADING2_BODY_SPLIT.match(part)
+            if hm:
+                heading_text = hm.group(1).strip()
+                body_text = part[hm.end():].strip()
+                uid = next_uid(first=len(results) == 0)
+                results.append((uid, "heading2", heading_text))
+                if body_text:
+                    uid = next_uid(first=len(results) == 0)
+                    results.append((uid, "body", body_text))
+            else:
+                uid = next_uid(first=len(results) == 0)
+                results.append((uid, "body", part))
+
+    # Add witness block as body
+    if witness_block:
+        uid = next_uid(first=len(results) == 0)
+        results.append((uid, "body", witness_block))
+
+    # Fallback: if nothing was split, return single body block
+    if not results:
+        return [(base_uid, "body", text)]
+
+    return results
+
+
 def _compute_comment_anchors(original_text: str, anns: list) -> list[CommentAnchorOut]:
     result = []
     norm_orig = " ".join(original_text.lower().split())
@@ -953,34 +1120,97 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
         else:
             current_text = clause.normalized_text
         original_text = clause.normalized_text
-        style = _infer_block_style(original_text)
 
-        pending = finding_by_clause.get(clause.clause_uid)
-        pending_out: Optional[PendingSuggestionOut] = None
-        # Never attach AI suggestions to heading blocks — they contain the clause number/title
-        # and should remain untouched by the AI review pipeline.
-        if pending and style not in ("heading1", "heading2", "heading3"):
-            pending_out = PendingSuggestionOut(
-                finding_id=pending.id,
-                severity=pending.severity or "medium",
-                description=pending.issue or "",
-                replacement_text=(pending.recommended_change or "").strip(),
-            )
+        # For large blobs (>300 chars), split into styled sub-blocks
+        if len(original_text) > 300:
+            sub_blocks = _split_contract_blob(original_text, clause.clause_uid, clause.page_number)
+            clause_anns = ann_by_clause.get(clause.clause_uid, [])
+            pending = finding_by_clause.get(clause.clause_uid)
 
-        clause_anns = ann_by_clause.get(clause.clause_uid, [])
-        comment_anchors = _compute_comment_anchors(original_text, clause_anns)
+            for sub_uid, sub_style, sub_text in sub_blocks:
+                # Only use an edit if it's stored under the sub-block's own UID (i.e. __pN suffix).
+                # Never apply the parent clause's legacy full-blob edit to any sub-block.
+                is_sub_uid = sub_uid != clause.clause_uid
+                sub_edit = edits.get(sub_uid) if is_sub_uid else None
+                if sub_edit and isinstance(sub_edit, dict):
+                    display_text = sub_edit.get("plain_text") or _safe_rich_text_to_plain(sub_edit.get("text", "")) or sub_text
+                else:
+                    display_text = sub_text
 
-        blocks.append(DraftBlockOut(
-            block_id=f"block_{clause.clause_uid}",
-            clause_uid=clause.clause_uid,
-            page_number=clause.page_number,
-            style=style,
-            text=current_text,
-            original_text=original_text,
-            marks=[],
-            pending_suggestion=pending_out,
-            comment_anchors=comment_anchors,
-        ))
+                # Filter comment anchors to those within this sub-block's offset range
+                sub_offset = original_text.find(sub_text)
+                if sub_offset >= 0:
+                    sub_end = sub_offset + len(sub_text)
+                    sub_anns = [
+                        ann for ann in clause_anns
+                        if ann.span_start is not None and ann.span_end is not None
+                        and ann.span_start >= sub_offset and ann.span_end <= sub_end
+                    ]
+                    # Adjust positions relative to sub-block start
+                    adjusted_anns = []
+                    for ann in sub_anns:
+                        # Create a lightweight object with adjusted positions
+                        class _AdjustedAnn:
+                            pass
+                        adj = _AdjustedAnn()
+                        adj.id = ann.id
+                        adj.selected_text = ann.selected_text
+                        adj.span_start = ann.span_start - sub_offset
+                        adj.span_end = ann.span_end - sub_offset
+                        adjusted_anns.append(adj)
+                    comment_anchors = _compute_comment_anchors(sub_text, adjusted_anns)
+                else:
+                    comment_anchors = []
+
+                # Pending suggestion: only for body/list_item sub-blocks
+                pending_out: Optional[PendingSuggestionOut] = None
+                if pending and sub_style in ("body", "list_item"):
+                    pending_out = PendingSuggestionOut(
+                        finding_id=pending.id,
+                        severity=pending.severity or "medium",
+                        description=pending.issue or "",
+                        replacement_text=(pending.recommended_change or "").strip(),
+                    )
+
+                blocks.append(DraftBlockOut(
+                    block_id=f"block_{sub_uid}",
+                    clause_uid=sub_uid,
+                    page_number=clause.page_number,
+                    style=sub_style,
+                    text=display_text,
+                    original_text=sub_text,
+                    marks=[],
+                    pending_suggestion=pending_out,
+                    comment_anchors=comment_anchors,
+                ))
+        else:
+            # Short clause: existing single-block logic
+            style = _infer_block_style(original_text)
+
+            pending = finding_by_clause.get(clause.clause_uid)
+            pending_out = None
+            if pending and style not in ("heading1", "heading2", "heading3"):
+                pending_out = PendingSuggestionOut(
+                    finding_id=pending.id,
+                    severity=pending.severity or "medium",
+                    description=pending.issue or "",
+                    replacement_text=(pending.recommended_change or "").strip(),
+                )
+
+            clause_anns = ann_by_clause.get(clause.clause_uid, [])
+            comment_anchors = _compute_comment_anchors(original_text, clause_anns)
+
+            blocks.append(DraftBlockOut(
+                block_id=f"block_{clause.clause_uid}",
+                clause_uid=clause.clause_uid,
+                page_number=clause.page_number,
+                style=style,
+                text=current_text,
+                original_text=original_text,
+                marks=[],
+                pending_suggestion=pending_out,
+                comment_anchors=comment_anchors,
+            ))
 
     return DocumentDraftOut(blocks=blocks, revision=revision)
 
@@ -991,8 +1221,8 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
 
 
 @router.get("/runs/{run_id}/export-docx")
-async def export_docx(run_id: str, db: DbSession) -> StreamingResponse:
-    """Export the current document draft (accepted edits applied) as a DOCX file."""
+async def export_docx(run_id: str, db: DbSession, original: bool = False) -> StreamingResponse:
+    """Export document as DOCX. Pass ?original=true to skip edits and export clean original."""
     run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -1003,11 +1233,12 @@ async def export_docx(run_id: str, db: DbSession) -> StreamingResponse:
         .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
-    edits: dict = run.contract_edits or {}
+    edits: dict = {} if original else (run.contract_edits or {})
 
     try:
         from docx import Document as DocxDocument
         from docx.shared import Pt, Inches
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
     except ImportError:
         raise HTTPException(status_code=501, detail="python-docx not installed; run: pip install python-docx")
 
@@ -1031,35 +1262,83 @@ async def export_docx(run_id: str, db: DbSession) -> StreamingResponse:
         section.left_margin = Inches(1.25)
         section.right_margin = Inches(1.25)
 
-    _STYLE_MAP = {
-        "heading1": "Heading 1",
-        "heading2": "Heading 2",
-        "heading3": "Heading 3",
-        "body": "Normal",
-        "list_item": "Normal",
-    }
-
     base = (run.original_filename or "contract").rsplit(".", 1)[0]
+    suffix = "" if original else "-edited"
+
+    def _apply_docx_style(p, style_key: str, text: str) -> None:
+        """Apply direct paragraph formatting instead of Word named styles."""
+        pf = p.paragraph_format
+        run = p.add_run(text)
+        font = run.font
+        font.name = "Times New Roman"
+
+        if style_key == "heading1":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            font.bold = True
+            font.size = Pt(16)
+            pf.space_before = Pt(0)
+            pf.space_after = Pt(6)
+        elif style_key == "subtitle":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            font.bold = False
+            font.size = Pt(12)
+            pf.space_before = Pt(0)
+            pf.space_after = Pt(12)
+        elif style_key == "heading2":
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            font.bold = True
+            font.size = Pt(12)
+            pf.space_before = Pt(12)
+            pf.space_after = Pt(4)
+        elif style_key == "heading3":
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            font.bold = True
+            font.size = Pt(11)
+            pf.space_before = Pt(8)
+            pf.space_after = Pt(2)
+        else:
+            # body / list_item
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            font.bold = False
+            font.size = Pt(11)
+            pf.space_before = Pt(0)
+            pf.space_after = Pt(8)
 
     for clause in clauses:
         raw_edit = edits.get(clause.clause_uid)
         if raw_edit and isinstance(raw_edit, dict):
-            text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
+            full_text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
         else:
-            text = clause.normalized_text
+            full_text = clause.normalized_text
         # Strip markdown bold/italic that the LLM may have included
-        text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text).strip()
-        if not text.strip():
+        full_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", full_text).strip()
+        if not full_text:
             continue
 
-        style_key = _infer_block_style(clause.normalized_text)
-        word_style = _STYLE_MAP.get(style_key, "Normal")
-        try:
-            p = doc.add_paragraph(text, style=word_style)
-        except (KeyError, ValueError):
-            p = doc.add_paragraph(text)
-        if style_key == "body":
-            p.paragraph_format.space_after = Pt(6)
+        if len(clause.normalized_text) > 300:
+            sub_blocks = _split_contract_blob(clause.normalized_text, clause.clause_uid, clause.page_number)
+            parent_edit_applied = False
+            for sub_uid, sub_style, sub_text in sub_blocks:
+                is_sub_uid = sub_uid != clause.clause_uid
+                sub_edit = edits.get(sub_uid) if is_sub_uid else None
+                # Backward compat: a parent-level edit (old acceptFinding path) is applied to
+                # the first body sub-block only, preserving heading/section structure around it.
+                if sub_edit is None and raw_edit and isinstance(raw_edit, dict) and not parent_edit_applied and sub_style in ("body", "list_item"):
+                    sub_edit = raw_edit
+                    parent_edit_applied = True
+                if sub_edit and isinstance(sub_edit, dict):
+                    display_text = sub_edit.get("plain_text") or _safe_rich_text_to_plain(sub_edit.get("text", "")) or sub_text
+                else:
+                    display_text = sub_text
+                display_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", display_text).strip()
+                if not display_text:
+                    continue
+                p = doc.add_paragraph()
+                _apply_docx_style(p, sub_style, display_text)
+        else:
+            style_key = _infer_block_style(clause.normalized_text)
+            p = doc.add_paragraph()
+            _apply_docx_style(p, style_key, full_text)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -1067,5 +1346,5 @@ async def export_docx(run_id: str, db: DbSession) -> StreamingResponse:
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{base}-edited.docx"'},
+        headers={"Content-Disposition": f'attachment; filename="{base}{suffix}.docx"'},
     )

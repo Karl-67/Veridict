@@ -118,29 +118,41 @@ function renderTextWithAnchors(
 const BLOCK_STYLES: Record<string, React.CSSProperties> = {
   heading1: {
     fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: 700,
-    lineHeight: 1.4,
-    marginTop: 28,
-    marginBottom: 10,
+    lineHeight: 1.3,
+    marginTop: 0,
+    marginBottom: 6,
     color: "#111",
-    letterSpacing: "-0.01em",
+    letterSpacing: "0.04em",
+    textAlign: "center",
+    textTransform: "uppercase" as const,
+  },
+  subtitle: {
+    fontFamily: "Georgia, 'Times New Roman', serif",
+    fontSize: 13,
+    fontWeight: 400,
+    lineHeight: 1.4,
+    marginTop: 0,
+    marginBottom: 24,
+    color: "#444",
+    textAlign: "center",
   },
   heading2: {
     fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 700,
     lineHeight: 1.45,
     marginTop: 20,
-    marginBottom: 6,
+    marginBottom: 4,
     color: "#1a1a1a",
   },
   heading3: {
     fontFamily: "Georgia, 'Times New Roman', serif",
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 600,
     lineHeight: 1.5,
-    marginTop: 16,
+    marginTop: 14,
     marginBottom: 4,
     color: "#222",
   },
@@ -151,6 +163,7 @@ const BLOCK_STYLES: Record<string, React.CSSProperties> = {
     marginTop: 0,
     marginBottom: 10,
     color: "#111",
+    textAlign: "justify",
   },
   list_item: {
     fontFamily: "Georgia, 'Times New Roman', serif",
@@ -160,6 +173,7 @@ const BLOCK_STYLES: Record<string, React.CSSProperties> = {
     marginBottom: 6,
     paddingLeft: 20,
     color: "#111",
+    textAlign: "justify",
   },
 };
 
@@ -304,6 +318,7 @@ function DocumentBlock({
           background: hasHighlightedAnchor ? "rgba(37,99,235,0.03)" : undefined,
           position: "relative",
           zIndex: isEditing ? 2 : undefined,
+          whiteSpace: "pre-wrap",
         }}
       >
         {isEditing ? block.text : renderContent()}

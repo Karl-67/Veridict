@@ -388,7 +388,15 @@ def _build_final_verdict(
     unresolved_by_consensus flags, and evidence per evidence-schema.
     """
     if run.verdict_payload is not None:
-        cached = FinalVerdict.model_validate(run.verdict_payload)
+        # Backfill fields added after old runs were finalized so legacy payloads still validate.
+        payload: dict = {**run.verdict_payload}
+        payload.setdefault("run_id", run.id)
+        payload.setdefault("finalized_at", (run.updated_at or run.created_at).isoformat())
+        payload.setdefault("overall_risk_level", "low")
+        payload.setdefault("summary", "")
+        payload.setdefault("recommendations", [])
+        payload.setdefault("human_action", "approved")
+        cached = FinalVerdict.model_validate(payload)
         # Backfill findings if the cached payload has none (legacy runs stored before this fix).
         if not cached.findings and full_findings:
             annotated = _annotate_consensus(full_findings, harvey_block, kira_block)

@@ -303,8 +303,12 @@ export async function saveBlockEdit(
   if (!response.ok) throw new Error("Failed to save block edit");
 }
 
-export function getDocxExportUrl(runId: string): string {
-  return `${API_BASE}/runs/${runId}/export-docx`;
+export function getDocxExportUrl(runId: string, original = false): string {
+  return `${API_BASE}/runs/${runId}/export-docx${original ? "?original=true" : ""}`;
+}
+
+export function getEditedPdfUrl(runId: string): string {
+  return `${API_BASE}/runs/${runId}/export-edited`;
 }
 
 export async function uploadRagDocument(payload: {
