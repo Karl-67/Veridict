@@ -134,7 +134,7 @@ function IconCheck({ size = 14 }) {
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
-function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme, onLogout }) {
+function Header({ screen, onNavigate, onAdmin, onProfile, onSearch, isDark, onToggleTheme, onLogout }) {
   const [notifOpen, setNotifOpen] = React.useState(false);
   const [notifs, setNotifs]       = React.useState([]);
   const notifRef = React.useRef(null);
@@ -208,7 +208,7 @@ function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme,
 
         {/* Right */}
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <button style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 11px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--text-3)", fontSize: 12, background: "none", cursor: "pointer", transition: "all 0.12s" }}
+          <button onClick={onSearch} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 11px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--text-3)", fontSize: 12, background: "none", cursor: "pointer", transition: "all 0.12s" }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--text-3)"; e.currentTarget.style.color = "var(--text-2)"; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-3)"; }}
           >
@@ -262,6 +262,137 @@ function Header({ screen, onNavigate, onAdmin, onProfile, isDark, onToggleTheme,
   );
 }
 
+function SearchOverlay({ open, onClose, onOpenContract, onOpenWorkspace }) {
+  const [query, setQuery] = React.useState("");
+  const [contracts, setContracts] = React.useState([]);
+  const [workspaces, setWorkspaces] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [activeIdx, setActiveIdx] = React.useState(0);
+  const inputRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) {
+      setQuery("");
+      setActiveIdx(0);
+      return;
+    }
+    window.requestAnimationFrame(() => inputRef.current?.focus());
+    setLoading(true);
+    Promise.all([
+      window.verdictApi.listContracts().catch(() => []),
+      window.verdictApi.listWorkspaces().catch(() => []),
+    ]).then(([contractRows, workspaceRows]) => {
+      setContracts(contractRows);
+      setWorkspaces(workspaceRows);
+    }).finally(() => setLoading(false));
+  }, [open]);
+
+  const results = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const contractResults = contracts
+      .filter(c => !q || c.name.toLowerCase().includes(q) || (c.workspace || "").toLowerCase().includes(q))
+      .slice(0, q ? 8 : 6)
+      .map(c => ({ type: "contract", id: `contract-${c.id}`, label: c.name, detail: `${c.workspace || "Workspace"} · ${stateLabel(c.latestRunState).text}`, risk: c.latestRisk, item: c }));
+    const workspaceResults = workspaces
+      .filter(w => !q || (w.name || "").toLowerCase().includes(q) || (w.description || "").toLowerCase().includes(q) || (w.role || "").toLowerCase().includes(q))
+      .slice(0, q ? 5 : 4)
+      .map(w => ({ type: "workspace", id: `workspace-${w.workspace_id}`, label: w.name, detail: [w.role?.replace("_", " "), w.description].filter(Boolean).join(" · ") || "Workspace", item: w }));
+    return [...contractResults, ...workspaceResults].slice(0, 12);
+  }, [query, contracts, workspaces]);
+
+  React.useEffect(() => setActiveIdx(0), [query, results.length]);
+
+  if (!open) return null;
+
+  function choose(result) {
+    if (!result) return;
+    if (result.type === "contract") onOpenContract(result.item);
+    else onOpenWorkspace(result.item);
+    onClose();
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") onClose();
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(i + 1, Math.max(results.length - 1, 0)));
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(i - 1, 0));
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      choose(results[activeIdx]);
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,0.26)", backdropFilter: "blur(3px)", display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh" }} onMouseDown={onClose}>
+      <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(620px, calc(100vw - 32px))", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "0 18px 60px rgba(0,0,0,0.18)", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", borderBottom: "1px solid var(--border)" }}>
+          <IconSearch size={15} />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Search contracts or workspaces..."
+            style={{ flex: 1, border: "none", outline: "none", background: "transparent", color: "var(--text)", fontSize: 14 }}
+          />
+          <button onClick={onClose} style={{ border: "none", background: "transparent", color: "var(--text-3)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ maxHeight: 420, overflowY: "auto", padding: "7px 0" }}>
+          {loading ? (
+            <div style={{ padding: "34px 16px", textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>Loading search…</div>
+          ) : results.length === 0 ? (
+            <div style={{ padding: "34px 16px", textAlign: "center", color: "var(--text-3)", fontSize: 13 }}>No results for “{query}”</div>
+          ) : (
+            results.map((result, i) => (
+              <button
+                key={result.id}
+                onClick={() => choose(result)}
+                onMouseEnter={() => setActiveIdx(i)}
+                style={{
+                  width: "100%",
+                  border: "none",
+                  background: i === activeIdx ? "var(--hover-bg)" : "transparent",
+                  color: "var(--text)",
+                  cursor: "pointer",
+                  display: "grid",
+                  gridTemplateColumns: "30px 1fr auto",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: "10px 16px",
+                  textAlign: "left",
+                }}
+              >
+                <span style={{ width: 30, height: 30, borderRadius: 7, border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", color: result.type === "workspace" ? "var(--accent)" : "var(--text-2)", background: "var(--bg)" }}>
+                  {result.type === "workspace" ? "W" : <IconSearch size={12} />}
+                </span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{result.label}</span>
+                  <span style={{ display: "block", marginTop: 2, fontSize: 11.5, color: "var(--text-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{result.detail}</span>
+                </span>
+                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: result.type === "workspace" ? "var(--accent)" : riskColor(result.risk) }}>
+                  {result.type}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 14, padding: "10px 16px", borderTop: "1px solid var(--border)", color: "var(--text-3)", fontSize: 10 }}>
+          <span>↑↓ navigate</span>
+          <span>Enter open</span>
+          <span>Esc close</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -300,6 +431,8 @@ function App() {
   const [fileName, setFileName] = React.useState("");
   const [processingRunId, setProcessingRunId] = React.useState(null);
   const [tweakPanelVisible, setTweakPanelVisible] = React.useState(false);
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const [workspaceFilter, setWorkspaceFilter] = React.useState(null);
 
   // Tweaks panel protocol
   React.useEffect(() => {
@@ -317,19 +450,31 @@ function App() {
   }, [screen]);
 
   function navigate(s, id = null, runId = null) {
+    if (s !== "dashboard") setWorkspaceFilter(null);
     setSelectedContractId(id);
     setSelectedRunId(runId);
     setScreen(s);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingRunId, pendingError };
+  React.useEffect(() => {
+    function handler(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingRunId, pendingError, workspaceFilter, onClearWorkspaceFilter: () => setWorkspaceFilter(null) };
 
   if (!loggedIn) return <AuthScreen onLogin={() => setLoggedIn(true)} />;
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", transition: "background 0.3s, color 0.3s" }}>
-      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={async () => { await window.verdictApi.logout(); setLoggedIn(false); }} />
+      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} onSearch={() => setSearchOpen(true)} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={async () => { await window.verdictApi.logout(); setLoggedIn(false); }} />
 
       <main style={{ flex: 1, maxWidth: 1400, margin: "0 auto", width: "100%", padding: "0 52px" }}>
         {screen === "dashboard"        && <DashboardScreen {...screenProps} />}
@@ -373,6 +518,16 @@ function App() {
         <span style={{ fontSize: 12, color: "var(--text-3)" }}>© 2026 Veridict — Legal Intelligence Platform</span>
         <span style={{ fontSize: 12, color: "var(--text-3)" }}>v2.4.1</span>
       </footer>
+
+      <SearchOverlay
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onOpenContract={(contract) => navigate("contract_detail", contract.id)}
+        onOpenWorkspace={(workspace) => {
+          setWorkspaceFilter({ id: workspace.workspace_id, name: workspace.name });
+          navigate("dashboard");
+        }}
+      />
 
       {tweakPanelVisible && (
         <TweaksPanel onClose={() => { setTweakPanelVisible(false); window.parent.postMessage({ type: "__edit_mode_dismissed" }, "*"); }}>

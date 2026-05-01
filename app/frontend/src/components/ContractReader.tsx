@@ -243,22 +243,59 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
             {annotations.length} comment{annotations.length !== 1 ? "s" : ""}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 overflow-hidden rounded-lg border border-border bg-surface text-sm font-semibold shadow-sm">
+            <button
+              onClick={() => setViewMode("comment")}
+              className={cn(
+                "flex min-w-[112px] items-center justify-center gap-2 px-3 transition-all",
+                viewMode === "comment"
+                  ? "bg-accent/12 text-accent"
+                  : "text-text-secondary hover:bg-drop-zone/20 hover:text-text-primary",
+              )}
+            >
+              <MessageSquare className="h-4 w-4 shrink-0" /> Comment
+            </button>
+            <button
+              onClick={() => setViewMode("edit")}
+              className={cn(
+                "flex min-w-[92px] items-center justify-center gap-2 border-l border-border px-3 transition-all",
+                viewMode === "edit"
+                  ? "bg-accent/12 text-accent"
+                  : "text-text-secondary hover:bg-drop-zone/20 hover:text-text-primary",
+              )}
+            >
+              <Edit3 className="h-4 w-4 shrink-0" /> Edit
+            </button>
+          </div>
+
+          <button
+            onClick={() => setShowRedlines((v) => !v)}
+            className={cn(
+              "flex h-9 min-w-[118px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition-all",
+              showRedlines
+                ? "border-risk-high/35 bg-risk-high/8 text-risk-high shadow-sm"
+                : "border-border bg-surface text-text-secondary shadow-sm hover:border-text-secondary/30 hover:bg-drop-zone/20 hover:text-text-primary",
+            )}
+          >
+            <GitCompare className="h-4 w-4 shrink-0" /> Redlines
+          </button>
+
           {/* Export dropdown */}
           <div ref={exportRef} className="relative">
             <button
               onClick={() => setExportOpen((v) => !v)}
               className={cn(
-                "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                "flex h-9 min-w-[118px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition-all",
                 exportOpen
-                  ? "border-accent/50 bg-accent/8 text-accent"
-                  : "border-border text-text-secondary hover:border-text-secondary/40 hover:text-text-primary",
+                  ? "border-accent/45 bg-accent/10 text-accent shadow-sm"
+                  : "border-border bg-surface text-text-secondary shadow-sm hover:border-text-secondary/30 hover:bg-drop-zone/20 hover:text-text-primary",
               )}
             >
-              <Download className="h-3 w-3" />
+              <Download className="h-4 w-4 shrink-0" />
               Export
               <ChevronDown
-                className={cn("h-3 w-3 transition-transform duration-150", exportOpen && "rotate-180")}
+                className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-150", exportOpen && "rotate-180")}
               />
             </button>
 
@@ -328,41 +365,6 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
                 </a>
               </div>
             )}
-          </div>
-          <button
-            onClick={() => setShowRedlines((v) => !v)}
-            className={cn(
-              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
-              showRedlines
-                ? "border-orange-300 bg-orange-50 text-orange-700"
-                : "border-border text-text-secondary hover:border-text-secondary/40 hover:text-text-primary",
-            )}
-          >
-            <GitCompare className="h-3 w-3" /> Redlines
-          </button>
-          <div className="flex overflow-hidden rounded-lg border border-border text-xs font-medium">
-            <button
-              onClick={() => setViewMode("comment")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 transition-colors",
-                viewMode === "comment"
-                  ? "bg-accent/10 text-accent"
-                  : "text-text-secondary hover:text-text-primary",
-              )}
-            >
-              <MessageSquare className="h-3 w-3" /> Comment
-            </button>
-            <button
-              onClick={() => setViewMode("edit")}
-              className={cn(
-                "flex items-center gap-1.5 border-l border-border px-3 py-1.5 transition-colors",
-                viewMode === "edit"
-                  ? "bg-accent/10 text-accent"
-                  : "text-text-secondary hover:text-text-primary",
-              )}
-            >
-              <Edit3 className="h-3 w-3" /> Edit
-            </button>
           </div>
         </div>
       </div>

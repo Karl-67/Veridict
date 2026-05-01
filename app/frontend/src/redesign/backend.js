@@ -138,6 +138,7 @@ function mapContract(c) {
   return {
     id: c.id,
     name: c.name,
+    workspaceId: c.workspace_id ?? null,
     versionCount: c.version_count,
     latestLabel: c.latest_label ?? "-",
     latestRunState: c.latest_run_state,
