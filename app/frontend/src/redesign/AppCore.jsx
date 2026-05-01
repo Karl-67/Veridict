@@ -87,12 +87,14 @@ function riskLabel(risk) {
 function stateLabel(state) {
   if (!state) return { text: "No runs", color: "var(--text-3)" };
   const map = {
+    created:                { text: "Queued",          color: "var(--text-2)" },
     finalized:              { text: "Finalized",       color: "var(--risk-low)" },
     awaiting_human_review:  { text: "Awaiting Review", color: "var(--accent)" },
     under_review:           { text: "Under Review",    color: "var(--risk-medium)" },
     processing:             { text: "Processing",      color: "var(--accent)" },
     failed:                 { text: "Failed",          color: "var(--risk-high)" },
     blocked:                { text: "Blocked",         color: "var(--risk-high)" },
+    rejected:               { text: "Rejected",        color: "var(--risk-high)" },
   };
   return map[state] ?? { text: state, color: "var(--text-2)" };
 }

@@ -37,7 +37,3 @@ Prometheus metrics are exposed at `/metrics`.
 ## Evaluation
 
 Run `python scripts/eval_model_registry.py` to check model registry readiness. Run `python scripts/eval_finetune_vs_baseline.py` after endpoints and datasets are configured.
-
-## DeepSeek Distillation
-
-For Kira DeepSeek teacher-labeling, use `DEEPSEEK_MODEL=deepseek-v4-pro` and keep the API key in the repo-root `.env` file. See `docs/DEEPSEEK_DISTILLATION.md`.

@@ -50,15 +50,6 @@ export interface EvidenceRef {
   extraction_confidence: number;
 }
 
-export interface FindingAnchor {
-  findingId: string;
-  pageNumber: number;
-  selectedText: string;
-  bbox?: number[] | null;
-  source: "contract_evidence" | "legacy_evidence";
-  confidence?: number | null;
-}
-
 export interface ContractEvidence {
   clause_id: string;
   page: number;
@@ -87,6 +78,7 @@ export interface Finding {
   description: string;
   recommendation: string;
   recommendation_detail: string;
+  recommended_change?: string | null;
   evidence: EvidenceRef[];
   contract_evidence?: ContractEvidence[];
   rag_citations?: RagCitation[];
@@ -97,33 +89,36 @@ export interface Finding {
   unresolved_by_consensus?: boolean;
 }
 
-export interface CommentAnchor {
-  workspaceId?: string | null;
-  contractId?: string | number | null;
-  runId: string;
-  pageNumber: number;
-  selectedText: string;
-  rects: Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }>;
+export interface ClauseData {
+  clause_uid: string;
+  page_number: number;
+  normalized_text: string;
+  bbox: number[];
 }
 
-export interface DocumentComment {
+export interface ContractEdit {
+  text: string;
+  edited_at: string;
+}
+
+export interface DocumentAnnotation {
   id: string;
-  runId: string;
-  workspaceId?: string | null;
-  contractId?: string | number | null;
-  pageNumber: number;
-  selectedText: string;
-  anchor: CommentAnchor;
-  userId: string;
-  username: string;
-  note: string;
-  createdAt: string;
-  updatedAt?: string | null;
+  run_id: string;
+  clause_uid: string;
+  page_number?: number | null;
+  selected_text?: string | null;
+  span_start?: number | null;
+  span_end?: number | null;
+  annotation_type: "comment" | "suggestion";
+  body: string;
+  suggested_replacement?: string | null;
+  status: "open" | "accepted" | "dismissed" | "deleted";
+  source: "human" | "ai";
+  finding_id?: string | null;
+  author_id?: string | null;
+  author_name?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface FinalVerdict {
@@ -306,15 +301,9 @@ export interface AuthUser {
 
 export interface Comment {
   id: string;
-  run_id?: string;
-  workspace_id?: string | null;
-  contract_id?: string | null;
   author_id: string;
   author_name: string;
   body: string;
-  page_number?: number | null;
-  selected_text?: string | null;
-  anchor?: CommentAnchor | null;
   created_at: string;
   updated_at: string;
 }

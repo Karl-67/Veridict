@@ -12,17 +12,10 @@ spec:
     metadata:
       labels:
         app: verdict-worker
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9100"
-        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: worker
           image: verdictacr.azurecr.io/verdict-worker:latest
-          ports:
-            - containerPort: 9100
-              name: metrics
           envFrom:
             - configMapRef:
                 name: verdict-config

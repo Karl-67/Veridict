@@ -205,23 +205,23 @@ async function addContractVersion(contractId, file) {
 }
 
 async function listHistory(limit = 100) {
-  const res = await fetch(`${API_BASE}/history?limit=${limit}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/history?limit=${limit}`, { headers: authHeaders() });
   return readJson(res, "Failed to load history");
 }
 
 async function getRun(runId) {
-  const res = await fetch(`${API_BASE}/runs/${runId}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/runs/${runId}`, { headers: authHeaders() });
   return readJson(res, "Failed to load run");
 }
 
 async function getRunFindings(runId) {
-  const res = await fetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
   return readJson(res, "Failed to load findings");
 }
 
 async function submitHumanReview(runId, action, reason = "") {
   const user = currentUser();
-  const res = await fetch(`${API_BASE}/runs/${runId}/human-review`, {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/human-review`, {
     method: "POST",
     headers: authHeaders(true),
     body: JSON.stringify({
@@ -235,7 +235,7 @@ async function submitHumanReview(runId, action, reason = "") {
 }
 
 async function updateProfile(payload) {
-  const res = await fetch(`${API_BASE}/auth/me`, {
+  const res = await apiFetch(`${API_BASE}/auth/me`, {
     method: "PATCH",
     headers: authHeaders(true),
     body: JSON.stringify(payload),
@@ -248,12 +248,17 @@ function getRunFileUrl(runId) {
   return `${API_BASE}/runs/${runId}/file${t ? `?token=${encodeURIComponent(t)}` : ""}`;
 }
 
+function getRunExportUrl(runId) {
+  const t = token();
+  return `${API_BASE}/runs/${runId}/export-edited${t ? `?token=${encodeURIComponent(t)}` : ""}`;
+}
+
 async function uploadRagDocument(file, docType = "policy", workspaceId = null) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("doc_type", docType);
   if (workspaceId) formData.append("workspace_id", workspaceId);
-  const res = await fetch(`${API_BASE}/rag/documents`, {
+  const res = await apiFetch(`${API_BASE}/rag/documents`, {
     method: "POST",
     headers: authHeaders(),
     body: formData,
@@ -265,17 +270,17 @@ async function listRagDocuments(workspaceId = null) {
   const url = workspaceId
     ? `${API_BASE}/rag/documents?workspace_id=${workspaceId}`
     : `${API_BASE}/rag/documents`;
-  const res = await fetch(url, { headers: authHeaders() });
+  const res = await apiFetch(url, { headers: authHeaders() });
   return readJson(res, "Failed to load documents");
 }
 
 async function getRagIngestionStatus(jobId) {
-  const res = await fetch(`${API_BASE}/rag/ingestions/${jobId}`, { headers: authHeaders() });
+  const res = await apiFetch(`${API_BASE}/rag/ingestions/${jobId}`, { headers: authHeaders() });
   return readJson(res, "Failed to get ingestion status");
 }
 
 async function deleteRagDocument(documentId) {
-  const res = await fetch(`${API_BASE}/rag/documents/${documentId}`, {
+  const res = await apiFetch(`${API_BASE}/rag/documents/${documentId}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -289,11 +294,10 @@ async function listRunComments(runId) {
 }
 
 async function postRunComment(runId, body) {
-  const payload = typeof body === "string" ? { body } : body;
   const res = await apiFetch(`${API_BASE}/runs/${runId}/comments`, {
     method: "POST",
     headers: authHeaders(true),
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ body }),
   });
   return readJson(res, "Failed to post comment");
 }
@@ -305,6 +309,66 @@ async function deleteRunComment(runId, commentId) {
   });
   if (res.status === 204) return null;
   return readJson(res, "Failed to delete comment");
+}
+
+async function listRunClauses(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/clauses`, { headers: authHeaders() });
+  return readJson(res, "Failed to load clauses");
+}
+
+async function getContractEdits(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/contract-edits`, { headers: authHeaders() });
+  return readJson(res, "Failed to load edits");
+}
+
+async function saveClauseEdit(runId, clauseUid, text) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`, {
+    method: "PUT",
+    headers: authHeaders(true),
+    body: JSON.stringify({ text }),
+  });
+  return readJson(res, "Failed to save edit");
+}
+
+async function acceptFinding(runId, findingId, customText) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/findings/${findingId}/accept`, {
+    method: "POST",
+    headers: authHeaders(Boolean(customText)),
+    body: customText ? JSON.stringify({ custom_text: customText }) : undefined,
+  });
+  return readJson(res, "Failed to accept finding");
+}
+
+async function dismissFinding(runId, findingId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/findings/${findingId}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return readJson(res, "Failed to dismiss finding");
+}
+
+async function listAnnotations(runId, clauseUid) {
+  const suffix = clauseUid ? `?clause_uid=${encodeURIComponent(clauseUid)}` : "";
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/annotations${suffix}`, { headers: authHeaders() });
+  return readJson(res, "Failed to load annotations");
+}
+
+async function createAnnotation(runId, payload) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/annotations`, {
+    method: "POST",
+    headers: authHeaders(true),
+    body: JSON.stringify(payload),
+  });
+  return readJson(res, "Failed to create annotation");
+}
+
+async function deleteAnnotation(runId, annotationId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/annotations/${annotationId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (res.status === 204) return null;
+  return readJson(res, "Failed to delete annotation");
 }
 
 async function adminGet(path) {
@@ -341,6 +405,7 @@ window.verdictApi = {
   submitHumanReview,
   updateProfile,
   getRunFileUrl,
+  getRunExportUrl,
   uploadRagDocument,
   listRagDocuments,
   getRagIngestionStatus,
@@ -348,6 +413,14 @@ window.verdictApi = {
   listRunComments,
   postRunComment,
   deleteRunComment,
+  listRunClauses,
+  getContractEdits,
+  saveClauseEdit,
+  acceptFinding,
+  dismissFinding,
+  listAnnotations,
+  createAnnotation,
+  deleteAnnotation,
   adminGet,
   adminSend,
 };

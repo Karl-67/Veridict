@@ -40,9 +40,9 @@ function Clear-Port {
     param([int]$Port)
     $hits = netstat -ano 2>$null | Select-String ":$Port\s.*LISTENING"
     foreach ($line in $hits) {
-        $pid = ($line.Line.Trim() -split '\s+')[-1]
-        if ($pid -match '^\d+$' -and [int]$pid -gt 0) {
-            Stop-Process -Id ([int]$pid) -Force -ErrorAction SilentlyContinue
+        $procPid = ($line.Line.Trim() -split '\s+')[-1]
+        if ($procPid -match '^\d+$' -and [int]$procPid -gt 0) {
+            Stop-Process -Id ([int]$procPid) -Force -ErrorAction SilentlyContinue
         }
     }
 }

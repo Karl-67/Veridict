@@ -374,8 +374,8 @@ async def update_me(
         user.job_title = body.job_title.strip() or None
     if body.department is not None:
         user.department = body.department.strip() or None
-    if body.avatar_color is not None and body.avatar_color in AVATAR_COLORS:
-        user.avatar_color = body.avatar_color
+    if body.avatar_color is not None and body.avatar_color.lower() in AVATAR_COLORS:
+        user.avatar_color = body.avatar_color.lower()
 
     await db.flush()
 

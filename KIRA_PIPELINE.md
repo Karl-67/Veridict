@@ -110,12 +110,8 @@ Add your key and model to `.env` in the project root:
 
 ```
 DEEPSEEK_API_KEY=sk-...
-DEEPSEEK_MODEL=deepseek-v4-pro
+DEEPSEEK_MODEL=deepseek-chat        # or deepseek-reasoner — check deepseek.com for current model IDs
 ```
-
-The repo-root `.env` file is ignored by Git. Do not put the key directly in
-`.gitignore`; `.gitignore` should only contain the ignored file patterns. See
-`docs/DEEPSEEK_DISTILLATION.md` for billing and setup notes.
 
 Source the file before running (or export manually):
 

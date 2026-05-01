@@ -15,7 +15,7 @@ from app.backend.core.config import get_settings
 from app.backend.db.models import RagIngestionJob
 from app.backend.db.session import get_sync_session_factory
 from app.backend.orchestration.state_machine import claim_next_stage, execute_stage
-from app.backend.services.metrics import queue_age_seconds, start_metrics_server
+from app.backend.services.metrics import queue_age_seconds
 from app.backend.services.rag_ingestion import RagIngestionService
 
 
@@ -39,7 +39,6 @@ def claim_next_rag_ingestion(session) -> RagIngestionJob | None:
 def run_worker_loop(poll_interval_seconds: float = 1.0) -> None:
     settings = get_settings()
     worker_id = os.getenv("VERDICT_WORKER_ID", f"worker-{uuid4().hex[:8]}")
-    start_metrics_server(port=int(os.getenv("WORKER_METRICS_PORT", "9100")))
     session_factory = get_sync_session_factory()
 
     while True:

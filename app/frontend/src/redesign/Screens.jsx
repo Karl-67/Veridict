@@ -16,7 +16,7 @@ function DashboardScreen({ navigate }) {
     return () => { active = false; };
   }, []);
 
-  const IN_PROGRESS_STATES = ["processing", "under_review"];
+  const IN_PROGRESS_STATES = ["created", "processing", "under_review"];
 
   const total     = contracts.length;
   const awaiting  = contracts.filter(c => c.latestRunState === "awaiting_human_review").length;
@@ -317,7 +317,7 @@ const STAGE_LABELS = {
   parse_ocr_normalize:    "Parsing & OCR",
   clause_index:           "Clause Indexing",
   harvey_context_load:    "Loading Policy Context",
-  harvey_review_block:    "AI Review",
+  harvey_review_block:    "Policy Review",
   kira_review_block:      "Compliance Review",
   admin_merge:            "Merging Analysis",
   final_review_block:     "Final Review",
@@ -329,7 +329,6 @@ const DISPLAY_STAGE_NAMES = [
   "parse_ocr_normalize",
   "clause_index",
   "harvey_context_load",
-  "harvey_review_block",
   "kira_review_block",
   "admin_merge",
   "awaiting_human_review",

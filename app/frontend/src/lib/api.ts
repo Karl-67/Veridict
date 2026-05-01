@@ -1,7 +1,10 @@
 import type {
   AddVersionResponse,
+  ClauseData,
   ContractDetail,
+  ContractEdit,
   ContractSummary,
+  DocumentAnnotation,
   Finding,
   FinalVerdict,
   HistoryEntry,
@@ -181,6 +184,90 @@ export async function getRunFindings(runId: string): Promise<Finding[]> {
   return response.json();
 }
 
+export async function listRunClauses(runId: string): Promise<ClauseData[]> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/clauses`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to load clauses");
+  return response.json();
+}
+
+export async function getContractEdits(runId: string): Promise<Record<string, ContractEdit>> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/contract-edits`, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to load edits");
+  return response.json();
+}
+
+export async function saveClauseEdit(runId: string, clauseUid: string, text: string): Promise<{ clause_uid: string; text: string }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) throw new Error("Failed to save edit");
+  return response.json();
+}
+
+export async function acceptFinding(
+  runId: string,
+  findingId: string,
+  customText?: string
+): Promise<{ finding_id: string; accepted: boolean; applied_text: string | null }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/accept`, {
+    method: "POST",
+    headers: customText ? { "Content-Type": "application/json", ...authHeaders() } : authHeaders(),
+    body: customText ? JSON.stringify({ custom_text: customText }) : undefined,
+  });
+  if (!response.ok) throw new Error("Failed to accept finding");
+  return response.json();
+}
+
+export async function dismissFinding(runId: string, findingId: string): Promise<{ finding_id: string; dismissed: boolean }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/dismiss`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!response.ok) throw new Error("Failed to dismiss finding");
+  return response.json();
+}
+
+export async function listAnnotations(runId: string, clauseUid?: string): Promise<DocumentAnnotation[]> {
+  const url = clauseUid
+    ? `${API_BASE}/runs/${runId}/annotations?clause_uid=${encodeURIComponent(clauseUid)}`
+    : `${API_BASE}/runs/${runId}/annotations`;
+  const response = await fetch(url, { headers: authHeaders() });
+  if (!response.ok) throw new Error("Failed to load annotations");
+  return response.json();
+}
+
+export async function createAnnotation(
+  runId: string,
+  payload: {
+    clause_uid: string;
+    annotation_type?: "comment" | "suggestion";
+    body: string;
+    suggested_replacement?: string | null;
+    selected_text?: string | null;
+    span_start?: number | null;
+    span_end?: number | null;
+    page_number?: number | null;
+  }
+): Promise<DocumentAnnotation> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/annotations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error("Failed to create annotation");
+  return response.json();
+}
+
+export async function deleteAnnotation(runId: string, annotationId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/annotations/${annotationId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok && response.status !== 204) throw new Error("Failed to delete annotation");
+}
+
 export async function uploadRagDocument(payload: {
   file: File;
   doc_type: RagDocType;
@@ -293,7 +380,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 // Comments
 // ----------------------------------------------------------------------------
 
-import type { Comment, DocumentComment } from "@/types";
+import type { Comment } from "@/types";
 
 export async function listContractComments(runId: string): Promise<Comment[]> {
   const res = await fetch(`${API_BASE}/runs/${runId}/comments`, { headers: authHeaders() });
@@ -301,34 +388,13 @@ export async function listContractComments(runId: string): Promise<Comment[]> {
   return res.json();
 }
 
-export async function createContractComment(
-  runId: string,
-  body: string | (Partial<DocumentComment> & { body?: string })
-): Promise<Comment> {
-  const payload = typeof body === "string" ? { body } : {
-    body: body.note ?? body.body ?? "",
-    workspace_id: body.workspaceId,
-    contract_id: body.contractId == null ? undefined : String(body.contractId),
-    page_number: body.pageNumber,
-    selected_text: body.selectedText,
-    anchor: body.anchor,
-  };
+export async function createContractComment(runId: string, body: string): Promise<Comment> {
   const res = await fetch(`${API_BASE}/runs/${runId}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error("Failed to post comment");
-  return res.json();
-}
-
-export async function updateContractComment(runId: string, commentId: string, body: string): Promise<Comment> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/comments/${commentId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ body }),
   });
-  if (!res.ok) throw new Error("Failed to update comment");
+  if (!res.ok) throw new Error("Failed to post comment");
   return res.json();
 }
 
@@ -344,33 +410,6 @@ export async function listFindingComments(runId: string, findingId: string): Pro
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch finding comments");
-  return res.json();
-}
-
-// ----------------------------------------------------------------------------
-// Contract Editor
-// ----------------------------------------------------------------------------
-
-export interface EditorState {
-  content: string;
-  last_edited_by: string | null;
-  last_edited_at: string | null;
-  version: number;
-}
-
-export async function getEditorContent(runId: string): Promise<EditorState> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/editor`, { headers: authHeaders() });
-  if (!res.ok) throw new Error("Failed to fetch editor content");
-  return res.json();
-}
-
-export async function saveEditorContent(runId: string, content: string, authorName?: string): Promise<EditorState> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/editor`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ content, author_name: authorName }),
-  });
-  if (!res.ok) throw new Error("Failed to save editor content");
   return res.json();
 }
 
@@ -527,7 +566,7 @@ export function verdictToReviewResult(verdict: FinalVerdict): ReviewResult {
     recommendations: verdict.recommendations,
     clause_flags: verdict.findings.map((f) => ({
       clause: findingToClauseLabel(f.description, f.clause_uid),
-      issue: f.recommendation_detail || f.description,
+      issue: f.description,
       severity: severityMap[f.severity] ?? "medium",
     })),
   };

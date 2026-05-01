@@ -1,36 +1,29 @@
 ---
-# vLLM inference server — fine-tuned Kira Gemma 4 26B  [BLUE slot]
+# vLLM inference server — fine-tuned Kira Gemma 4 26B
 # Serves: KiraWorker×1, KiraPanelReviewer×3
 # All four Kira agents share these weights; each has its own distinct system prompt.
 # GPU requirement: 1× NVIDIA A100 80GB (Standard_NC24ads_A100_v4)
 #
-# Blue-green deployment:
-#   Active slot is determined by the Service selector (slot: blue or slot: green).
-#   To promote a new model version use: python scripts/blue_green_switch.py --to green
-#   Only one slot runs at a time (the other stays at replicas: 0) to avoid double GPU cost.
-#
 # Fine-tuning: run `python -m scripts.fine_tune.launch` to train on RunPod and
 # upload the LoRA adapter to the verdict-fine-tune-output PVC.
-# After training: python scripts/blue_green_switch.py --to green --image <new-tag>
+# The pod will automatically load the adapter on next rollout restart.
+#
+# Until training completes, this pod serves the base model (no --lora-modules flag).
+# After training: kubectl rollout restart deployment/verdict-vllm-kira -n verdict
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: verdict-vllm-kira-blue
+  name: verdict-vllm-kira
   namespace: verdict
-  labels:
-    app: verdict-vllm-kira
-    slot: blue
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: verdict-vllm-kira
-      slot: blue
   template:
     metadata:
       labels:
         app: verdict-vllm-kira
-        slot: blue
     spec:
       nodeSelector:
         sku: gpu
@@ -107,18 +100,14 @@ spec:
             claimName: verdict-fine-tune-output
 
 ---
-# Service selector is patched by blue_green_switch.py on every promotion.
-# Current active slot: blue (initial value — updated automatically on switch).
 apiVersion: v1
 kind: Service
 metadata:
   name: verdict-vllm-kira
   namespace: verdict
-  labels:
-    app: verdict-vllm-kira
 spec:
   selector:
-    slot: blue
+    app: verdict-vllm-kira
   ports:
     - port: 8000
       targetPort: 8000

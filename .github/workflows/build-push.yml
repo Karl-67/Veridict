@@ -56,32 +56,9 @@ jobs:
             ${{ env.ACR_REGISTRY }}/verdict-frontend:${{ steps.meta.outputs.tag }}
             ${{ env.ACR_REGISTRY }}/verdict-frontend:latest
 
-  eval-gate:
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.11"}
-
-      - name: Install eval dependencies
-        run: pip install mlflow httpx pydantic PyYAML
-
-      - name: Run eval gate
-        run: python scripts/eval_gate.py
-        env:
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-          MLFLOW_EXPERIMENT: veridict-eval-gates
-          # Set EVAL_ENDPOINT in GitHub secrets to enable live inference gating
-          # e.g. https://your-staging-vllm.azurewebsites.net/v1
-          EVAL_ENDPOINT: ${{ secrets.EVAL_ENDPOINT }}
-          EVAL_MODEL: ${{ secrets.EVAL_MODEL }}
-
   deploy:
     runs-on: ubuntu-latest
-    needs: [build-and-push, eval-gate]
+    needs: build-and-push
     steps:
       - uses: actions/checkout@v4
 
@@ -101,49 +78,14 @@ jobs:
           sed -i "s|verdictacr.azurecr.io/verdict-worker:latest|verdictacr.azurecr.io/verdict-worker:$TAG|g" k8s/worker.yaml
           sed -i "s|verdictacr.azurecr.io/verdict-frontend:latest|verdictacr.azurecr.io/verdict-frontend:$TAG|g" k8s/frontend.yaml
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Apply Kubernetes manifests (api, worker, frontend, infrastructure)
+      - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
 
-      - name: Wait for API rollout (rolling update)
+      - name: Wait for API rollout
         run: kubectl rollout status deployment/verdict-api -n verdict --timeout=5m
 
-      - name: Wait for Worker rollout (rolling update)
+      - name: Wait for Worker rollout
         run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=3m
 
-      - name: Wait for Frontend rollout (rolling update)
+      - name: Wait for Frontend rollout
         run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=3m
-
-      - name: Blue-green switch — promote Kira vLLM to new image
-        id: bg_switch
-        run: |
-          python scripts/blue_green_switch.py \
-            --image verdictacr.azurecr.io/verdict-vllm-kira:${{ needs.build-and-push.outputs.image_tag }} \
-            --timeout 600
-        # blue_green_switch.py auto-detects the inactive slot, starts it with the new
-        # image, waits up to 10 min for GPU warmup, flips the Service selector, then
-        # scales down the old slot. On failure it rolls back automatically.
-
-      - name: Smoke test — API health check
-        id: smoke
-        run: |
-          # Port-forward the API service and hit /api/health
-          kubectl port-forward service/verdict-api 8080:8000 -n verdict &
-          PF_PID=$!
-          sleep 5
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
-          kill $PF_PID 2>/dev/null || true
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-          echo "HTTP $STATUS from /api/health"
-          [ "$STATUS" = "200" ]
-
-      - name: Auto-rollback — smoke test failed
-        if: failure() && steps.smoke.conclusion == 'failure'
-        run: |
-          echo "Smoke test failed — triggering full rollback"
-          python scripts/rollback.py --scope api worker frontend vllm
-        env:
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}

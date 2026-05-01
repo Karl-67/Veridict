@@ -14,10 +14,6 @@ venv/
 
 # Environment variables
 .env
-.env.*
-!/.env.example
-/app/backend/.env
-/app/backend/.env.*
 
 # Local document upload storage
 /storage/

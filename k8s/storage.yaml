@@ -67,26 +67,11 @@ spec:
       storage: 60Gi
 
 ---
-# HuggingFace model cache for the Kira vLLM pod — BLUE slot
+# HuggingFace model cache for the Kira vLLM pod
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: verdict-vllm-kira-cache
-  namespace: verdict
-spec:
-  storageClassName: verdict-premium-ssd
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 60Gi
-
----
-# HuggingFace model cache for the Kira vLLM pod — GREEN slot
-# Separate disk so blue and green can cache independently (avoids lock contention).
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: verdict-vllm-kira-cache-green
   namespace: verdict
 spec:
   storageClassName: verdict-premium-ssd
