@@ -1,0 +1,56 @@
+name: Emergency Rollback
+
+# Manual trigger — use this when a bad deploy slips through the smoke test
+# or when you need to roll back a specific layer independently.
+#
+# Secrets required (only for scopes that need them):
+#   AZURE_CREDENTIALS     — AKS access (all k8s scopes)
+#   MLFLOW_TRACKING_URI   — MLflow model rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Layer(s) to roll back (space-separated: api worker frontend vllm mlflow all)"
+        required: true
+        default: "all"
+      model_name:
+        description: "MLflow model name (only used if scope includes mlflow)"
+        required: false
+        default: "kira"
+      dry_run:
+        description: "Dry run — print plan only, no changes"
+        type: boolean
+        default: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install mlflow pyyaml
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: verdict-rg
+          cluster-name: verdict-aks
+          admin: false
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Run rollback
+        run: |
+          ARGS="--scope ${{ inputs.scope }} --model ${{ inputs.model_name }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python scripts/rollback.py $ARGS
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}

@@ -33,6 +33,12 @@ def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_co
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.backend.services.metrics import (
+    finding_severity_total,
+    findings_per_run,
+    kira_iterations_per_run,
+    kira_panel_votes_total,
+)
 from app.backend.agents.admin import AdminMergeAgent, ReviewBlockAggregator
 from app.backend.agents.reviewer import (
     HarveyReviewer,
@@ -383,6 +389,11 @@ async def _run_kira_review_block(
                     clause_index, compliance_context, current_findings, feedback, iteration + 1
                 )
 
+        for iter_data in iterations:
+            for d in iter_data["decisions"]:
+                kira_panel_votes_total.labels(decision=d["decision"]).inc()
+        kira_iterations_per_run.observe(len(iterations))
+
         return {
             "final_findings": [f.model_dump(mode="json") for f in current_findings],
             "iterations": iterations,
@@ -490,6 +501,8 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             )
             for finding in result.aggregated_findings:
                 session.add(_to_finding_record(stage, finding))
+                finding_severity_total.labels(severity=finding.severity, branch="harvey").inc()
+            findings_per_run.labels(branch="harvey").observe(len(result.aggregated_findings))
             advance_stage(session, stage, result.model_dump(mode="json"))
             return
 
@@ -530,6 +543,8 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             )
             for finding in validated.validated_findings:
                 session.add(_to_finding_record(stage, finding))
+                finding_severity_total.labels(severity=finding.severity, branch="kira").inc()
+            findings_per_run.labels(branch="kira").observe(len(validated.validated_findings))
             advance_stage(
                 session,
                 stage,
