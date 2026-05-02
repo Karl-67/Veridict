@@ -181,7 +181,28 @@ jobs:
         run: |
           kubectl delete job verdict-migrate -n verdict --ignore-not-found=true
           kubectl apply -f k8s/migration-job.yaml
-          kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=10m
+          echo "Polling migration job..."
+          for i in $(seq 1 120); do
+            sleep 5
+            SUCCEEDED=$(kubectl get job verdict-migrate -n verdict -o jsonpath='{.status.succeeded}' 2>/dev/null || echo "")
+            CONDITIONS=$(kubectl get job verdict-migrate -n verdict -o jsonpath='{.status.conditions[*].type}' 2>/dev/null || echo "")
+            echo "  [${i}] succeeded=${SUCCEEDED} conditions=${CONDITIONS}"
+            if [ "$SUCCEEDED" = "1" ]; then
+              echo "Migration succeeded"
+              break
+            fi
+            if echo "$CONDITIONS" | grep -q "Failed"; then
+              echo "=== Migration job failed — pod logs ==="
+              kubectl logs job/verdict-migrate -n verdict 2>/dev/null || true
+              kubectl describe job verdict-migrate -n verdict || true
+              exit 1
+            fi
+            if [ "$i" = "120" ]; then
+              echo "Migration timed out after 10m"
+              kubectl logs job/verdict-migrate -n verdict 2>/dev/null || true
+              exit 1
+            fi
+          done
 
       - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/

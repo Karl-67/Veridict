@@ -7,10 +7,11 @@ metadata:
   name: verdict-migrate
   namespace: verdict
 spec:
+  backoffLimit: 0
   ttlSecondsAfterFinished: 300
   template:
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       containers:
         - name: migrate
           image: us-central1-docker.pkg.dev/verdict-ai-prod/verdict/verdict-api:latest  # same image as the API
