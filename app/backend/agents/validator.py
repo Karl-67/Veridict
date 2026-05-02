@@ -160,9 +160,7 @@ def _score_evidence_quality(finding: Finding) -> float:
     evidence = getattr(finding, "contract_evidence", getattr(finding, "evidence", []))
     if not evidence:
         return 0.0
-    def confidence(ev: Any) -> float:
-        return float(getattr(ev, "extraction_confidence", getattr(ev, "confidence", 0.0)) or 0.0)
-    return sum(confidence(ev) for ev in evidence) / len(evidence)
+    return sum(ev.extraction_confidence for ev in evidence) / len(evidence)
 
 
 def _deduplicate_overlapping_findings(findings: list[Finding], finding_verdicts: list[dict]) -> list[Finding]:
@@ -188,8 +186,7 @@ def _deduplicate_overlapping_findings(findings: list[Finding], finding_verdicts:
         for finding in group:
             ev_list = getattr(finding, "contract_evidence", getattr(finding, "evidence", []))
             for evidence in ev_list:
-                clause_id = getattr(evidence, "clause_uid", getattr(evidence, "clause_id", ""))
-                key = (clause_id, evidence.page)
+                key = (evidence.clause_uid, evidence.page)
                 if key not in seen_keys:
                     seen_keys.add(key)
                     merged_evidence.append(evidence)
@@ -242,16 +239,11 @@ class HarveyValidatorAgent:
             "This branch checks contract text against internal policy lineage only.",
         )
         raw = await self._provider.generate_structured_output(prompt, _VALIDATOR_RESPONSE_SCHEMA)
-        known_set = set(known_clause_uids)
-        hallucinated = {uid for uid in raw.get("hallucinated_clause_uids", []) if uid not in known_set}
-        all_findings = _normalize_reviewer_outputs(branch_outputs)
-        eligible = [f for f in all_findings if f.clause_uid not in hallucinated]
-        validated = _deduplicate_overlapping_findings(eligible, raw.get("finding_verdicts", []))
-        if not validated and all_findings:
-            validated = all_findings
+        hallucinated = set(raw.get("hallucinated_clause_uids", []))
+        eligible = [finding for finding in _normalize_reviewer_outputs(branch_outputs) if finding.clause_uid not in hallucinated]
         return ValidatorOutput(
             branch="harvey",
-            validated_findings=validated,
+            validated_findings=_deduplicate_overlapping_findings(eligible, raw.get("finding_verdicts", [])),
             hallucinated_clause_uids=list(hallucinated),
             notes=raw.get("notes"),
         )
@@ -275,19 +267,11 @@ class KiraValidatorAgent:
             f"This branch checks external compliance for jurisdiction={jurisdiction} regime={regime}.",
         )
         raw = await self._provider.generate_structured_output(prompt, _VALIDATOR_RESPONSE_SCHEMA)
-        known_set = set(known_clause_uids)
-        # Only trust hallucination flags for UIDs that genuinely don't exist in the parsed index.
-        # Small models frequently (incorrectly) flag real UIDs as hallucinated.
-        hallucinated = {uid for uid in raw.get("hallucinated_clause_uids", []) if uid not in known_set}
-        all_findings = _normalize_reviewer_outputs(branch_outputs)
-        eligible = [f for f in all_findings if f.clause_uid not in hallucinated]
-        validated = _deduplicate_overlapping_findings(eligible, raw.get("finding_verdicts", []))
-        # Last-resort: if the validator zeroed out a non-empty input, pass findings through unmodified.
-        if not validated and all_findings:
-            validated = all_findings
+        hallucinated = set(raw.get("hallucinated_clause_uids", []))
+        eligible = [finding for finding in _normalize_reviewer_outputs(branch_outputs) if finding.clause_uid not in hallucinated]
         return ValidatorOutput(
             branch="kira",
-            validated_findings=validated,
+            validated_findings=_deduplicate_overlapping_findings(eligible, raw.get("finding_verdicts", [])),
             hallucinated_clause_uids=list(hallucinated),
             inapplicable_regime_flags=raw.get("inapplicable_regime_flags", []),
             notes=raw.get("notes"),

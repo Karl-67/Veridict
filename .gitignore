@@ -1,11 +1,12 @@
+# Deployment secrets — never commit
+.deployment_secrets.txt
+
 # Data
 /data
 
 # Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
 # Virtual environments
 .venv/
@@ -31,16 +32,6 @@ venv/
 # Node (if ever used)
 node_modules/
 dist/
-build/
-*.tsbuildinfo
-app/frontend/tsconfig.tsbuildinfo
-
-# Runtime logs / pids
-logs/
-logs_backup/
-*.log
-*.pid
-*.jsonl
 
 # Training outputs (large checkpoints, logs)
 /outputs/

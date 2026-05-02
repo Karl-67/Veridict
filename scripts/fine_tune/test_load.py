@@ -3,8 +3,7 @@ import os
 os.environ["HF_HOME"] = "/workspace/hf_cache"
 
 import torch
-_cuda = torch.cuda.is_available()
-print("CUDA:", _cuda, torch.cuda.get_device_name(0) if _cuda else "N/A")
+print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0))
 
 import bitsandbytes as bnb
 print("bitsandbytes:", bnb.__version__)

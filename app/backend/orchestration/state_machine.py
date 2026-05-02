@@ -233,11 +233,7 @@ def _stage_output(session: Session, run_id: str, stage_name: str) -> dict:
 
 
 def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
-    kwargs = {}
-    if stage.stage_name != "admin_merge":
-        kwargs["id"] = finding.finding_id
     return FindingRecord(
-        **kwargs,
         run_id=stage.run_id,
         stage_execution_id=stage.id,
         source_agent=finding.agent_role,
@@ -247,7 +243,6 @@ def _to_finding_record(stage: StageExecutionRecord, finding) -> FindingRecord:
         issue=finding.description,
         severity=finding.severity,
         recommendation=finding.recommendation_detail,
-        recommended_change=getattr(finding, "recommended_change", None),
         is_disputed=finding.consensus_status == "disputed" or finding.unresolved_by_consensus,
         is_confirmed=finding.consensus_status == "consensus",
         contract_evidence=[
@@ -364,13 +359,13 @@ async def _run_kira_review_block(
     4. If 2+ reject → aggregate feedback → worker revises → repeat from step 2.
     5. After max_iterations, pass whatever the worker last produced.
     """
-    provider = _kira_provider(settings)
+    kira_provider = _kira_provider(settings)
+    base_provider = _provider(settings)
     try:
-        worker = KiraWorker(provider)
-        panel = [KiraPanelReviewer(provider, i) for i in (1, 2, 3)]
+        worker = KiraWorker(kira_provider)
+        panel = [KiraPanelReviewer(base_provider, i) for i in (1, 2, 3)]
 
         current_findings = await worker.analyze(clause_index, compliance_context)
-        best_findings = list(current_findings)  # keep best non-empty result across iterations
         iterations: list[dict] = []
 
         for iteration in range(1, max_iterations + 1):
@@ -394,11 +389,6 @@ async def _run_kira_review_block(
                 current_findings = await worker.revise(
                     clause_index, compliance_context, current_findings, feedback, iteration + 1
                 )
-                if current_findings:
-                    best_findings = list(current_findings)
-
-        # Prefer current_findings; fall back to best non-empty set if revision zeroed out results
-        final = current_findings if current_findings else best_findings
 
         for iter_data in iterations:
             for d in iter_data["decisions"]:
@@ -406,13 +396,14 @@ async def _run_kira_review_block(
         kira_iterations_per_run.observe(len(iterations))
 
         return {
-            "final_findings": [f.model_dump(mode="json") for f in final],
+            "final_findings": [f.model_dump(mode="json") for f in current_findings],
             "iterations": iterations,
             "total_iterations": len(iterations),
             "approved": iterations[-1]["approved"] if iterations else False,
         }
     finally:
-        await provider.aclose()
+        await kira_provider.aclose()
+        await base_provider.aclose()
 
 
 
@@ -470,15 +461,8 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             return
 
         if stage.stage_name == "harvey_context_load":
+            lineage = resolve_policy_lineage(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0)
             clause_index = _load_clause_index(session, run.id)
-            try:
-                lineage = resolve_policy_lineage(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0)
-                prior_versions = load_prior_policy_versions(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0)
-                playbook_rules = (lambda rp: rp.get("rules", []) if isinstance(rp, dict) else (rp or []))(lineage.get("rules_payload"))
-            except MissingLineageError:
-                lineage = {}
-                prior_versions = []
-                playbook_rules = []
             rag_trace_dicts: list[dict] = []
             try:
                 rag_retriever = HarveyRagRetriever(session)
@@ -494,8 +478,8 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 stage,
                 {
                     "lineage": lineage,
-                    "prior_versions": prior_versions,
-                    "playbook_rules": playbook_rules,
+                    "prior_versions": load_prior_policy_versions(run.tenant_id, run.policy_family_id or "", run.policy_version_number or 0),
+                    "playbook_rules": (lambda rp: rp.get("rules", []) if isinstance(rp, dict) else (rp or []))(lineage.get("rules_payload")),
                     "rag_trace": rag_trace_dicts,
                 },
             )
@@ -517,14 +501,11 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             result = asyncio.run(
                 _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number)
             )
-            from app.backend.models.schemas import Finding as _HarveyFinding
-            aggregated = result.get("aggregated_findings", [])
-            for finding_dict in aggregated:
-                finding_obj = _HarveyFinding.model_validate(finding_dict) if isinstance(finding_dict, dict) else finding_dict
-                session.add(_to_finding_record(stage, finding_obj))
-                finding_severity_total.labels(severity=finding_obj.severity, branch="harvey").inc()
-            findings_per_run.labels(branch="harvey").observe(len(aggregated))
-            advance_stage(session, stage, result)
+            for finding in result.aggregated_findings:
+                session.add(_to_finding_record(stage, finding))
+                finding_severity_total.labels(severity=finding.severity, branch="harvey").inc()
+            findings_per_run.labels(branch="harvey").observe(len(result.aggregated_findings))
+            advance_stage(session, stage, result.model_dump(mode="json"))
             return
 
         if stage.stage_name == "kira_review_block":
@@ -535,12 +516,9 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 mark_run_blocked(session, run, blocked_reason)
                 return
 
-            try:
-                compliance_context = resolve_applicable_corpora(
-                    run.tenant_id, run.jurisdiction, run.regime, run.effective_date
-                )
-            except MissingComplianceScopeError:
-                compliance_context = {"jurisdiction": run.jurisdiction or "", "regime": run.regime or "", "internal_rules": [], "external_rules": []}
+            compliance_context = resolve_applicable_corpora(
+                run.tenant_id, run.jurisdiction, run.regime, run.effective_date
+            )
             kira_result = asyncio.run(
                 _run_kira_review_block(clause_index, compliance_context, settings)
             )

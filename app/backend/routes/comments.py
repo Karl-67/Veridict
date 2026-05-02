@@ -58,7 +58,7 @@ class CommentUpdate(BaseModel):
 
 
 @router.get("/runs/{run_id}/comments", response_model=list[CommentOut])
-async def list_contract_comments(run_id: str, db: DbSession, token: dict = Depends(require_auth)) -> list[CommentOut]:
+async def list_contract_comments(run_id: str, db: DbSession) -> list[CommentOut]:
     result = await db.execute(
         select(ContractCommentRecord)
         .options(selectinload(ContractCommentRecord.author))
@@ -73,10 +73,7 @@ async def list_contract_comments(run_id: str, db: DbSession, token: dict = Depen
             workspace_id=r.workspace_id,
             contract_id=r.contract_id,
             author_id=r.author_id,
-            author_name=r.author.display_name or "Unknown",
-            job_title=r.author.job_title,
-            avatar_color=r.author.avatar_color or "#6366f1",
-            body=r.body,
+            author_name=r.author.display_name, job_title=r.author.job_title, avatar_color=r.author.avatar_color, body=r.body,
             page_number=r.page_number,
             selected_text=r.selected_text,
             anchor=r.anchor,
@@ -114,9 +111,9 @@ async def create_contract_comment(
         workspace_id=record.workspace_id,
         contract_id=record.contract_id,
         author_id=record.author_id,
-        author_name=record.author.display_name or "Unknown",
+        author_name=record.author.display_name,
         job_title=record.author.job_title,
-        avatar_color=record.author.avatar_color or "#6366f1",
+        avatar_color=record.author.avatar_color,
         body=record.body,
         page_number=record.page_number,
         selected_text=record.selected_text,
@@ -150,10 +147,9 @@ async def update_contract_comment(
     await db.refresh(record, ["author"])
     return CommentOut(
         id=record.id, run_id=record.run_id, workspace_id=record.workspace_id,
-        contract_id=record.contract_id, author_id=record.author_id,
-        author_name=record.author.display_name or "Unknown",
+        contract_id=record.contract_id, author_id=record.author_id, author_name=record.author.display_name,
         job_title=record.author.job_title,
-        avatar_color=record.author.avatar_color or "#6366f1",
+        avatar_color=record.author.avatar_color,
         body=record.body, page_number=record.page_number, selected_text=record.selected_text,
         anchor=record.anchor, created_at=record.created_at, updated_at=record.updated_at,
     )

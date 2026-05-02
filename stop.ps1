@@ -24,10 +24,10 @@ function Stop-Port {
     param([int]$Port, [string]$Label)
     $hits = netstat -ano 2>$null | Select-String ":$Port\s.*LISTENING"
     foreach ($line in $hits) {
-        $procPid = ($line.Line.Trim() -split '\s+')[-1]
-        if ($procPid -match '^\d+$' -and [int]$procPid -gt 0) {
-            Stop-Process -Id ([int]$procPid) -Force -ErrorAction SilentlyContinue
-            Write-Green "✓ $Label on port $Port stopped (PID $procPid)"
+        $pid = ($line.Line.Trim() -split '\s+')[-1]
+        if ($pid -match '^\d+$' -and [int]$pid -gt 0) {
+            Stop-Process -Id ([int]$pid) -Force -ErrorAction SilentlyContinue
+            Write-Green "✓ $Label on port $Port stopped (PID $pid)"
         }
     }
 }

@@ -59,8 +59,39 @@ EPOCHS         = 3
 LR             = 2e-4
 
 
+try:
+    from scripts.llmops_mlflow import dataset_version, enabled as mlflow_enabled, log_artifact, log_metrics, log_params, sha256_text, start_run
+except Exception:
+    def mlflow_enabled():
+        return False
+    def dataset_version(paths):
+        return "unavailable"
+    def sha256_text(value):
+        return "unavailable"
+    def log_params(params):
+        return None
+    def log_metrics(metrics, prefix=""):
+        return None
+    def log_artifact(path, artifact_path=None):
+        return None
+    def start_run(run_name, tags=None, nested=False):
+        from contextlib import nullcontext
+        return nullcontext(None)
+
+
+def _split_paths(split):
+    return [DATA_DIR / "ft" / (split + ".jsonl"), DATA_DIR / (split + ".jsonl")]
+
+
+def _existing_split_path(split):
+    for path in _split_paths(split):
+        if path.exists():
+            return path
+    return _split_paths(split)[0]
+
+
 def load_rows(split):
-    for p in [DATA_DIR / "ft" / (split + ".jsonl"), DATA_DIR / (split + ".jsonl")]:
+    for p in _split_paths(split):
         if p.exists():
             rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
             log.info("Loaded %d %s rows from %s", len(rows), split, p)
@@ -131,6 +162,32 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ADAPTER_DIR.mkdir(parents=True, exist_ok=True)
 
+    train_path = _existing_split_path("train")
+    val_path = _existing_split_path("val")
+    mlflow_context = start_run(
+        "kira-sft-qlora",
+        tags={"llmops.phase": "training", "role": "kira", "training.kind": "sft_qlora"},
+    )
+    mlflow_context.__enter__()
+    log_params(
+        {
+            "model": MODEL_ID,
+            "adapter_type": "lora",
+            "dataset_train_path": str(train_path),
+            "dataset_val_path": str(val_path),
+            "data_version": dataset_version([train_path, val_path]),
+            "prompt_version": sha256_text("gemma_chat_messages_v1"),
+            "lora_r": LORA_R,
+            "lora_alpha": LORA_ALPHA,
+            "target_modules": TARGET_MODULES,
+            "max_seq_len": MAX_SEQ_LEN,
+            "batch_size": BATCH_SIZE,
+            "gradient_accumulation_steps": GRAD_ACCUM,
+            "epochs": EPOCHS,
+            "learning_rate": LR,
+        }
+    )
+
     log.info("Fixing split HF cache layout if needed...")
     fix_split_cache()
 
@@ -174,8 +231,11 @@ def main():
     model.print_trainable_parameters()
 
     log.info("Building datasets...")
-    train_ds = Dataset.from_list([{"text": to_gemma_text(r)} for r in load_rows("train")])
-    val_ds   = Dataset.from_list([{"text": to_gemma_text(r)} for r in load_rows("val")])
+    train_rows = load_rows("train")
+    val_rows = load_rows("val")
+    log_params({"train_row_count": len(train_rows), "val_row_count": len(val_rows)})
+    train_ds = Dataset.from_list([{"text": to_gemma_text(r)} for r in train_rows])
+    val_ds   = Dataset.from_list([{"text": to_gemma_text(r)} for r in val_rows])
 
     sft_cfg = SFTConfig(
         output_dir=str(OUTPUT_DIR),
@@ -191,7 +251,7 @@ def main():
         save_strategy="epoch",
         save_total_limit=2,
         load_best_model_at_end=True,
-        report_to="none",
+        report_to=["mlflow"] if mlflow_enabled() else "none",
         gradient_checkpointing=True,
         dataloader_num_workers=0,
         max_seq_length=MAX_SEQ_LEN,
@@ -206,12 +266,17 @@ def main():
     )
 
     log.info("=== TRAINING START ===")
-    trainer.train()
+    train_output = trainer.train()
+    log_metrics(train_output.metrics, prefix="train.")
+    eval_metrics = trainer.evaluate()
+    log_metrics(eval_metrics, prefix="eval.")
 
     log.info("Saving adapter -> %s", ADAPTER_DIR)
     trainer.model.save_pretrained(str(ADAPTER_DIR))
     tokenizer.save_pretrained(str(ADAPTER_DIR))
+    log_artifact(LOG_FILE, artifact_path="logs")
     log.info("=== DONE ===")
+    mlflow_context.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

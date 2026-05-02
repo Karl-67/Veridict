@@ -46,6 +46,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.llmops_mlflow import dataset_version, log_artifact, log_dict, log_metrics, log_params, start_run
+
 OUTPUT_DIR = ROOT / "scripts" / "fine_tune" / "output"
 STATUS_FILE = OUTPUT_DIR / "training_status.json"
 LOG_FILE = OUTPUT_DIR / "training_log.txt"
@@ -115,12 +117,13 @@ def step_export() -> None:
 def step_eval_before() -> None:
     log.info("=== Step 3: Baseline evaluation ===")
     _append_log("[launch] Running baseline evaluation...")
-    from scripts.fine_tune.evaluate import run_eval
+    from scripts.fine_tune.evaluate import log_eval_to_mlflow, run_eval
     endpoint = _env("BASELINE_ENDPOINT", "http://localhost:11434/v1")
     model = _env("BASELINE_MODEL", "llama3.2:latest")
     results = run_eval(endpoint, model)
     out = OUTPUT_DIR / "eval_before.json"
     out.write_text(json.dumps(results, indent=2))
+    log_eval_to_mlflow("before", endpoint, model, 100, results, out)
     _append_log(f"[launch] Baseline eval: json_valid={results.get('json_validity_rate')} schema={results.get('schema_compliance_rate')}")
     log.info("Baseline eval saved to %s", out)
 
@@ -453,10 +456,11 @@ def step_eval_after() -> None:
         log.info("KIRA_MODEL_URL not set; skipping after-eval.")
         return
     _append_log(f"[launch] Running after-eval against {after_endpoint}...")
-    from scripts.fine_tune.evaluate import run_eval
+    from scripts.fine_tune.evaluate import log_eval_to_mlflow, run_eval
     results = run_eval(after_endpoint, after_model)
     out = OUTPUT_DIR / "eval_after.json"
     out.write_text(json.dumps(results, indent=2))
+    log_eval_to_mlflow("after", after_endpoint, after_model, 100, results, out)
     _append_log(f"[launch] After eval: json_valid={results.get('json_validity_rate')} schema={results.get('schema_compliance_rate')}")
     log.info("After eval saved to %s", out)
 
@@ -476,6 +480,30 @@ def main() -> None:
     _write_status("starting")
     _append_log(f"[launch] Started at {datetime.now(timezone.utc).isoformat()}")
 
+    train_data = ROOT / "data" / "kira" / "ft" / "train.jsonl"
+    val_data = ROOT / "data" / "kira" / "ft" / "val.jsonl"
+    mlflow_context = start_run(
+        "kira-runpod-training-orchestration",
+        tags={"llmops.phase": "training_orchestration", "role": "kira"},
+    )
+    mlflow_context.__enter__()
+    log_params(
+        {
+            "baseline_endpoint": _env("BASELINE_ENDPOINT", "http://localhost:11434/v1"),
+            "baseline_model": _env("BASELINE_MODEL", "llama3.2:latest"),
+            "kira_model_url": _env("KIRA_MODEL_URL", ""),
+            "kira_model_name": _env("KIRA_MODEL_NAME", "kira-gemma4-26b"),
+            "hf_adapter_repo": _env("HF_ADAPTER_REPO", ""),
+            "train_data_path": str(train_data),
+            "val_data_path": str(val_data),
+            "data_version": dataset_version([p for p in [train_data, val_data] if p.exists()]),
+            "dry_run": args.dry_run,
+            "skip_gdrive": args.skip_gdrive,
+            "skip_export": args.skip_export,
+            "skip_eval": args.skip_eval,
+        }
+    )
+
     try:
         if not args.skip_gdrive:
             step_gdrive_sync()
@@ -493,16 +521,34 @@ def main() -> None:
 
         _write_status("completed", finished_at=datetime.now(timezone.utc).isoformat())
         _append_log("[launch] All steps complete.")
+        if STATUS_FILE.exists():
+            log_dict(json.loads(STATUS_FILE.read_text(encoding="utf-8")), "training/status.json")
+        if LOG_FILE.exists():
+            log_artifact(LOG_FILE, artifact_path="training")
+        log_metrics({"completed": 1.0})
         log.info("Training pipeline complete.")
+        mlflow_context.__exit__(None, None, None)
 
     except SystemExit as exc:
         _write_status("failed", error=str(exc))
         _append_log(f"[launch] Failed: {exc}")
+        log_metrics({"failed": 1.0})
+        if STATUS_FILE.exists():
+            log_artifact(STATUS_FILE, artifact_path="training")
+        if LOG_FILE.exists():
+            log_artifact(LOG_FILE, artifact_path="training")
+        mlflow_context.__exit__(type(exc), exc, exc.__traceback__)
         raise
     except Exception as exc:
         _write_status("failed", error=str(exc))
         _append_log(f"[launch] Unexpected error: {exc}")
         log.exception("Unexpected error")
+        log_metrics({"failed": 1.0})
+        if STATUS_FILE.exists():
+            log_artifact(STATUS_FILE, artifact_path="training")
+        if LOG_FILE.exists():
+            log_artifact(LOG_FILE, artifact_path="training")
+        mlflow_context.__exit__(type(exc), exc, exc.__traceback__)
         sys.exit(1)
 
 

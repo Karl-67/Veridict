@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: verdictacr.azurecr.io/verdict-worker:latest
+          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-worker:latest
           ports:
             - containerPort: 9100
               name: metrics

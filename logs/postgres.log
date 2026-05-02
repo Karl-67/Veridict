@@ -1,0 +1,22 @@
+2026-04-09 12:54:49 +03 LOG:  redirecting log output to logging collector process
+2026-04-09 12:54:49 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-09 12:57:57 +03 LOG:  redirecting log output to logging collector process
+2026-04-09 12:57:57 +03 HINT:  Future log output will appear in directory "log".
+2026-04-26 13:12:39 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 13:12:39 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-26 18:47:02 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 18:47:02 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-26 18:52:15 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 18:52:15 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-26 18:53:21 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 18:53:21 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-26 18:56:45 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 18:56:45 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-26 18:57:45 +03 LOG:  redirecting log output to logging collector process
+2026-04-26 18:57:45 +03 HINT:  Future log output will appear in directory "log".
+2026-04-27 12:50:43 +03 LOG:  redirecting log output to logging collector process
+2026-04-27 12:50:43 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-27 12:59:44 +03 LOG:  redirecting log output to logging collector process
+2026-04-27 12:59:44 +03 HINT:  Future log output will appear in directory "log".
+^C2026-04-27 13:02:12 +03 LOG:  redirecting log output to logging collector process
+2026-04-27 13:02:12 +03 HINT:  Future log output will appear in directory "log".

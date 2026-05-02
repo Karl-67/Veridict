@@ -62,6 +62,8 @@ from train_shared import (
 from trl import GRPOTrainer
 from transformers import TrainerCallback
 
+from llmops_mlflow import dataset_version, log_artifact, log_metrics, log_params, sha256_text, start_run
+
 # ── Output directories ────────────────────────────────────────────────────────
 
 HARVEY_OUT = OUTPUT_ROOT / "harvey_adapter"
@@ -140,6 +142,30 @@ def _train_attempt(
     print(f"{'#'*60}\n")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    mlflow_context = start_run(
+        f"{name}-grpo-qlora",
+        tags={"llmops.phase": "training", "role": name, "training.kind": "grpo_qlora"},
+    )
+    mlflow_context.__enter__()
+    log_params(
+        {
+            "model": HF_MODEL_ID,
+            "role": name,
+            "adapter_type": "lora",
+            "output_dir": str(output_dir),
+            "max_steps": MAX_STEPS,
+            "num_generations": num_generations,
+            "dataset_rows": len(dataset),
+            "data_version": dataset_version(
+                [
+                    Path("data/curated/dataset_a/reviewer_train.jsonl"),
+                    Path("data/curated/dataset_a/reviewer_test.jsonl"),
+                    Path("data/curated/golden/golden_edge_cases.jsonl"),
+                ]
+            ),
+            "prompt_version": sha256_text(f"{name}:grpo_prompt_v1"),
+        }
+    )
     update_state(name, status="starting", num_generations=num_generations,
                  started_at=datetime.now().isoformat(timespec="seconds"))
     t0 = time.time()
@@ -191,6 +217,7 @@ def _train_attempt(
         n_samples_to_print=5,
     ) or {}
     metrics["elapsed_min"] = round(elapsed / 60, 1)
+    log_metrics(metrics)
 
     # Free GPU memory before the next model loads
     del trainer
@@ -202,8 +229,10 @@ def _train_attempt(
     (output_dir / ".training_complete").write_text(
         datetime.now().isoformat(timespec="seconds"), encoding="utf-8"
     )
+    log_artifact(output_dir / ".training_complete", artifact_path=f"{name}/metadata")
     update_state(name, status="complete", metrics=metrics,
                  finished_at=datetime.now().isoformat(timespec="seconds"))
+    mlflow_context.__exit__(None, None, None)
     return metrics
 
 

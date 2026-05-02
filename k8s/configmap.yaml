@@ -39,9 +39,10 @@ data:
   REVIEWER_TEMPERATURE: "0.2"
   VALIDATOR_TEMPERATURE: "0.1"
 
-  # CORS — update with your Azure domain
-  CORS_ORIGINS: '["https://verdict.verdictacr.azurewebsites.net"]'
-  ALLOWED_FRONTEND_ORIGINS: '["https://verdict.verdictacr.azurewebsites.net"]'
+  # CORS — update with your public ingress IP/domain after deployment
+  # Currently set to * for dev; tighten before production
+  CORS_ORIGINS: '["*"]'
+  ALLOWED_FRONTEND_ORIGINS: '["*"]'
 
   # Observability
   METRICS_ENABLED: "true"

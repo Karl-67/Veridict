@@ -77,8 +77,7 @@ def _char_distribution_score(text: str) -> float:
 
 
 def _split_into_clauses(text: str) -> list[str]:
-    prepared = re.sub(r"(?<!^)(?=\b\d+\.\s+[A-Z])", "\n\n", text)
-    parts = [p.strip() for p in re.split(r"\n\s*\n|(?<=\.)\s{2,}", prepared) if _normalize_text(p)]
+    parts = [p.strip() for p in re.split(r"\n\s*\n|(?<=\.)\s{2,}", text) if _normalize_text(p)]
     return parts if parts else [_normalize_text(text)]
 
 
@@ -315,7 +314,7 @@ def parse_pdf_to_canonical_document(pdf_bytes: bytes, settings: Settings) -> Can
                         normalized = ""
                 if not normalized:
                     continue
-            parts = _split_into_clauses(text)
+            parts = [part.strip() for part in re.split(r"\n\s*\n|(?<=\.)\s{2,}", text) if _normalize_text(part)]
             if not parts:
                 parts = [normalized]
             for clause_index, part in enumerate(parts, start=1):

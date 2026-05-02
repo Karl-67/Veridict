@@ -4,8 +4,9 @@ name: Emergency Rollback
 # or when you need to roll back a specific layer independently.
 #
 # Secrets required (only for scopes that need them):
-#   AZURE_CREDENTIALS     — AKS access (all k8s scopes)
-#   MLFLOW_TRACKING_URI   — MLflow model rollback
+#   GCP_WORKLOAD_IDENTITY_PROVIDER — OIDC provider for GCP auth
+#   GCP_SERVICE_ACCOUNT           — SA email for GCP auth
+#   MLFLOW_TRACKING_URI           — MLflow model rollback
 
 on:
   workflow_dispatch:
@@ -23,6 +24,15 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}
+  GKE_REGION: ${{ vars.GKE_REGION }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+
 jobs:
   rollback:
     runs-on: ubuntu-latest
@@ -36,14 +46,18 @@ jobs:
       - name: Install dependencies
         run: pip install mlflow pyyaml
 
-      - name: Set AKS context
-        uses: azure/aks-set-context@v3
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          resource-group: verdict-rg
-          cluster-name: verdict-aks
-          admin: false
-        env:
-          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER_NAME }}
+          location: ${{ env.GKE_REGION }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Run rollback
         run: |

@@ -161,32 +161,6 @@ def _normalize_finding_item(item: dict) -> dict:
     return item
 
 
-_GENERIC_REWRITE_TERMS = (
-    "clarify",
-    "revise",
-    "negotiate",
-    "consider",
-    "seek legal advice",
-    "should be amended",
-    "should be revised",
-    "add language",
-)
-
-
-def _is_concrete_rewrite(value: str | None) -> bool:
-    if not isinstance(value, str):
-        return False
-    text = value.strip()
-    if len(text) < 20:
-        return False
-    lowered = text.lower()
-    if lowered in _GENERIC_REWRITE_TERMS:
-        return False
-    if any(term in lowered for term in _GENERIC_REWRITE_TERMS) and len(text.split()) < 12:
-        return False
-    return True
-
-
 def _contract_evidence_from_raw(raw_items: list, clause: dict) -> list[ContractEvidence]:
     evidence: list[ContractEvidence] = []
     clause_text = str(clause.get("normalized_text", ""))
@@ -609,42 +583,6 @@ def _format_findings_for_panel(findings: list[Finding]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _fuzzy_match_clause(
-    clause_uid: str | None,
-    clauses_by_uid: dict[str, dict],
-    clause_index: list[dict],
-) -> tuple[str | None, dict | None]:
-    """Try to find a clause even when the model returns an imprecise uid.
-
-    Attempts (in order):
-    1. Exact match (already tried by caller)
-    2. Case-insensitive match
-    3. Numeric extraction: "clause_3" / "clause_03" / "3" all resolve to the
-       clause whose uid contains that number
-    4. Falls back to None if nothing matches.
-    """
-    if not clause_uid:
-        return None, None
-
-    # Case-insensitive
-    lower = clause_uid.lower()
-    for uid, clause in clauses_by_uid.items():
-        if uid.lower() == lower:
-            return uid, clause
-
-    # Extract trailing digits and match against clause uids containing the same number
-    import re as _re
-    digits = _re.sub(r"[^0-9]", "", clause_uid)
-    if digits:
-        target_num = int(digits)
-        for uid, clause in clauses_by_uid.items():
-            uid_digits = _re.sub(r"[^0-9]", "", uid)
-            if uid_digits and int(uid_digits) == target_num:
-                return uid, clause
-
-    return None, None
-
-
 def _assemble_branch_output(
     raw: dict,
     *,
@@ -665,18 +603,9 @@ def _assemble_branch_output(
         clause_uid = item.get("clause_uid")
         clause = clauses_by_uid.get(clause_uid)
         if not clause:
-            resolved_uid, clause = _fuzzy_match_clause(clause_uid, clauses_by_uid, clause_index)
-            if clause:
-                clause_uid = resolved_uid
-                item["clause_uid"] = clause_uid
-        if not clause:
             continue
         if require_contract_evidence and not item.get("contract_evidence"):
-            # Small local models often omit contract_evidence but include clause_uid — use it.
-            if clause_uid:
-                item["contract_evidence"] = [clause_uid]
-            else:
-                continue
+            continue
         if require_rag_citations and not item.get("rag_citations"):
             continue
         contract_evidence = _contract_evidence_from_raw(item.get("contract_evidence", []), clause)

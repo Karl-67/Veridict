@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,29 @@ KIRA_SYSTEM = (
     "You assign severity based on actual clause language, not topic alone, and always "
     "justify your assessment with exact text evidence."
 )
+
+
+def log_eval_to_mlflow(mode: str, endpoint: str, model: str, max_samples: int, results: dict[str, Any], out_path: Path) -> None:
+    from scripts.llmops_mlflow import log_artifact, log_metrics, log_params, sha256_file, sha256_text, start_run
+
+    tags = {
+        "llmops.phase": "evaluation",
+        "role": "kira",
+        "eval_mode": mode,
+    }
+    with start_run(f"kira-eval-{mode}-{model}", tags=tags, nested=True):
+        log_params(
+            {
+                "model": model,
+                "endpoint": endpoint,
+                "max_samples": max_samples,
+                "eval_data_path": str(EVAL_DATA),
+                "eval_data_version": sha256_file(EVAL_DATA) if EVAL_DATA.exists() else "missing",
+                "prompt_version": sha256_text(KIRA_SYSTEM),
+            }
+        )
+        log_metrics(results)
+        log_artifact(out_path, artifact_path="eval")
 
 
 def _load_eval(path: Path) -> list[dict]:
@@ -188,6 +212,7 @@ def run_eval(endpoint: str, model: str, max_samples: int = 100) -> dict[str, Any
 
     rows = rows[:max_samples]
     log.info("Evaluating %d samples against %s / %s", len(rows), endpoint, model)
+    started = time.perf_counter()
 
     json_valid = 0
     schema_ok = 0
@@ -250,6 +275,7 @@ def run_eval(endpoint: str, model: str, max_samples: int = 100) -> dict[str, Any
         total_gt_findings += len(gt_findings)
 
     n = max(total, 1)
+    elapsed_seconds = time.perf_counter() - started
     return {
         "model": model,
         "endpoint": endpoint,
@@ -265,6 +291,10 @@ def run_eval(endpoint: str, model: str, max_samples: int = 100) -> dict[str, Any
         "rouge_l_description": round(
             sum(rouge_scores) / max(len(rouge_scores), 1), 4
         ),
+        "latency_total_seconds": round(elapsed_seconds, 4),
+        "latency_avg_seconds": round(elapsed_seconds / n, 4),
+        "estimated_token_usage": 0,
+        "estimated_cost_usd": 0.0,
     }
 
 
@@ -281,6 +311,7 @@ def main() -> None:
 
     out_path = OUTPUT_DIR / f"eval_{args.mode}.json"
     out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    log_eval_to_mlflow(args.mode, args.endpoint, args.model, args.max_samples, results, out_path)
     log.info("Results written to %s", out_path)
     print(json.dumps(results, indent=2))
 

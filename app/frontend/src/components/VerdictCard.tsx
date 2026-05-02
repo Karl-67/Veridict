@@ -114,8 +114,7 @@ export default function VerdictCard({
         severity: f.severity as keyof typeof severityConfig,
         title: f.description.split(/[.\n]/)[0]?.slice(0, 100) || f.clause_uid,
         quote: f.description,
-        recommendation: f.recommended_change || "",
-        recommendationExplanation: f.recommendation_detail || "",
+        recommendation: f.recommendation_detail || f.recommendation,
       }));
     }
     return result.clause_flags.map((f, i) => ({
@@ -123,8 +122,7 @@ export default function VerdictCard({
       severity: (f.severity === "high" ? "critical" : f.severity) as keyof typeof severityConfig,
       title: f.clause,
       quote: f.issue,
-      recommendation: "",
-      recommendationExplanation: f.issue,
+      recommendation: "This clause requires legal review and potential renegotiation.",
     }));
   }, [findings, result.clause_flags]);
 
@@ -291,20 +289,12 @@ export default function VerdictCard({
                             <blockquote className="pl-4 border-l-2 border-text-secondary/15 text-sm italic text-text-secondary leading-relaxed">
                               &ldquo;{f.quote}&rdquo;
                             </blockquote>
-                            {f.recommendationExplanation && (
-                              <p className="mb-3 text-xs text-text-primary/70 leading-relaxed">
-                                {f.recommendationExplanation}
-                              </p>
-                            )}
                             {f.recommendation && (
                               <div className="flex items-start gap-2.5 rounded-xl bg-accent/5 px-4 py-3">
                                 <Zap className="h-3.5 w-3.5 text-accent shrink-0 mt-0.5" />
-                                <div>
-                                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-accent/70">Suggested replacement</p>
-                                  <p className="text-xs font-medium text-text-primary/70 leading-relaxed">
-                                    {f.recommendation}
-                                  </p>
-                                </div>
+                                <p className="text-xs font-medium text-text-primary/70 leading-relaxed">
+                                  {f.recommendation}
+                                </p>
                               </div>
                             )}
                           </div>

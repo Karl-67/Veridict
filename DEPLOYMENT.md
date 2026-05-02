@@ -1,318 +1,189 @@
-# Verdict — Azure Deployment Plan
+# Veridict — GCP Deployment Guide
 
 ## Overview
 
-The deployment happens in two phases separated by the Kira fine-tuning run.
+Veridict runs on **Google Kubernetes Engine (GKE)** in region `europe-west1` (Belgium).
+Infrastructure is managed with **Terraform** (`infra/gcp/`).
+Container images are stored in **Google Artifact Registry** (GAR).
 
-| Phase | When | What gets deployed |
-|---|---|---|
-| **Phase 1** | Now | AKS cluster, ACR, all app infrastructure, vLLM pods dormant (0 replicas) |
-| **Phase 2** | After fine-tuning completes | GPU node pool, vLLM pods scaled up, LoRA adapter loaded |
+Phase 1 provisions the cluster and deploys all services except GPU workloads.
+Phase 2 (deferred) scales up the GPU node pool for vLLM fine-tuning and serving.
 
 ---
 
-## Phase 1 — Deploy Now (No GPU Required)
+## Prerequisites
 
-### 1.1 Create the Azure infrastructure
+| Tool | Version | Install |
+|------|---------|---------|
+| `gcloud` CLI | latest | https://cloud.google.com/sdk/docs/install |
+| `terraform` | >= 1.6 | https://developer.hashicorp.com/terraform/install |
+| `docker` | latest | https://docs.docker.com/get-docker/ |
+| `kubectl` | latest | `gcloud components install kubectl` |
 
-Run once from any terminal with `az` installed and logged in.
+Authenticate gcloud before running the scripts:
 
-```bash
-# Resource group and container registry
-az group create --name verdict-rg --location eastus
-az acr create --name verdictacr --resource-group verdict-rg --sku Basic
-
-# AKS cluster — CPU nodes only (no GPU yet)
-az aks create \
-  --resource-group verdict-rg \
-  --name verdict-aks \
-  --node-count 2 \
-  --node-vm-size Standard_D4s_v3 \
-  --attach-acr verdictacr \
-  --generate-ssh-keys
-
-# Pull kubeconfig into your local kubectl
-az aks get-credentials --resource-group verdict-rg --name verdict-aks
+```powershell
+gcloud auth login
+gcloud auth application-default login
 ```
 
-### 1.2 Create the namespace and secrets
+---
 
-```bash
-kubectl create namespace verdict
+## Phase 1 — First-time Deployment
 
-POSTGRES_PASS=$(openssl rand -hex 16)
-SECRET_KEY=$(openssl rand -hex 32)
+### Step 1 — Provision infrastructure
 
-kubectl create secret generic verdict-secrets -n verdict \
-  --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASS" \
-  --from-literal=POSTGRES_DSN="postgresql://verdict:${POSTGRES_PASS}@verdict-postgres:5432/verdict" \
-  --from-literal=SECRET_KEY="$SECRET_KEY" \
-  --from-literal=HF_TOKEN="placeholder-set-after-fine-tuning"
+```powershell
+.\deploy_gcp_phase1.ps1
 ```
 
-> Save `$POSTGRES_PASS` somewhere safe — you'll need it if you ever recreate the secret.
+This script:
+1. Creates GCP project `veridict-dev` (skips if it already exists).
+2. Pauses for you to enable billing in the GCP console.
+3. Runs `terraform init && terraform apply -var-file=dev.tfvars` in `infra/gcp/`.
+4. Saves Terraform outputs to `%TEMP%\veridict_gcp_outputs.json`.
 
-### 1.3 Build and push Docker images to ACR
+Terraform provisions:
+- GKE Standard cluster `veridict-dev-gke` (2× e2-standard-4 system nodes)
+- GPU node pool (0 nodes initially, autoscales 0–4 when needed)
+- Artifact Registry repository `veridict`
+- GCS buckets: `veridict-dev-datasets`, `veridict-dev-artifacts`, `veridict-dev-rag`
+- Workload Identity SA with roles: `artifactregistry.reader`, `storage.objectAdmin`, `secretmanager.secretAccessor`
 
-```bash
-az acr login --name verdictacr
+### Step 2 — Build images and deploy
 
-docker build -f Dockerfile.api     -t verdictacr.azurecr.io/verdict-api:latest .
-docker build -f Dockerfile.worker  -t verdictacr.azurecr.io/verdict-worker:latest .
-docker build -f Dockerfile.frontend -t verdictacr.azurecr.io/verdict-frontend:latest .
-
-docker push verdictacr.azurecr.io/verdict-api:latest
-docker push verdictacr.azurecr.io/verdict-worker:latest
-docker push verdictacr.azurecr.io/verdict-frontend:latest
+```powershell
+.\deploy_gcp_phase1_images.ps1
 ```
 
-### 1.4 Deploy all manifests
+This script:
+1. Reads Terraform outputs from `%TEMP%\veridict_gcp_outputs.json`.
+2. Configures Docker for GAR authentication.
+3. Builds and pushes `verdict-api`, `verdict-worker`, `verdict-frontend`.
+4. Patches k8s manifests with the real project ID.
+5. Gets GKE credentials and applies all manifests.
+6. Installs nginx-ingress controller.
+7. Prompts for secret values (POSTGRES_PASSWORD, SECRET_KEY, HF_TOKEN).
+8. Scales vLLM deployments to 0 replicas (no GPU cost in dev).
+9. Runs the database migration job.
+10. Prints the Ingress external IP.
 
-```bash
-# Apply the full kustomization (postgres, api, worker, frontend, ingress, vLLM manifests)
-kubectl apply -k k8s/
-
-# Immediately scale vLLM pods to 0 — no GPU nodes exist yet, nothing to schedule on
-kubectl scale deployment/verdict-vllm-base --replicas=0 -n verdict
-kubectl scale deployment/verdict-vllm-kira --replicas=0 -n verdict
-```
-
-### 1.5 Run database migrations
-
-```bash
-kubectl apply -f k8s/migration-job.yaml -n verdict
-kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=3m
-```
-
-### 1.6 Verify Phase 1
+### Verify deployment
 
 ```bash
 kubectl get pods -n verdict
-```
-
-Expected output — all Running except vLLM (0 replicas):
-
-```
-verdict-postgres-0        1/1   Running
-verdict-api-xxx           1/1   Running   (×2)
-verdict-worker-xxx        1/1   Running
-verdict-frontend-xxx      1/1   Running   (×2)
-```
-
-The vLLM deployments exist in the cluster (`kubectl get deployments -n verdict`) but have no pods. This is correct — they are maintained and ready to scale up, just dormant.
-
----
-
-## Between Phase 1 and Phase 2 — What Is Running
-
-| Component | Status | Notes |
-|---|---|---|
-| PostgreSQL | Running | Stores runs, findings, users |
-| Backend API | Running | All routes available, health endpoint live |
-| Worker | Running | Pipeline executes but LLM calls will fail until vLLM is up |
-| Frontend | Running | UI accessible via ingress IP |
-| `verdict-vllm-base` | **Dormant (0 replicas)** | Harvey + Admin agents — no GPU node yet |
-| `verdict-vllm-kira` | **Dormant (0 replicas)** | Kira agents — waiting for fine-tuned weights |
-
-> The worker will error on LLM stages while vLLM is dormant. This is expected. Set `MAX_STAGE_RETRIES` high enough (default is 3) so runs don't permanently fail before Phase 2.
-
----
-
-## Running Fine-Tuning (Prerequisite for Phase 2)
-
-Fine-tuning runs on RunPod via the existing pipeline. Do this before Phase 2.
-
-```bash
-# Set environment variables
-export RUNPOD_HOST=your-runpod-ssh-host
-export RUNPOD_SSH_KEY_PATH=~/.ssh/runpod_key
-export HF_TOKEN=hf_your_real_token_here
-export GDRIVE_FOLDER_ID=1FWhdw0eM2a3iyc_c3hpCCiWnFmBHvfgL
-
-# Run full pipeline:
-# 1. Download labeled data from Google Drive
-# 2. Export to fine-tuning format
-# 3. Baseline evaluation
-# 4–6. SSH to RunPod, upload data, train, download LoRA adapter
-# 7. After-training evaluation
-# 8. Upload adapter to K8s PVC + restart vllm-kira
-python -m scripts.fine_tune.launch
-```
-
-The script ends by automatically copying the LoRA adapter into the Kira vLLM pod's PVC. You still need to uncomment the `--enable-lora` flags in `k8s/vllm-kira.yaml` (see Phase 2 Step 2.3) before the pod will actually load the adapter.
-
----
-
-## Phase 2 — Activate vLLM After Fine-Tuning
-
-### 2.1 Add the GPU node pool
-
-```bash
-az aks nodepool add \
-  --resource-group verdict-rg \
-  --cluster-name verdict-aks \
-  --name gpupool \
-  --node-count 2 \
-  --node-vm-size Standard_NC24ads_A100_v4 \
-  --node-taints sku=gpu:NoSchedule \
-  --labels sku=gpu
-
-# Install NVIDIA device plugin
-kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.1/nvidia-device-plugin.yml
-
-# Confirm GPU nodes are Ready
-kubectl get nodes -l sku=gpu
-```
-
-### 2.2 Update the HF token in the secret
-
-```bash
-kubectl create secret generic verdict-secrets -n verdict \
-  --from-literal=HF_TOKEN="hf_your_real_token_here" \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-> The HuggingFace token needs access to `google/gemma-4-26B-A4B-it` (gated model). Request access at huggingface.co/google/gemma-4-26B-A4B-it if not already granted.
-
-### 2.3 Enable the LoRA adapter in the Kira manifest
-
-Edit `k8s/vllm-kira.yaml` and uncomment the three lines under the args section:
-
-```yaml
-# Before (lines are commented out):
-            # - --enable-lora
-            # - --lora-modules
-            # - kira=/mnt/kira-adapter
-
-# After (uncommented):
-            - --enable-lora
-            - --lora-modules
-            - kira=/mnt/kira-adapter
-```
-
-Then re-apply:
-
-```bash
-kubectl apply -f k8s/vllm-kira.yaml
-```
-
-### 2.4 Scale up vLLM pods
-
-```bash
-kubectl scale deployment/verdict-vllm-base --replicas=1 -n verdict
-kubectl scale deployment/verdict-vllm-kira --replicas=1 -n verdict
-```
-
-### 2.5 Wait for model loading (5–10 minutes on first start)
-
-The pods download the model from HuggingFace on first boot (~30–50 GB). Subsequent restarts use the PVC cache and are faster (~2–3 minutes).
-
-```bash
-# Watch pod status
-kubectl get pods -n verdict -w
-
-# Stream logs to confirm model loaded
-kubectl logs -f deployment/verdict-vllm-base -n verdict
-kubectl logs -f deployment/verdict-vllm-kira -n verdict
-```
-
-Look for a line containing `Application startup complete` or `model loaded` in the vLLM logs.
-
-### 2.6 Verify the full stack
-
-```bash
-# All pods Running
-kubectl get pods -n verdict
-
-# Health check
-AGIC_IP=$(kubectl get ingress verdict -n verdict -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-curl http://$AGIC_IP/api/health
-
-# Confirm vLLM endpoints respond
-kubectl exec -it deployment/verdict-api -n verdict -- \
-  curl http://verdict-vllm-base:8000/health
-
-kubectl exec -it deployment/verdict-api -n verdict -- \
-  curl http://verdict-vllm-kira:8000/health
-```
-
-### 2.7 Enable AGIC ingress (if not already done in Phase 1)
-
-```bash
-az aks enable-addons \
-  --addons ingress-appgw \
-  --resource-group verdict-rg \
-  --name verdict-aks \
-  --appgw-name verdict-appgw \
-  --appgw-subnet-cidr "10.225.0.0/16"
+curl http://INGRESS_IP/api/health   # expected: {"status":"ok"}
 ```
 
 ---
 
-## Ongoing Maintenance
+## Continuous Deployment (GitHub Actions)
 
-### Push a code update
+`.github/workflows/build-push.yml` runs on every push to `main`:
+1. Builds and pushes images to GAR.
+2. Runs the eval gate (`scripts/eval_gate.py`).
+3. Applies updated manifests to GKE.
+4. Runs migrations, waits for rollouts, smoke-tests `/api/health`.
+5. Auto-rolls back if the smoke test fails.
 
+### Required GitHub Secrets / Variables
+
+| Key | Type | Value |
+|-----|------|-------|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Secret | OIDC provider resource name — see `docs/GCP_GITHUB_OIDC.md` |
+| `GCP_SERVICE_ACCOUNT` | Secret | `github-actions@veridict-dev.iam.gserviceaccount.com` |
+| `MLFLOW_TRACKING_URI` | Secret | MLflow server URL |
+| `EVAL_ENDPOINT` | Secret | Staging vLLM endpoint for eval gate |
+| `EVAL_MODEL` | Secret | Model name for eval gate |
+| `GCP_PROJECT_ID` | Variable | `veridict-dev` |
+| `GAR_REGISTRY` | Variable | `europe-west1-docker.pkg.dev/veridict-dev/veridict` |
+| `GKE_CLUSTER_NAME` | Variable | `veridict-dev-gke` |
+| `GKE_REGION` | Variable | `europe-west1` |
+| `DEPLOY_VLLM` | Variable | `false` (set `true` to enable GPU blue-green) |
+
+See `docs/GCP_GITHUB_OIDC.md` for instructions on setting up Workload Identity Federation.
+
+---
+
+## Emergency Rollback
+
+Trigger the **Emergency Rollback** workflow from GitHub Actions → `rollback.yml`.
+
+Select `scope`:
+- `api` — rolls back only the API deployment
+- `worker` — rolls back only the worker
+- `all` — rolls back api, worker, frontend, and vllm
+
+Or run locally:
 ```bash
-# Rebuild and push changed image(s)
-docker build -f Dockerfile.api -t verdictacr.azurecr.io/verdict-api:latest .
-docker push verdictacr.azurecr.io/verdict-api:latest
-
-# Roll out the update
-kubectl rollout restart deployment/verdict-api -n verdict
-kubectl rollout status deployment/verdict-api -n verdict
-```
-
-Or just push to `main` — the GitHub Actions workflow (`.github/workflows/build-push.yml`) handles build, push, and deploy automatically.
-
-### Re-train Kira and reload the adapter
-
-```bash
-python -m scripts.fine_tune.launch --skip-gdrive   # if data is already local
-
-# The script automatically:
-# 1. Trains on RunPod
-# 2. Downloads the new adapter
-# 3. Copies it to the vllm-kira pod PVC
-# 4. Triggers: kubectl rollout restart deployment/verdict-vllm-kira -n verdict
-```
-
-### Stop the GPU nodes to save cost (when not testing)
-
-```bash
-# Scale GPU node pool to 0 (deallocates VMs, stops billing)
-az aks nodepool scale \
-  --resource-group verdict-rg \
-  --cluster-name verdict-aks \
-  --name gpupool \
-  --node-count 0
-
-# vLLM pods will go Pending (no nodes) — scale them down to avoid noise
-kubectl scale deployment/verdict-vllm-base --replicas=0 -n verdict
-kubectl scale deployment/verdict-vllm-kira --replicas=0 -n verdict
-```
-
-### Resume GPU nodes
-
-```bash
-az aks nodepool scale \
-  --resource-group verdict-rg --cluster-name verdict-aks \
-  --name gpupool --node-count 2
-
-kubectl scale deployment/verdict-vllm-base --replicas=1 -n verdict
-kubectl scale deployment/verdict-vllm-kira --replicas=1 -n verdict
+python scripts/rollback.py --scope all
 ```
 
 ---
 
-## Quick Reference
+## Phase 2 — GPU / Fine-tuning (deferred)
 
-| Command | Purpose |
-|---|---|
-| `kubectl get pods -n verdict` | Check all pod status |
-| `kubectl logs -f deployment/verdict-worker -n verdict` | Stream pipeline execution logs |
-| `kubectl logs -f deployment/verdict-vllm-base -n verdict` | Stream Harvey model server logs |
-| `kubectl logs -f deployment/verdict-vllm-kira -n verdict` | Stream Kira model server logs |
-| `kubectl rollout restart deployment/verdict-api -n verdict` | Restart API after config change |
-| `kubectl get ingress verdict -n verdict` | Get public IP |
-| `az aks nodepool scale ... --node-count 0` | Stop GPU billing |
+When ready to run vLLM inference or fine-tuning:
+
+1. Scale the GPU node pool:
+   ```bash
+   gcloud container clusters resize veridict-dev-gke \
+     --node-pool gpu \
+     --num-nodes 1 \
+     --region europe-west1
+   ```
+
+2. Set `DEPLOY_VLLM=true` in GitHub repository variables.
+
+3. Scale vLLM deployments:
+   ```bash
+   kubectl scale deployment verdict-vllm-base -n verdict --replicas=1
+   kubectl scale deployment verdict-vllm-kira -n verdict --replicas=1
+   ```
+
+GPU node pool uses `g2-standard-4` (NVIDIA L4, 24 GB VRAM) with taint `sku=gpu:NoSchedule`.
+
+---
+
+## Terraform Operations
+
+```bash
+cd infra/gcp
+
+# Preview changes
+terraform plan -var-file=dev.tfvars
+
+# Apply changes
+terraform apply -var-file=dev.tfvars
+
+# Destroy (careful — deletes all GCP resources)
+terraform destroy -var-file=dev.tfvars
+```
+
+> **Azure files** are archived in `infra/azure/` for reference.
+
+---
+
+## Architecture
+
+```
+Internet
+    │
+    ▼
+nginx-ingress LoadBalancer (GKE)
+    │
+    ├── /api  ──► verdict-api (FastAPI, 2 replicas)
+    │                │
+    │                ├── PostgreSQL (StatefulSet)
+    │                ├── verdict-worker (pipeline stages 1–12)
+    │                └── PVC: documents, rag, fine-tune-output
+    │
+    └── /     ──► verdict-frontend (React/Nginx, 2 replicas)
+
+GCS Buckets:
+  veridict-dev-datasets   — training data
+  veridict-dev-artifacts  — MLflow artifacts
+  veridict-dev-rag        — vector store snapshots
+
+GAR: europe-west1-docker.pkg.dev/veridict-dev/veridict/
+```

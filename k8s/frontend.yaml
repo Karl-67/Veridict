@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: verdictacr.azurecr.io/verdict-frontend:latest
+          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-frontend:latest
           ports:
             - containerPort: 80
           readinessProbe:

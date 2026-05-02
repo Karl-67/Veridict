@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: verdictacr.azurecr.io/verdict-api:latest
+          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-api:latest
           ports:
             - containerPort: 8000
           envFrom:

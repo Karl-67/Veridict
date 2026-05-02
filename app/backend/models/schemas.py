@@ -737,48 +737,6 @@ class ReviewResult(BaseModel):
     )
 
 
-# ---------------------------------------------------------------------------
-# Document annotation — anchored comments and suggestions
-# ---------------------------------------------------------------------------
-
-
-class DocumentAnnotationCreate(BaseModel):
-    """Request body for creating a human anchored comment or suggestion."""
-
-    clause_uid: str
-    annotation_type: Literal["comment", "suggestion"] = "comment"
-    body: str = Field(..., description="Comment text or issue description.")
-    suggested_replacement: Optional[str] = Field(
-        None, description="Exact replacement text, for suggestion type only."
-    )
-    selected_text: Optional[str] = Field(None, description="Verbatim text the user selected.")
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
-    page_number: Optional[int] = None
-
-
-class DocumentAnnotationOut(BaseModel):
-    """Response shape for a document annotation."""
-
-    id: str
-    run_id: str
-    clause_uid: str
-    page_number: Optional[int] = None
-    selected_text: Optional[str] = None
-    span_start: Optional[int] = None
-    span_end: Optional[int] = None
-    annotation_type: str
-    body: str
-    suggested_replacement: Optional[str] = None
-    status: str
-    source: str
-    finding_id: Optional[str] = None
-    author_id: Optional[str] = None
-    author_name: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
-
 class PipelineStage(BaseModel):
     name: str
     status: Literal["pending", "running", "done", "failed", "blocked", "retrying"]

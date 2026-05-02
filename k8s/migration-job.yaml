@@ -13,8 +13,8 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: verdictacr.azurecr.io/verdict-api:latest  # same image as the API
-          command: ["alembic", "upgrade", "head"]
+          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-api:latest  # same image as the API
+          command: ["sh", "-c", "cd /srv/verdict/app/backend && alembic upgrade head"]
           envFrom:
             - configMapRef:
                 name: verdict-config

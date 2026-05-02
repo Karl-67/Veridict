@@ -1,16 +1,16 @@
-# Persistent volumes for AKS deployment.
-# Uses Azure Managed Disk (Premium SSD) via the managed-premium StorageClass.
+# Persistent volumes for GKE deployment.
+# Uses GCE Persistent Disk (SSD) via the pd.csi.storage.gke.io provisioner.
 # For multi-replica API pods change accessModes to ReadWriteMany and use
-# storageClassName: azurefile-csi (Azure Files supports RWX).
+# a Filestore-backed StorageClass (GKE Enterprise) or a shared NFS volume.
 ---
-# Azure Premium SSD StorageClass for model weights and LoRA adapters
+# GCE Persistent Disk SSD StorageClass for model weights and LoRA adapters
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: verdict-premium-ssd
-provisioner: disk.csi.azure.com
+provisioner: pd.csi.storage.gke.io
 parameters:
-  skuName: Premium_LRS
+  type: pd-ssd
 reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
 

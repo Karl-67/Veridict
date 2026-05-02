@@ -59,40 +59,33 @@ function toReaderFindings(rawFindings) {
 // ── Comments panel ────────────────────────────────────────────────────────────
 
 function CommentsPanel({ runId }) {
-  const [comments, setComments]   = React.useState([]);
-  const [draft, setDraft]         = React.useState("");
-  const [posting, setPosting]     = React.useState(false);
-  const [loadError, setLoadError] = React.useState(null);
-  const [postError, setPostError] = React.useState(null);
+  const [comments, setComments] = React.useState([]);
+  const [draft, setDraft]       = React.useState("");
+  const [posting, setPosting]   = React.useState(false);
   const currentUser = window.verdictApi.currentUser();
-
-  function loadComments() {
-    setLoadError(null);
-    window.verdictApi.listRunComments(runId)
-      .then(data => { setComments(Array.isArray(data) ? data : []); })
-      .catch(err => { setLoadError(err?.message || "Could not load comments. Check that the server is running."); });
-  }
 
   React.useEffect(() => {
     if (!runId) return;
-    loadComments();
-    // Poll every 5 s so all workspace members see new notes in near-real-time
-    const id = setInterval(loadComments, 5000);
-    return () => clearInterval(id);
+    let active = true;
+    window.verdictApi.listRunComments(runId)
+      .then(data => {
+        // Only show general (non-anchored) comments in the analysis panel.
+        // Anchored (text-selection) comments live in the document viewer left rail.
+        if (active) setComments(data.filter(c => !c.anchor));
+      })
+      .catch(() => {});
+    return () => { active = false; };
   }, [runId]);
 
   async function post() {
     const body = draft.trim();
     if (!body || posting) return;
     setPosting(true);
-    setPostError(null);
     try {
       const c = await window.verdictApi.postRunComment(runId, body);
       setComments(prev => [...prev, c]);
       setDraft("");
-    } catch (err) {
-      setPostError(err?.message || "Failed to post comment. Please try again.");
-    }
+    } catch {}
     setPosting(false);
   }
 
@@ -120,14 +113,8 @@ function CommentsPanel({ runId }) {
   return (
     <div>
       <SectionLabel>Legal Team Notes</SectionLabel>
-      {loadError && (
-        <div style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 8, padding: "8px 10px", background: "rgba(196,67,43,0.06)", borderRadius: 6, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-          <span>{loadError}</span>
-          <button onClick={loadComments} style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: "var(--risk-high)", background: "none", border: "1px solid var(--risk-high)", borderRadius: 4, padding: "2px 7px", cursor: "pointer" }}>Retry</button>
-        </div>
-      )}
       <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-        {comments.length === 0 && !loadError && (
+        {comments.length === 0 && (
           <div style={{ padding: "16px 14px", color: "var(--text-3)", fontSize: 12.5 }}>No notes yet. Be the first to add one.</div>
         )}
         {comments.map((c, i) => (
@@ -150,72 +137,21 @@ function CommentsPanel({ runId }) {
             </div>
           </div>
         ))}
-        <div style={{ padding: "10px 14px", borderTop: "1px solid var(--border-light)" }}>
-          <textarea
+        <div style={{ padding: "10px 14px", borderTop: "1px solid var(--border-light)", display: "flex", gap: 8, alignItems: "center" }}>
+          <input
             value={draft}
             onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); post(); } }}
-            placeholder="Add a note… (Enter to post)"
-            rows={2}
-            style={{ width: "100%", boxSizing: "border-box", fontSize: 12.5, color: "var(--text)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, outline: "none", padding: "8px 10px", resize: "none", fontFamily: "inherit", lineHeight: 1.5, marginBottom: 8 }}
-            onFocus={e => { e.currentTarget.style.borderColor = "var(--accent)"; }}
-            onBlur={e => { e.currentTarget.style.borderColor = "var(--border)"; }}
+            placeholder="Add a note…"
+            style={{ flex: 1, fontSize: 12.5, color: "var(--text)", background: "none", border: "none", outline: "none" }}
           />
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={post} disabled={!draft.trim() || posting}
-              style={{ fontSize: 12, fontWeight: 600, padding: "5px 14px", borderRadius: 5, background: draft.trim() ? "var(--accent)" : "var(--border)", color: draft.trim() ? "white" : "var(--text-3)", border: "none", cursor: draft.trim() ? "pointer" : "default", transition: "background 0.12s" }}>
-              {posting ? "Posting…" : "Post note"}
-            </button>
-          </div>
-          {postError && (
-            <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--risk-high)" }}>{postError}</div>
-          )}
+          <button onClick={post} disabled={!draft.trim() || posting} style={{ fontSize: 12, fontWeight: 600, color: draft.trim() ? "var(--accent)" : "var(--text-3)", background: "none", border: "none", cursor: draft.trim() ? "pointer" : "default", transition: "color 0.12s" }}>
+            {posting ? "…" : "Post"}
+          </button>
         </div>
       </div>
     </div>
   );
-}
-
-// ── Executive summary builder ─────────────────────────────────────────────────
-
-function buildExecutiveSummary(run, findings, counts) {
-  // Use the AI-generated summary if it's substantive and not the generic fallback
-  const aiSummary = run?.verdict?.summary ?? "";
-  const isBoilerplate = !aiSummary || aiSummary.length < 40 || aiSummary.toLowerCase().includes("awaiting human review");
-  if (!isBoilerplate) return aiSummary;
-
-  const total = (counts.critical ?? 0) + (counts.high ?? 0) + (counts.medium ?? 0) + (counts.low ?? 0);
-
-  if (total === 0) {
-    return "The AI reviewers found no issues in this contract. The document appears compliant based on current policy guidelines.";
-  }
-
-  const parts = [];
-  if (counts.critical > 0) parts.push(`${counts.critical} critical risk${counts.critical !== 1 ? "s" : ""}`);
-  if (counts.high > 0) parts.push(`${counts.high} high-risk item${counts.high !== 1 ? "s" : ""}`);
-  if (counts.medium > 0) parts.push(`${counts.medium} warning${counts.medium !== 1 ? "s" : ""}`);
-  if (counts.low > 0) parts.push(`${counts.low} low-risk note${counts.low !== 1 ? "s" : ""}`);
-
-  const riskPart = `The AI review flagged ${total} issue${total !== 1 ? "s" : ""}: ${parts.join(", ")}.`;
-
-  const topFinding = findings.find(f => f.severity === "critical")
-    || findings.find(f => f.severity === "high")
-    || findings[0];
-
-  const issuePart = topFinding
-    ? `The most significant issue is "${(topFinding.issue_type || topFinding.description || "").slice(0, 90)}".`
-    : "";
-
-  const statusMap = {
-    awaiting_human_review: "The analysis is complete and awaiting your sign-off.",
-    under_review: "A reviewer is currently examining this contract.",
-    finalized: "This contract has been finalized.",
-    rejected: "This contract was rejected.",
-    processing: "The AI review is still in progress.",
-  };
-  const statusPart = statusMap[run?.state] ?? "";
-
-  return [riskPart, issuePart, statusPart].filter(Boolean).join(" ");
 }
 
 // ── Main verdict screen ───────────────────────────────────────────────────────
@@ -232,9 +168,6 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
   const [activeTab, setActiveTab]     = React.useState("analysis");
   const currentUser = window.verdictApi.currentUser();
 
-  // Cross-tab finding navigation: set to finding 1-based index to jump in ContractReader
-  const [jumpToFinding, setJumpToFinding] = React.useState(null);
-
   React.useEffect(() => {
     if (!selectedRunId) { setVerdict(null); return; }
     let active = true;
@@ -244,20 +177,15 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
       setFileName(run.filename || "Contract analysis report.pdf");
       const findings = run.verdict?.findings ?? await window.verdictApi.getRunFindings(selectedRunId).catch(() => []);
       if (active) setRawFindings(findings);
-      const localCounts = { critical: 0, high: 0, medium: 0, low: 0 };
-      findings.forEach(f => { if (f.severity in localCounts) localCounts[f.severity]++; });
       const mapped = {
         riskLevel: run.verdict?.overall_risk_level === "critical" ? "high" : (run.verdict?.overall_risk_level ?? "medium"),
-        summary: buildExecutiveSummary(run, findings, localCounts),
+        summary: run.verdict?.summary ?? "This contract is awaiting human review. Review the findings below before final sign-off.",
         findings: findings.map((f, index) => ({
           id: f.finding_id ?? String(index),
           severity: f.severity,
           title: f.issue_type || f.description || "Contract finding",
           quote: f.contract_evidence?.[0]?.text || f.evidence?.[0]?.normalized_text || "No direct quote available.",
-          recommendation: f.recommended_change || "",
-          recommendationExplanation: f.recommendation_detail || "",
-          clauseUid: f.clause_uid,
-          findingId: f.finding_id,
+          recommendation: f.recommendation_detail || f.recommendation || f.description,
         })),
         recommendations: run.verdict?.recommendations ?? [],
         blockedReason: run.blocked_reason ?? null,
@@ -288,12 +216,6 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
 
   const readerFindings = toReaderFindings(rawFindings);
   const ContractReaderComponent = window.ContractReader;
-
-  // Navigate from Analysis tab to a specific finding in the Document tab
-  function viewFindingInDocument(findingIndex) {
-    setJumpToFinding(findingIndex + 1); // 1-based
-    setActiveTab("document");
-  }
 
   return (
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 100, animation: "fadeIn 0.4s ease both" }}>
@@ -352,8 +274,6 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
             <ContractReaderComponent
               runId={selectedRunId}
               findings={readerFindings}
-              jumpToIndex={jumpToFinding}
-              onJumpHandled={() => setJumpToFinding(null)}
               contractId={selectedContractId}
               filename={fileName}
               currentUserName={currentUser?.display_name || currentUser?.full_name || "Unknown"}
@@ -396,30 +316,13 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
                       </button>
                       {open && (
                         <div style={{ paddingBottom: 22, paddingLeft: 80, animation: "fadeIn 0.2s ease" }}>
-                          {/* Part 1 — What's wrong */}
-                          <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 6 }}>Issue</p>
                           <blockquote style={{ borderLeft: `2px solid ${cfg.color}`, paddingLeft: 16, marginBottom: 16, fontSize: 13, fontStyle: "italic", color: "var(--text-2)", lineHeight: 1.75 }}>"{f.quote}"</blockquote>
-                          {/* Part 2 — Recommendation */}
                           {f.recommendation && (
-                            <>
-                              <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 6 }}>Suggested replacement</p>
-                              <div style={{ display: "flex", gap: 10, padding: "12px 16px", background: "var(--hover-bg)", borderRadius: 6, marginBottom: 12 }}>
-                                <span style={{ color: "var(--accent)", fontSize: 13, flexShrink: 0 }}>→</span>
-                                <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.65 }}>{f.recommendation}</p>
-                              </div>
-                              {f.recommendationExplanation && (
-                                <p style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.65, marginBottom: 12 }}>{f.recommendationExplanation}</p>
-                              )}
-                            </>
+                            <div style={{ display: "flex", gap: 10, padding: "12px 16px", background: "var(--hover-bg)", borderRadius: 6 }}>
+                              <span style={{ color: "var(--accent)", fontSize: 13, flexShrink: 0 }}>→</span>
+                              <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.65 }}>{f.recommendation}</p>
+                            </div>
                           )}
-                          <button
-                            onClick={() => viewFindingInDocument(i)}
-                            style={{ fontSize: 12, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 5, padding: 0, marginTop: 4 }}
-                            onMouseEnter={e => e.currentTarget.style.opacity = "0.75"}
-                            onMouseLeave={e => e.currentTarget.style.opacity = "1"}
-                          >
-                            <IconArrowRight size={12} /> View in document
-                          </button>
                         </div>
                       )}
                     </div>
@@ -475,35 +378,23 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
               <SectionLabel>Next Steps</SectionLabel>
               <div>
                 {[
-                  { label: "Export with Changes", desc: "Download contract with your edits applied", action: "export_edited" },
-                  { label: "Download Original PDF",  desc: "Download the unmodified source file", action: "export_original" },
-                ].map(({ label, desc, action }) => (
-                  <button key={action}
+                  { label: "Export Contract",  desc: "Download the source contract PDF", accent: false, action: "export" },
+                ].map(({ label, desc, accent, action }) => (
+                  <button key={label}
                     onClick={() => {
-                      if (!selectedRunId) return;
-                      if (action === "export_edited") {
-                        const url = window.verdictApi.getRunExportUrl(selectedRunId);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = fileName.replace(/\.pdf$/i, "-edited.pdf");
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                      } else {
+                      if (action === "export" && selectedRunId) {
                         const url = window.verdictApi.getRunFileUrl(selectedRunId);
                         const a = document.createElement("a");
                         a.href = url;
                         a.download = fileName;
-                        document.body.appendChild(a);
                         a.click();
-                        document.body.removeChild(a);
                       }
                     }}
                     style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "12px 0", borderBottom: "1px solid var(--border-light)", textAlign: "left", background: "none", border: "none", cursor: "pointer", transition: "padding-left 0.15s" }}
                     onMouseEnter={e => e.currentTarget.style.paddingLeft = "5px"}
                     onMouseLeave={e => e.currentTarget.style.paddingLeft = "0"}>
                     <div style={{ flex: 1 }}>
-                      <p style={{ fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 2 }}>{label}</p>
+                      <p style={{ fontSize: 13, fontWeight: 500, color: accent ? "var(--accent)" : "var(--text)", marginBottom: 2 }}>{label}</p>
                       <p style={{ fontSize: 11, color: "var(--text-3)" }}>{desc}</p>
                     </div>
                     <span style={{ color: "var(--text-3)", flexShrink: 0 }}><IconArrowRight size={13} /></span>
@@ -512,7 +403,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
               </div>
             </div>
 
-            {/* Comments */}
+            {/* Real comments */}
             {selectedRunId && <CommentsPanel runId={selectedRunId} />}
 
           </div>

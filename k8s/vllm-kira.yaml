@@ -56,10 +56,9 @@ spec:
             - --host
             - "0.0.0.0"
             - --disable-log-requests
-            # Uncomment after LoRA adapter is uploaded to the PVC:
-            # - --enable-lora
-            # - --lora-modules
-            # - kira=/mnt/kira-adapter
+            - --enable-lora
+            - --lora-modules
+            - kira=nothingsometimes/kira-gemma4-adapter
           ports:
             - containerPort: 8000
           env:

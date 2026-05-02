@@ -1,12 +1,7 @@
 import type {
   AddVersionResponse,
-  ClauseData,
   ContractDetail,
-  ContractEdit,
   ContractSummary,
-  DocumentDraft,
-  DocumentLayout,
-  DocumentAnnotation,
   Finding,
   FinalVerdict,
   HistoryEntry,
@@ -184,131 +179,6 @@ export async function getRunFindings(runId: string): Promise<Finding[]> {
   const response = await fetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
   if (!response.ok) throw new Error("Failed to fetch findings");
   return response.json();
-}
-
-export async function listRunClauses(runId: string): Promise<ClauseData[]> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/clauses`, { headers: authHeaders() });
-  if (!response.ok) throw new Error("Failed to load clauses");
-  return response.json();
-}
-
-export async function getContractEdits(runId: string): Promise<Record<string, ContractEdit>> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/contract-edits`, { headers: authHeaders() });
-  if (!response.ok) throw new Error("Failed to load edits");
-  return response.json();
-}
-
-export async function getDocumentLayout(runId: string): Promise<DocumentLayout> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/document-layout`, { headers: authHeaders() });
-  if (!response.ok) throw new Error("Failed to load document layout");
-  return response.json();
-}
-
-export async function saveClauseEdit(
-  runId: string,
-  clauseUid: string,
-  text: string,
-  metadata: Partial<ContractEdit> = {}
-): Promise<{ clause_uid: string; text: string }> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ text, ...metadata }),
-  });
-  if (!response.ok) throw new Error("Failed to save edit");
-  return response.json();
-}
-
-export async function acceptFinding(
-  runId: string,
-  findingId: string,
-  customText?: string
-): Promise<{ finding_id: string; accepted: boolean; applied_text: string | null }> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/accept`, {
-    method: "POST",
-    headers: customText ? { "Content-Type": "application/json", ...authHeaders() } : authHeaders(),
-    body: customText ? JSON.stringify({ custom_text: customText }) : undefined,
-  });
-  if (!response.ok) throw new Error("Failed to accept finding");
-  return response.json();
-}
-
-export async function dismissFinding(runId: string, findingId: string): Promise<{ finding_id: string; dismissed: boolean }> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/findings/${findingId}/dismiss`, {
-    method: "POST",
-    headers: authHeaders(),
-  });
-  if (!response.ok) throw new Error("Failed to dismiss finding");
-  return response.json();
-}
-
-export async function listAnnotations(runId: string, clauseUid?: string): Promise<DocumentAnnotation[]> {
-  const url = clauseUid
-    ? `${API_BASE}/runs/${runId}/annotations?clause_uid=${encodeURIComponent(clauseUid)}`
-    : `${API_BASE}/runs/${runId}/annotations`;
-  const response = await fetch(url, { headers: authHeaders() });
-  if (!response.ok) throw new Error("Failed to load annotations");
-  return response.json();
-}
-
-export async function createAnnotation(
-  runId: string,
-  payload: {
-    clause_uid: string;
-    annotation_type?: "comment" | "suggestion";
-    body: string;
-    suggested_replacement?: string | null;
-    selected_text?: string | null;
-    span_start?: number | null;
-    span_end?: number | null;
-    page_number?: number | null;
-  }
-): Promise<DocumentAnnotation> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/annotations`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) throw new Error("Failed to create annotation");
-  return response.json();
-}
-
-export async function deleteAnnotation(runId: string, annotationId: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/annotations/${annotationId}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!response.ok && response.status !== 204) throw new Error("Failed to delete annotation");
-}
-
-export async function getDocumentDraft(runId: string): Promise<DocumentDraft> {
-  const response = await fetch(`${API_BASE}/runs/${runId}/document-draft`, { headers: authHeaders() });
-  if (!response.ok) throw new Error("Failed to load document draft");
-  return response.json();
-}
-
-export async function saveBlockEdit(
-  runId: string,
-  clauseUid: string,
-  plainText: string,
-): Promise<void> {
-  const response = await fetch(
-    `${API_BASE}/runs/${runId}/contract-edits/${encodeURIComponent(clauseUid)}`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ text: plainText, plain_text: plainText }),
-    },
-  );
-  if (!response.ok) throw new Error("Failed to save block edit");
-}
-
-export function getDocxExportUrl(runId: string, original = false): string {
-  return `${API_BASE}/runs/${runId}/export-docx${original ? "?original=true" : ""}`;
-}
-
-export function getEditedPdfUrl(runId: string): string {
-  return `${API_BASE}/runs/${runId}/export-edited`;
 }
 
 export async function uploadRagDocument(payload: {
@@ -657,7 +527,7 @@ export function verdictToReviewResult(verdict: FinalVerdict): ReviewResult {
     recommendations: verdict.recommendations,
     clause_flags: verdict.findings.map((f) => ({
       clause: findingToClauseLabel(f.description, f.clause_uid),
-      issue: f.description,
+      issue: f.recommendation_detail || f.description,
       severity: severityMap[f.severity] ?? "medium",
     })),
   };
