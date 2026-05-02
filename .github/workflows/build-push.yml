@@ -179,7 +179,22 @@ jobs:
         run: kubectl apply -k k8s/
 
       - name: Wait for API rollout
+        id: api_rollout
         run: kubectl rollout status deployment/verdict-api -n verdict --timeout=10m
+
+      - name: Diagnose API pod on rollout failure
+        if: failure() && steps.api_rollout.conclusion == 'failure'
+        run: |
+          echo "=== Pod list ==="
+          kubectl get pods -n verdict -l app=verdict-api -o wide
+          echo "=== Pod description ==="
+          kubectl describe pods -n verdict -l app=verdict-api
+          echo "=== initContainer (migrate) logs ==="
+          kubectl logs -n verdict -l app=verdict-api --container migrate --tail=100 || true
+          echo "=== API container logs ==="
+          kubectl logs -n verdict -l app=verdict-api --container api --tail=100 || true
+          echo "=== Previous container logs ==="
+          kubectl logs -n verdict -l app=verdict-api --container api --previous --tail=50 || true
 
       - name: Wait for Worker rollout
         run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=5m
