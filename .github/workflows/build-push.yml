@@ -131,7 +131,7 @@ jobs:
         run: |
           kubectl delete job verdict-migrate -n verdict --ignore-not-found=true
           kubectl apply -f k8s/migration-job.yaml
-          kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=3m
+          kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=10m
 
       - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
