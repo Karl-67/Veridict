@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /srv/verdict
 COPY app/backend/requirements.txt app/backend/requirements.txt
+# Install CPU-only PyTorch before other deps so docling/sentence-transformers
+# don't pull the 3 GB CUDA variant (inference runs on RunPod, not here).
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r app/backend/requirements.txt
 # Lightweight orchestration deps for the fine-tune pipeline (SSH to RunPod, Drive download)
 RUN pip install --no-cache-dir gdown paramiko

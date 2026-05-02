@@ -175,6 +175,9 @@ jobs:
           sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/api.yaml  # pins both initContainer and main container
           sed -i "s|${REGISTRY}/verdict-worker:latest|${REGISTRY}/verdict-worker:${TAG}|g" k8s/worker.yaml
           sed -i "s|${REGISTRY}/verdict-frontend:latest|${REGISTRY}/verdict-frontend:${TAG}|g" k8s/frontend.yaml
+      - name: Clean up evicted and failed pods
+        run: kubectl delete pods --field-selector=status.phase=Failed -n verdict --ignore-not-found
+
       - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
 
