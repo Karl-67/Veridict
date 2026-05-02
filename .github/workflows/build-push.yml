@@ -125,18 +125,25 @@ jobs:
           sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/api.yaml
           sed -i "s|${REGISTRY}/verdict-worker:latest|${REGISTRY}/verdict-worker:${TAG}|g" k8s/worker.yaml
           sed -i "s|${REGISTRY}/verdict-frontend:latest|${REGISTRY}/verdict-frontend:${TAG}|g" k8s/frontend.yaml
+          sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/migration-job.yaml
+
+      - name: Run database migrations
+        run: |
+          kubectl delete job verdict-migrate -n verdict --ignore-not-found=true
+          kubectl apply -f k8s/migration-job.yaml
+          kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=3m
 
       - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
 
       - name: Wait for API rollout
-        run: kubectl rollout status deployment/verdict-api -n verdict --timeout=5m
+        run: kubectl rollout status deployment/verdict-api -n verdict --timeout=10m
 
       - name: Wait for Worker rollout
-        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=3m
+        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=5m
 
       - name: Wait for Frontend rollout
-        run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=3m
+        run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=5m
 
       - name: Smoke test — API health check
         id: smoke

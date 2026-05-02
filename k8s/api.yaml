@@ -39,15 +39,16 @@ spec:
             httpGet:
               path: /api/health
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30
             periodSeconds: 10
+            failureThreshold: 6
           livenessProbe:
             httpGet:
               path: /api/health
               port: 8000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 60
             periodSeconds: 15
-            failureThreshold: 3
+            failureThreshold: 4
           resources:
             requests:
               cpu: 250m
@@ -93,8 +94,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: verdict-api
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 3
   metrics:
     - type: Resource
       resource:
