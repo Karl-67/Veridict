@@ -1,8 +1,10 @@
 # Deployment secrets — never commit
 .deployment_secrets.txt
 
-# Data
+# Data — large uploads and runtime files excluded
 /data
+# ...except curated eval assets which must be versioned
+!/data/curated/
 
 # Python
 __pycache__/
