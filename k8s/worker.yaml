@@ -37,10 +37,10 @@ spec:
           # Restart policy handles crashes automatically.
           resources:
             requests:
-              cpu: 500m
+              cpu: 250m
               memory: 1Gi
             limits:
-              cpu: "4"
+              cpu: "2"
               memory: 4Gi
       volumes:
         - name: documents
