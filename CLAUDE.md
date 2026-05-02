@@ -13,11 +13,11 @@ All persistent memory lives in `.orchestrator/`:
 Check these before making architectural changes or debugging known issues.
 Run `/init` to have Qwen populate them from the codebase if they are empty.
 
-**Current State (updated 2026-04-19)**
+**Current State (updated 2026-05-03)**
 
 Phase 1 pipeline fully implemented and verified end-to-end (all 12 stages). Full auth system, multi-tenant org/workspace model, contract reader with PDF highlights, collaborative comments, and admin panel are all live.
 
-**Startup:**
+**Startup (local dev):**
 ```bash
 python3 -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000 --reload
 python3 -m app.backend.worker
@@ -27,7 +27,7 @@ Requires Ollama running locally.
 
 **LLM Provider:** Local Ollama (`LLM_PROVIDER=ollama`). Change only `OLLAMA_MODEL` in `.env` to swap models — no code changes needed.
 
-**What is running:**
+**What is running (local):**
 - Backend: FastAPI on port 8000
 - Worker: `python3 -m app.backend.worker` (processes all 12 stages)
 - Frontend: React/Vite on port 5173
@@ -43,6 +43,67 @@ Requires Ollama running locally.
 - Parser extraction confidence not yet propagated (RISK-001)
 - Automated corpus ETL from parquet files (RISK-002) — corpus seeded manually
 - Small-model quality ceiling (RISK-008) — llama3.2:3b works but larger models recommended for production
+
+---
+
+## GCP Production Deployment (updated 2026-05-03)
+
+Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inference moved off-cluster to RunPod.
+
+**GCP project:** `verdict-ai-prod`  
+**Registry:** `us-central1-docker.pkg.dev/verdict-ai-prod/verdict/`  
+**Cluster:** `verdict-gke` — GKE Standard, single node `e2-standard-2`, zone `us-central1-a`  
+**Namespace:** `verdict`
+
+**LLM inference:** RunPod A100 SXM 80GB via HTTP proxy  
+- Endpoint: `https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1`  
+- Base model: `google/gemma-4-26B-A4B-it`  
+- Kira LoRA: served from same endpoint with `model="kira"`  
+- Until GPU is available the app runs in degraded mode (DB, auth, editor work; LLM calls fail)
+
+**To start vLLM on RunPod (when GPU available):**
+```bash
+vllm serve google/gemma-4-26B-A4B-it \
+  --dtype auto --max-model-len 4096 --tensor-parallel-size 1 \
+  --port 8000 --host 0.0.0.0 \
+  --enable-lora --lora-modules kira=/workspace/verdict_training/kira_adapter \
+  --disable-log-requests
+```
+
+**CI/CD — `.github/workflows/build-push.yml`:**
+- 3 parallel build jobs: `build-api`, `build-worker`, `build-frontend` (each with its own GHA cache scope)
+- `deploy` job starts only when all 3 succeed
+- Auth: `credentials_json: ${{ secrets.GCP_SA_KEY }}` (SA key, not WIF)
+- Migration step polls every 5s for job success/failure and prints pod logs on failure
+- Migration job: `backoffLimit: 0`, `restartPolicy: Never` — fails fast, no silent retries
+- Rollout timeouts: API 10m, Worker 5m, Frontend 5m
+- Smoke test: port-forward to `verdict-api:8000`, curl `/api/health`, expect HTTP 200
+- Auto-rollback runs `scripts/rollback.py` on smoke test failure
+
+**Required GitHub Secrets:**
+```
+GCP_SA_KEY          — full JSON of verdict-cicd service account key
+GKE_CLUSTER         — verdict-gke
+GKE_REGION          — us-central1-a
+GCP_PROJECT         — verdict-ai-prod
+MLFLOW_TRACKING_URI — (optional, for eval-gate)
+```
+
+**Key k8s files:**
+- `k8s/configmap.yaml` — RunPod URLs, CORS `["*"]` (update to LB IP once known)
+- `k8s/api.yaml` — GCP image, NodePort service, BackendConfig annotation, HPA min:1 max:3
+- `k8s/ingress.yaml` — GCE ingress + BackendConfig (300s timeout) for `/api/*` and `/*`
+- `k8s/storage.yaml` — `standard-rwo` StorageClass (GCE pd-standard)
+- `k8s/migration-job.yaml` — runs `alembic upgrade head` before each deploy
+- `k8s/kustomization.yaml` — vllm-base and vllm-kira removed (RunPod replaces them)
+
+**First deploy checklist:**
+1. `kubectl apply -f k8s/secret.yaml` (populate real values first, never commit)
+2. `kubectl apply -k k8s/`
+3. `kubectl get ingress verdict -n verdict` — wait ~3 min for LB IP
+4. Update `CORS_ORIGINS` in configmap to `["http://<LB_IP>"]` and rollout restart api
+
+**Known GHA cache behaviour:** First run after a new branch/commit builds cold (~15 min per image). Subsequent runs with cache hits take ~1 min per image. The 3 parallel jobs mean wall-clock build time equals the slowest single image.
 
 ## Kira fine-tuning (updated 2026-04-29)
 
