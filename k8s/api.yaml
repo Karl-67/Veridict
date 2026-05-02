@@ -18,6 +18,22 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
+      initContainers:
+        - name: migrate
+          image: us-central1-docker.pkg.dev/verdict-ai-prod/verdict/verdict-api:latest
+          command: ["sh", "-c", "cd /srv/verdict/app/backend && alembic upgrade head"]
+          envFrom:
+            - configMapRef:
+                name: verdict-config
+            - secretRef:
+                name: verdict-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
       containers:
         - name: api
           image: us-central1-docker.pkg.dev/verdict-ai-prod/verdict/verdict-api:latest
