@@ -8,7 +8,7 @@ env:
   GAR_REGISTRY: us-central1-docker.pkg.dev
   GAR_REPO: verdict-ai-prod/verdict
   GKE_CLUSTER: verdict-gke
-  GKE_REGION: us-central1
+  GKE_REGION: us-central1-a
   GCP_PROJECT: verdict-ai-prod
 
 jobs:
