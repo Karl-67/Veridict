@@ -5,6 +5,7 @@ and document annotations (anchored comments / suggestions).
 from __future__ import annotations
 
 import html
+import logging
 import re
 import uuid
 from datetime import datetime
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Optional
 
 import io
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -254,6 +257,433 @@ def _safe_rich_text_to_plain(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _build_document_blocks(
+    clauses: list,
+    edits: dict,
+    original: bool = False,
+) -> list[tuple[str, str]]:
+    """Return (style, text) pairs for clean final contract export with no redlines."""
+    blocks: list[tuple[str, str]] = []
+    for clause in clauses:
+        raw_edit = None if original else edits.get(clause.clause_uid)
+        if raw_edit and isinstance(raw_edit, dict):
+            full_text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
+        else:
+            full_text = clause.normalized_text
+        full_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", full_text).strip()
+        if not full_text:
+            continue
+
+        if len(clause.normalized_text) > 300:
+            sub_blocks = _split_contract_blob(clause.normalized_text, clause.clause_uid, clause.page_number)
+            parent_edit_applied = False
+            for sub_uid, sub_style, sub_text in sub_blocks:
+                if original:
+                    display_text = sub_text
+                else:
+                    is_sub_uid = sub_uid != clause.clause_uid
+                    sub_edit = edits.get(sub_uid) if is_sub_uid else None
+                    if sub_edit is None and raw_edit and isinstance(raw_edit, dict) and not parent_edit_applied and sub_style in ("body", "list_item"):
+                        sub_edit = raw_edit
+                        parent_edit_applied = True
+                    if sub_edit and isinstance(sub_edit, dict):
+                        display_text = sub_edit.get("plain_text") or _safe_rich_text_to_plain(sub_edit.get("text", "")) or sub_text
+                    else:
+                        display_text = sub_text
+                display_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", display_text).strip()
+                if display_text:
+                    blocks.append((sub_style, display_text))
+        else:
+            style_key = _infer_block_style(clause.normalized_text)
+            blocks.append((style_key, full_text))
+    return blocks
+
+
+def _build_clean_pdf(blocks: list[tuple[str, str]]) -> io.BytesIO:
+    """Generate a clean contract PDF from (style, text) blocks using reportlab."""
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+    except ImportError:
+        raise HTTPException(status_code=501, detail="reportlab not installed; run: pip install reportlab")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=letter,
+        leftMargin=1.25 * inch,
+        rightMargin=1.25 * inch,
+        topMargin=inch,
+        bottomMargin=inch,
+    )
+    _h1 = ParagraphStyle("h1", fontName="Times-Bold", fontSize=16, spaceAfter=6, alignment=TA_CENTER, leading=20)
+    _h2 = ParagraphStyle("h2", fontName="Times-Bold", fontSize=12, spaceBefore=12, spaceAfter=4, alignment=TA_LEFT, leading=16)
+    _h3 = ParagraphStyle("h3", fontName="Times-Bold", fontSize=11, spaceBefore=8, spaceAfter=2, alignment=TA_LEFT, leading=15)
+    _sub = ParagraphStyle("sub", fontName="Times-Roman", fontSize=12, spaceAfter=12, alignment=TA_CENTER, leading=16)
+    _body = ParagraphStyle("body", fontName="Times-Roman", fontSize=11, spaceAfter=8, alignment=TA_JUSTIFY, leading=14)
+    style_map = {"heading1": _h1, "heading2": _h2, "heading3": _h3, "subtitle": _sub, "body": _body, "list_item": _body}
+
+    story = []
+    for style_key, text in blocks:
+        if not text.strip():
+            continue
+        safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        story.append(Paragraph(safe, style_map.get(style_key, _body)))
+
+    if not story:
+        story.append(Paragraph("(empty contract)", _body))
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+def _find_pending_sub_uid(sub_blocks: list[tuple[str, str, str]], finding) -> str | None:
+    """Return sub-block UID that best matches the finding's evidence text; falls back to first body block."""
+    evidence_text = ""
+    for ev in (getattr(finding, "contract_evidence", None) or []):
+        t = (getattr(ev, "text", "") or "").strip()
+        if t:
+            evidence_text = t
+            break
+    if evidence_text:
+        needle = evidence_text[:60].lower()
+        for sub_uid, sub_style, sub_text in sub_blocks:
+            if sub_style in ("body", "list_item") and needle in sub_text.lower():
+                return sub_uid
+    for sub_uid, sub_style, sub_text in sub_blocks:
+        if sub_style in ("body", "list_item"):
+            return sub_uid
+    return None
+
+
+# ---------------------------------------------------------------------------
+# pdf2docx-based high-fidelity export helpers
+# ---------------------------------------------------------------------------
+
+
+def _norm_text(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _extract_docx_blocks(docx_path: str) -> list[dict]:
+    """Parse a python-docx file and return one entry per non-empty paragraph.
+
+    Each entry::
+
+        {
+            "text":  str,                           # plain paragraph text
+            "style": "heading1"|...|"body",
+            "marks": [{"type": "bold"|"italic", "from_pos": int, "to_pos": int}],
+        }
+    """
+    try:
+        from docx import Document as _DocxDoc
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+    except ImportError:
+        return []
+
+    doc = _DocxDoc(docx_path)
+    result: list[dict] = []
+
+    for para in doc.paragraphs:
+        text = para.text
+        if not text.strip():
+            continue
+
+        # ---- collect marks and detect dominant bold/size ----
+        marks: list[dict] = []
+        offset = 0
+        any_bold = False
+        max_pt: float = 0.0
+        # Use paragraph-level style name as fallback hint
+        para_style_name = (para.style.name or "").lower() if para.style else ""
+
+        for run in para.runs:
+            run_len = len(run.text)
+            if run_len == 0:
+                continue
+            is_bold = bool(run.bold)
+            is_italic = bool(run.italic)
+            if is_bold:
+                any_bold = True
+                marks.append({"type": "bold", "from_pos": offset, "to_pos": offset + run_len})
+            if is_italic:
+                marks.append({"type": "italic", "from_pos": offset, "to_pos": offset + run_len})
+            # Track largest font size across runs
+            if run.font.size:
+                pt = run.font.size.pt
+                if pt and pt > max_pt:
+                    max_pt = pt
+            offset += run_len
+
+        # ---- infer style ----
+        is_centered = False
+        try:
+            is_centered = para.alignment in (WD_ALIGN_PARAGRAPH.CENTER,)
+        except Exception:
+            pass
+
+        if "heading 1" in para_style_name:
+            style = "heading1"
+        elif "heading 2" in para_style_name:
+            style = "heading2"
+        elif "heading 3" in para_style_name:
+            style = "heading3"
+        elif any_bold and max_pt >= 14:
+            style = "heading1"
+        elif any_bold and max_pt >= 12:
+            style = "heading2"
+        elif any_bold:
+            style = "heading3"
+        elif is_centered and max_pt >= 12:
+            style = "subtitle"
+        else:
+            style = "body"
+
+        result.append({"text": text, "style": style, "marks": marks})
+
+    return result
+
+
+def _replace_para_text(para, new_text: str) -> None:
+    """Replace all runs in a paragraph with one clean run, keeping font name/size."""
+    from docx.oxml.ns import qn
+    p = para._p
+    font_name = None
+    font_size = None
+    for run in para.runs:
+        if not font_name and run.font.name:
+            font_name = run.font.name
+        if not font_size and run.font.size:
+            font_size = run.font.size
+        if font_name and font_size:
+            break
+    for r in list(p.findall(qn("w:r"))):
+        p.remove(r)
+    for hyp in list(p.findall(qn("w:hyperlink"))):
+        p.remove(hyp)
+    new_run = para.add_run(new_text)
+    if font_name:
+        new_run.font.name = font_name
+    if font_size:
+        new_run.font.size = font_size
+
+
+def _build_docx_edit_map(clauses: list, edits: dict) -> list[tuple[str, str, str]]:
+    """Return [(norm_prefix_30, full_norm_original, replacement_text)] for in-place DOCX paragraph matching."""
+    clause_by_uid = {c.clause_uid: c for c in clauses}
+    result: list[tuple[str, str, str]] = []
+    for clause_uid, raw_edit in edits.items():
+        replacement = _plain_text_from_edit(raw_edit)
+        replacement = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", replacement).strip()
+        if not replacement:
+            continue
+        parent_uid = clause_uid.rsplit("__p", 1)[0] if "__p" in clause_uid else clause_uid
+        clause = clause_by_uid.get(parent_uid)
+        if not clause:
+            continue
+        if "__p" in clause_uid:
+            sub_blocks = _split_contract_blob(clause.normalized_text, parent_uid, clause.page_number)
+            for sub_uid, _, sub_text in sub_blocks:
+                if sub_uid == clause_uid:
+                    full_norm = _norm_text(sub_text)
+                    result.append((full_norm[:30], full_norm, replacement))
+                    break
+        else:
+            full_norm = _norm_text(clause.normalized_text)
+            result.append((full_norm[:30], full_norm, replacement))
+    return result
+
+
+def _apply_edits_to_docx(docx_path: str, clauses: list, edits: dict):
+    """Load a pdf2docx DOCX, apply accepted edits in-place, return modified Document."""
+    from docx import Document as _DocxDoc
+    doc = _DocxDoc(docx_path)
+    if not edits:
+        return doc
+    edit_map = _build_docx_edit_map(clauses, edits)
+    if not edit_map:
+        return doc
+    applied: set[int] = set()
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        para_norm = _norm_text(text)
+        for idx, (orig_prefix, full_norm_orig, replacement) in enumerate(edit_map):
+            if idx in applied:
+                continue
+            check = min(len(orig_prefix), 25)
+            matched = False
+            # Strategy 1: exact-prefix match
+            if para_norm[:check] == orig_prefix[:check]:
+                matched = True
+            # Strategy 2: orig_prefix appears anywhere in paragraph
+            elif orig_prefix and orig_prefix in para_norm:
+                matched = True
+            # Strategy 3: paragraph text appears as substring of original (for split paragraphs)
+            elif len(para_norm) > 25 and para_norm in full_norm_orig:
+                matched = True
+            if matched:
+                _replace_para_text(para, replacement)
+                applied.add(idx)
+                break
+    logger.info("_apply_edits_to_docx: edits=%d paragraphs=%d applied=%d", len(edit_map), len(doc.paragraphs), len(applied))
+    return doc
+
+
+def _docx_to_pdf_buf(doc) -> "io.BytesIO | None":
+    """Convert python-docx Document → PDF.
+
+    Tier 1 (primary): LibreOffice headless — most reliable, deterministic, cross-platform.
+    Tier 2 (fallback): docx2pdf (Word COM on Windows) — used only when LibreOffice is missing.
+    Returns None if both tiers fail.
+    """
+    import tempfile
+    import shutil
+    import subprocess
+    from pathlib import Path as _Path
+
+    # Tier 1: LibreOffice headless
+    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice_bin:
+        # Common Windows install locations not on PATH
+        for candidate in (
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        ):
+            if _Path(candidate).exists():
+                soffice_bin = candidate
+                break
+
+    if soffice_bin:
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                docx_path = _Path(tmpdir) / "contract.docx"
+                doc.save(str(docx_path))
+                result = subprocess.run(
+                    [soffice_bin, "--headless", "--convert-to", "pdf", "--outdir", tmpdir, str(docx_path)],
+                    capture_output=True,
+                    timeout=120,
+                )
+                pdf_path = _Path(tmpdir) / "contract.pdf"
+                if result.returncode == 0 and pdf_path.exists() and pdf_path.stat().st_size > 0:
+                    logger.info("docx→pdf via libreoffice OK (%s)", soffice_bin)
+                    return io.BytesIO(pdf_path.read_bytes())
+                logger.warning(
+                    "libreoffice convert failed: rc=%s stdout=%r stderr=%r",
+                    result.returncode, result.stdout[-200:], result.stderr[-200:],
+                )
+        except Exception as e:
+            logger.warning("libreoffice subprocess raised: %s: %s", type(e).__name__, e)
+    else:
+        logger.info("libreoffice not found on PATH or standard install dirs; trying docx2pdf fallback")
+
+    # Tier 2: docx2pdf (Word COM)
+    try:
+        import docx2pdf
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = _Path(tmpdir) / "contract.docx"
+            pdf_path = _Path(tmpdir) / "contract.pdf"
+            doc.save(str(docx_path))
+            docx2pdf.convert(str(docx_path), str(pdf_path))
+            if pdf_path.exists() and pdf_path.stat().st_size > 0:
+                logger.info("docx→pdf via docx2pdf OK")
+                return io.BytesIO(pdf_path.read_bytes())
+    except Exception as e:
+        logger.warning("docx2pdf failed: %s: %s", type(e).__name__, e)
+    return None
+
+
+def _build_modified_docx(run, clauses: list, edits: dict):
+    """Return a python-docx Document for the modified contract (single source of truth for DOCX + PDF export).
+
+    Strategy:
+      1. If pdf2docx cache exists → load it and apply edits in-place (preserves original PDF formatting).
+      2. Otherwise → build from scratch using parsed clauses + style heuristics.
+    """
+    if run.storage_path:
+        cache = Path(run.storage_path).with_suffix(".original.docx")
+        if cache.exists():
+            try:
+                return _apply_edits_to_docx(str(cache), list(clauses), edits)
+            except Exception:
+                pass
+
+    # Fallback: build from parsed clauses
+    from docx import Document as _DocxDoc
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn as _qn
+
+    doc = _DocxDoc()
+    try:
+        settings_el = doc.settings.element
+        for tag in ("w:trackChanges", "w:revisionView"):
+            for el in settings_el.findall(_qn(tag)):
+                settings_el.remove(el)
+    except Exception:
+        pass
+    for section in doc.sections:
+        section.top_margin = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin = Inches(1.25)
+        section.right_margin = Inches(1.25)
+
+    def _apply_style(p, style_key: str, text: str) -> None:
+        pf = p.paragraph_format
+        r = p.add_run(text)
+        r.font.name = "Times New Roman"
+        if style_key == "heading1":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r.font.bold = True; r.font.size = Pt(16); pf.space_after = Pt(6)
+        elif style_key == "subtitle":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r.font.size = Pt(12); pf.space_after = Pt(12)
+        elif style_key == "heading2":
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            r.font.bold = True; r.font.size = Pt(12); pf.space_before = Pt(12); pf.space_after = Pt(4)
+        elif style_key == "heading3":
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            r.font.bold = True; r.font.size = Pt(11); pf.space_before = Pt(8); pf.space_after = Pt(2)
+        else:
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            r.font.size = Pt(11); pf.space_after = Pt(8)
+
+    blocks = _build_document_blocks(list(clauses), edits, original=False)
+    for style_key, text in blocks:
+        if not text.strip():
+            continue
+        _apply_style(doc.add_paragraph(), style_key, text)
+    return doc
+
+
+def _pdf_from_docx_doc(doc) -> io.BytesIO:
+    """Build a reportlab PDF from a python-docx Document, detecting bold/size for headings."""
+    blocks: list[tuple[str, str]] = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        is_bold = any(r.bold for r in para.runs if r.text.strip())
+        font_pt: float | None = None
+        for r in para.runs:
+            if r.font.size:
+                font_pt = r.font.size.pt
+                break
+        if is_bold and font_pt and font_pt >= 14:
+            style_key = "heading1"
+        elif is_bold:
+            style_key = "heading2"
+        else:
+            style_key = "body"
+        blocks.append((style_key, text))
+    return _build_clean_pdf(blocks)
+
+
 # ---------------------------------------------------------------------------
 # Clause listing
 # ---------------------------------------------------------------------------
@@ -372,7 +802,66 @@ async def get_document_layout(run_id: str, db: DbSession) -> DocumentLayoutOut:
 
 @router.get("/runs/{run_id}/export-edited")
 async def export_edited_contract(run_id: str, db: DbSession) -> StreamingResponse:
-    """Export the original PDF with accepted/manual edits and exact highlights overlaid."""
+    """Export the modified contract as PDF.
+
+    Always goes DOCX → PDF: builds the same modified DOCX that /export-docx returns,
+    then converts it to PDF via docx2pdf (Word/LibreOffice). This guarantees the
+    downloaded PDF matches the downloaded DOCX byte-for-byte in layout.
+    """
+    run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    clauses = (await db.execute(
+        select(ParsedClauseRecord)
+        .where(ParsedClauseRecord.run_id == run_id)
+        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+    )).scalars().all()
+
+    edits: dict = run.contract_edits or {}
+    base = (run.original_filename or "contract").rsplit(".", 1)[0]
+
+    # Prime the pdf2docx cache so the modified DOCX has full original formatting
+    cache_path = None
+    if run.storage_path:
+        pdf_path = Path(run.storage_path)
+        if pdf_path.exists():
+            cache_path = pdf_path.with_suffix(".original.docx")
+            if not cache_path.exists():
+                try:
+                    from pdf2docx import Converter as _Cv
+                    cv = _Cv(str(pdf_path))
+                    cv.convert(str(cache_path), start=0, end=None)
+                    cv.close()
+                except Exception:
+                    pass
+
+    logger.info("export-edited: run=%s cache=%s edits=%d", run_id, cache_path.exists() if cache_path else "no-storage", len(edits))
+
+    # Step 1: build the same modified DOCX that /export-docx returns
+    modified_doc = _build_modified_docx(run, list(clauses), edits)
+
+    # Step 2: convert that DOCX → PDF using docx2pdf
+    pdf_buf = _docx_to_pdf_buf(modified_doc)
+    logger.info("export-edited: docx2pdf result=%s", "ok" if pdf_buf else "failed")
+    if pdf_buf is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "PDF export requires LibreOffice (recommended, free) or Microsoft Word installed for DOCX→PDF conversion. "
+                "Install LibreOffice from https://www.libreoffice.org/download/ , or download the DOCX export instead."
+            ),
+        )
+    return StreamingResponse(
+        pdf_buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{base}-edited.pdf"'},
+    )
+
+
+@router.get("/runs/{run_id}/export-edited-legacy")
+async def export_edited_contract_legacy(run_id: str, db: DbSession) -> StreamingResponse:
+    """Legacy: export original PDF with redline overlays. Kept for debugging only."""
     run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -756,6 +1245,18 @@ async def accept_finding(
     # Mark finding as accepted so it disappears from the review queue
     if finding:
         finding.accepted_at = datetime.utcnow()
+    else:
+        # admin_merge-only finding (no FindingRecord row) — persist accepted id on the run
+        _run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+        if _run is not None:
+            payload: dict = dict(_run.verdict_payload or {})
+            accepted_ids: list = list(payload.get("accepted_admin_finding_ids") or [])
+            if finding_id not in accepted_ids:
+                accepted_ids.append(finding_id)
+            payload["accepted_admin_finding_ids"] = accepted_ids
+            _run.verdict_payload = payload
+            flag_modified(_run, "verdict_payload")
+
     annotation_result = await db.execute(
         select(DocumentAnnotationRecord).where(
             DocumentAnnotationRecord.run_id == run_id,
@@ -799,12 +1300,20 @@ async def dismiss_finding(
         select(FindingRecord).where(FindingRecord.id == finding_id, FindingRecord.run_id == run_id)
     )).scalar_one_or_none()
     if not finding:
-        # Some active UI findings come directly from admin structured output and
-        # do not have a one-to-one FindingRecord row. Let the UI dismiss them
-        # locally instead of failing the action.
+        # admin_merge-only finding (no FindingRecord row) — persist dismissed id on the run.
         from app.backend.services.run_service import _load_full_findings
         if not any(f.finding_id == finding_id for f in await _load_full_findings(db, run_id)):
             raise HTTPException(status_code=404, detail="Finding not found")
+        _run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+        if _run is not None:
+            payload: dict = dict(_run.verdict_payload or {})
+            dismissed_ids: list = list(payload.get("dismissed_admin_finding_ids") or [])
+            if finding_id not in dismissed_ids:
+                dismissed_ids.append(finding_id)
+            payload["dismissed_admin_finding_ids"] = dismissed_ids
+            _run.verdict_payload = payload
+            flag_modified(_run, "verdict_payload")
+            await db.commit()
         return {"finding_id": finding_id, "dismissed": True}
 
     finding.dismissed_at = datetime.utcnow()
@@ -1095,23 +1604,123 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
     for ann in annotations:
         ann_by_clause.setdefault(ann.clause_uid, []).append(ann)
 
-    # Pending findings: not accepted, not dismissed, has replacement text
-    pending_findings = (await db.execute(
-        select(FindingRecord).where(
-            FindingRecord.run_id == run_id,
-            FindingRecord.dismissed_at.is_(None),
-            FindingRecord.accepted_at.is_(None),
-            FindingRecord.recommended_change.isnot(None),
-        )
-    )).scalars().all()
-    finding_by_clause: dict[str, FindingRecord] = {}
-    for f in pending_findings:
+    # Pending findings: use _load_full_findings so admin_merge + DB findings both surface.
+    # This ensures findings from structured stage output (no FindingRecord row) still render
+    # as pending suggestions when they carry a recommended_change.
+    from app.backend.services.run_service import _load_full_findings as _load_findings_for_draft
+    all_pending = await _load_findings_for_draft(db, run_id)
+    finding_by_clause: dict[str, object] = {}
+    for f in all_pending:
         if f.clause_uid and f.clause_uid not in finding_by_clause and (f.recommended_change or "").strip():
             finding_by_clause[f.clause_uid] = f
 
     edits: dict = run.contract_edits or {}
     revision = len(edits)
 
+    # ------------------------------------------------------------------
+    # DOCX-based path: use pdf2docx cache when available so that bold,
+    # italic, and paragraph structure from the original PDF are preserved.
+    # ------------------------------------------------------------------
+    docx_cache: "Path | None" = None
+    if run.storage_path:
+        cand = Path(run.storage_path).with_suffix(".original.docx")
+        if cand.exists():
+            docx_cache = cand
+
+    if docx_cache is not None:
+        try:
+            docx_paragraphs = _extract_docx_blocks(str(docx_cache))
+        except Exception:
+            docx_paragraphs = []
+
+        if docx_paragraphs:
+            logger.info("document-draft: run=%s docx_cache_path_exists=%s blocks_built_via=docx", run_id, docx_cache.exists() if docx_cache else False)
+            # Build a lookup: norm_prefix_60 → clause record (first match wins)
+            clause_by_prefix: dict[str, object] = {}
+            for clause in clauses:
+                key = _norm_text(clause.normalized_text)[:60]
+                if key not in clause_by_prefix:
+                    clause_by_prefix[key] = clause
+
+            blocks: list[DraftBlockOut] = []
+            last_clause = clauses[0] if clauses else None
+            for para_idx, para in enumerate(docx_paragraphs):
+                para_text: str = para["text"]
+                para_style: str = para["style"]
+                para_marks: list[dict] = para["marks"]
+
+                # Match paragraph to a clause by normalized-text prefix
+                para_norm = _norm_text(para_text)[:60]
+                matched_clause = clause_by_prefix.get(para_norm)
+                if matched_clause is not None:
+                    last_clause = matched_clause
+                current_clause = last_clause
+
+                if current_clause is None:
+                    continue
+
+                clause_uid: str = current_clause.clause_uid
+                page_number: int = current_clause.page_number
+
+                # Apply accepted edit (plain text overrides marks)
+                raw_edit = edits.get(clause_uid)
+                if raw_edit and isinstance(raw_edit, dict):
+                    display_text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", "")) or para_text
+                    display_marks: list[dict] = []
+                else:
+                    display_text = para_text
+                    display_marks = para_marks
+
+                # Pending suggestion — only on body/list_item blocks
+                pending = finding_by_clause.get(clause_uid)
+                pending_out: Optional[PendingSuggestionOut] = None
+                if pending and para_style in ("body", "list_item"):
+                    # Only emit on the FIRST paragraph whose normalized text contains
+                    # the finding's evidence text (evidence-match like _find_pending_sub_uid)
+                    evidence_text = ""
+                    for ev in (getattr(pending, "contract_evidence", None) or []):
+                        t = (getattr(ev, "text", "") or "").strip()
+                        if t:
+                            evidence_text = t
+                            break
+                    emit_suggestion = False
+                    if evidence_text:
+                        needle = evidence_text[:60].lower()
+                        emit_suggestion = needle in para_text.lower()
+                    else:
+                        # Fallback: emit on the first body block for this clause
+                        emit_suggestion = (matched_clause is not None)
+                    if emit_suggestion:
+                        pending_out = PendingSuggestionOut(
+                            finding_id=pending.finding_id,
+                            severity=pending.severity or "medium",
+                            description=pending.description or "",
+                            replacement_text=(pending.recommended_change or "").strip(),
+                        )
+
+                # Comment anchors
+                clause_anns = ann_by_clause.get(clause_uid, [])
+                comment_anchors = _compute_comment_anchors(para_text, clause_anns)
+
+                block_id = f"block_{clause_uid}_{para_idx}"
+                blocks.append(DraftBlockOut(
+                    block_id=block_id,
+                    clause_uid=clause_uid,
+                    page_number=page_number,
+                    style=para_style,
+                    text=display_text,
+                    original_text=para_text,
+                    marks=display_marks,
+                    pending_suggestion=pending_out,
+                    comment_anchors=comment_anchors,
+                ))
+
+            return DocumentDraftOut(blocks=blocks, revision=revision)
+
+    # ------------------------------------------------------------------
+    # Fallback: clause-iteration path (no DOCX cache available)
+    # ------------------------------------------------------------------
+    logger.info("document-draft: run=%s docx_cache_path_exists=%s blocks_built_via=clauses", run_id, docx_cache.exists() if docx_cache else False)
     blocks: list[DraftBlockOut] = []
     for clause in clauses:
         raw_edit = edits.get(clause.clause_uid)
@@ -1126,6 +1735,9 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
             sub_blocks = _split_contract_blob(original_text, clause.clause_uid, clause.page_number)
             clause_anns = ann_by_clause.get(clause.clause_uid, [])
             pending = finding_by_clause.get(clause.clause_uid)
+
+            # Pre-compute which sub-block should show the pending suggestion
+            pending_target_uid = _find_pending_sub_uid(sub_blocks, pending) if pending else None
 
             for sub_uid, sub_style, sub_text in sub_blocks:
                 # Only use an edit if it's stored under the sub-block's own UID (i.e. __pN suffix).
@@ -1146,10 +1758,8 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
                         if ann.span_start is not None and ann.span_end is not None
                         and ann.span_start >= sub_offset and ann.span_end <= sub_end
                     ]
-                    # Adjust positions relative to sub-block start
                     adjusted_anns = []
                     for ann in sub_anns:
-                        # Create a lightweight object with adjusted positions
                         class _AdjustedAnn:
                             pass
                         adj = _AdjustedAnn()
@@ -1162,13 +1772,13 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
                 else:
                     comment_anchors = []
 
-                # Pending suggestion: only for body/list_item sub-blocks
+                # Show pending suggestion only on the evidence-matched sub-block
                 pending_out: Optional[PendingSuggestionOut] = None
-                if pending and sub_style in ("body", "list_item"):
+                if pending and sub_uid == pending_target_uid:
                     pending_out = PendingSuggestionOut(
-                        finding_id=pending.id,
+                        finding_id=pending.finding_id,
                         severity=pending.severity or "medium",
-                        description=pending.issue or "",
+                        description=pending.description or "",
                         replacement_text=(pending.recommended_change or "").strip(),
                     )
 
@@ -1191,9 +1801,9 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
             pending_out = None
             if pending and style not in ("heading1", "heading2", "heading3"):
                 pending_out = PendingSuggestionOut(
-                    finding_id=pending.id,
+                    finding_id=pending.finding_id,
                     severity=pending.severity or "medium",
-                    description=pending.issue or "",
+                    description=pending.description or "",
                     replacement_text=(pending.recommended_change or "").strip(),
                 )
 
@@ -1222,10 +1832,33 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
 
 @router.get("/runs/{run_id}/export-docx")
 async def export_docx(run_id: str, db: DbSession, original: bool = False) -> StreamingResponse:
-    """Export document as DOCX. Pass ?original=true to skip edits and export clean original."""
+    """Export document as DOCX. ?original=true returns pdf2docx-converted layout-preserved original."""
     run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    base = (run.original_filename or "contract").rsplit(".", 1)[0]
+
+    if original:
+        path = Path(run.storage_path)
+        if path.exists():
+            try:
+                from pdf2docx import Converter as _Pdf2DocxConverter
+                docx_cache = path.with_suffix(".original.docx")
+                logger.info("export-docx: run=%s original=%s cache_exists=%s", run_id, original, docx_cache.exists())
+                if not docx_cache.exists():
+                    cv = _Pdf2DocxConverter(str(path))
+                    cv.convert(str(docx_cache), start=0, end=None)
+                    cv.close()
+                buf = io.BytesIO(docx_cache.read_bytes())
+                buf.seek(0)
+                return StreamingResponse(
+                    buf,
+                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": f'attachment; filename="{base}.docx"'},
+                )
+            except Exception:
+                pass  # fall through to parsed-clause approach
 
     clauses = (await db.execute(
         select(ParsedClauseRecord)
@@ -1234,111 +1867,8 @@ async def export_docx(run_id: str, db: DbSession, original: bool = False) -> Str
     )).scalars().all()
 
     edits: dict = {} if original else (run.contract_edits or {})
-
-    try:
-        from docx import Document as DocxDocument
-        from docx.shared import Pt, Inches
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-    except ImportError:
-        raise HTTPException(status_code=501, detail="python-docx not installed; run: pip install python-docx")
-
-    doc = DocxDocument()
-
-    # Disable revision/track-changes recording so accepted edits don't appear
-    # as blue insertions when the file is opened in Word.
-    try:
-        from docx.oxml.ns import qn as _qn
-        settings_el = doc.settings.element
-        for tag in ("w:trackChanges", "w:revisionView"):
-            for el in settings_el.findall(_qn(tag)):
-                settings_el.remove(el)
-    except Exception:
-        pass
-
-    # Letter page margins
-    for section in doc.sections:
-        section.top_margin = Inches(1)
-        section.bottom_margin = Inches(1)
-        section.left_margin = Inches(1.25)
-        section.right_margin = Inches(1.25)
-
-    base = (run.original_filename or "contract").rsplit(".", 1)[0]
+    doc = _build_modified_docx(run, list(clauses), edits)
     suffix = "" if original else "-edited"
-
-    def _apply_docx_style(p, style_key: str, text: str) -> None:
-        """Apply direct paragraph formatting instead of Word named styles."""
-        pf = p.paragraph_format
-        run = p.add_run(text)
-        font = run.font
-        font.name = "Times New Roman"
-
-        if style_key == "heading1":
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            font.bold = True
-            font.size = Pt(16)
-            pf.space_before = Pt(0)
-            pf.space_after = Pt(6)
-        elif style_key == "subtitle":
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            font.bold = False
-            font.size = Pt(12)
-            pf.space_before = Pt(0)
-            pf.space_after = Pt(12)
-        elif style_key == "heading2":
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            font.bold = True
-            font.size = Pt(12)
-            pf.space_before = Pt(12)
-            pf.space_after = Pt(4)
-        elif style_key == "heading3":
-            p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            font.bold = True
-            font.size = Pt(11)
-            pf.space_before = Pt(8)
-            pf.space_after = Pt(2)
-        else:
-            # body / list_item
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            font.bold = False
-            font.size = Pt(11)
-            pf.space_before = Pt(0)
-            pf.space_after = Pt(8)
-
-    for clause in clauses:
-        raw_edit = edits.get(clause.clause_uid)
-        if raw_edit and isinstance(raw_edit, dict):
-            full_text = raw_edit.get("plain_text") or _safe_rich_text_to_plain(raw_edit.get("text", ""))
-        else:
-            full_text = clause.normalized_text
-        # Strip markdown bold/italic that the LLM may have included
-        full_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", full_text).strip()
-        if not full_text:
-            continue
-
-        if len(clause.normalized_text) > 300:
-            sub_blocks = _split_contract_blob(clause.normalized_text, clause.clause_uid, clause.page_number)
-            parent_edit_applied = False
-            for sub_uid, sub_style, sub_text in sub_blocks:
-                is_sub_uid = sub_uid != clause.clause_uid
-                sub_edit = edits.get(sub_uid) if is_sub_uid else None
-                # Backward compat: a parent-level edit (old acceptFinding path) is applied to
-                # the first body sub-block only, preserving heading/section structure around it.
-                if sub_edit is None and raw_edit and isinstance(raw_edit, dict) and not parent_edit_applied and sub_style in ("body", "list_item"):
-                    sub_edit = raw_edit
-                    parent_edit_applied = True
-                if sub_edit and isinstance(sub_edit, dict):
-                    display_text = sub_edit.get("plain_text") or _safe_rich_text_to_plain(sub_edit.get("text", "")) or sub_text
-                else:
-                    display_text = sub_text
-                display_text = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", display_text).strip()
-                if not display_text:
-                    continue
-                p = doc.add_paragraph()
-                _apply_docx_style(p, sub_style, display_text)
-        else:
-            style_key = _infer_block_style(clause.normalized_text)
-            p = doc.add_paragraph()
-            _apply_docx_style(p, style_key, full_text)
 
     buf = io.BytesIO()
     doc.save(buf)

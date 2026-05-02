@@ -48,3 +48,6 @@ respx>=0.21.0
 
 # ── Document export ───────────────────────────────────────────────────────────
 python-docx>=1.1.0
+pdf2docx>=0.5.13
+reportlab>=4.0.0
+docx2pdf>=0.1.8

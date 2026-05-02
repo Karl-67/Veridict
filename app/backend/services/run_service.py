@@ -8,7 +8,10 @@ the caller (route handler) — never from request body (auth-derived-tenancy).
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -259,6 +262,12 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
     )
     inactive_finding_ids = {str(row[0]) for row in inactive_result.all()}
 
+    # Load run to read accepted/dismissed admin finding IDs persisted on verdict_payload.
+    run_record = (await session.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
+    admin_accepted: set[str] = set((run_record.verdict_payload or {}).get("accepted_admin_finding_ids") or []) if run_record else set()
+    admin_dismissed: set[str] = set((run_record.verdict_payload or {}).get("dismissed_admin_finding_ids") or []) if run_record else set()
+    admin_inactive = admin_accepted | admin_dismissed
+
     # 1. Primary: admin_merge structured output (latest round).
     stage_result = await session.execute(
         select(StageExecutionRecord)
@@ -270,16 +279,29 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
         .order_by(StageExecutionRecord.round_number.desc())
     )
     stage = stage_result.scalars().first()
+    def _dedup_key(clause_uid: str | None, description: str | None) -> tuple[str, str]:
+        # Normalize on (clause_uid, description) only — issue_type is unreliable across sources
+        # (admin_merge uses Finding.issue_type, FindingRecord rows have no equivalent column),
+        # so any tuple that includes it produces phantom duplicates.
+        norm_desc = " ".join((description or "").lower().split())[:200]
+        return (clause_uid or "", norm_desc)
+
     merged_findings: list[Finding] = []
-    seen_finding_keys: set[tuple[str, str, str]] = set()
+    seen_finding_keys: set[tuple[str, str]] = set()
+    admin_findings_raw = stage.structured_output.get("merged_findings", []) if stage and stage.structured_output else []
     if stage and stage.structured_output:
-        for f in stage.structured_output.get("merged_findings", []):
+        for f in admin_findings_raw:
             try:
                 finding = Finding.model_validate(f)
                 if finding.finding_id in inactive_finding_ids:
                     continue
+                if finding.finding_id in admin_inactive:
+                    continue
+                key = _dedup_key(finding.clause_uid, finding.description)
+                if key in seen_finding_keys:
+                    continue
                 merged_findings.append(finding)
-                seen_finding_keys.add((finding.clause_uid, finding.issue_type, finding.description))
+                seen_finding_keys.add(key)
             except Exception:
                 continue
 
@@ -310,13 +332,12 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
     }
 
     selected_records: list[FindingRecord] = []
-    seen_db_keys: set[tuple[str, str, str]] = set()
+    seen_db_keys: set[tuple[str, str]] = set()
     for fr in db_findings:
         agent = fr.source_agent or ""
-        # final_reviewer is not a valid source in the current topology.
         if agent.startswith("final_reviewer"):
             continue
-        key = (fr.clause_uid or str(fr.id), "liability_exposure", fr.issue or "")
+        key = _dedup_key(fr.clause_uid, fr.issue)
         if key in seen_finding_keys or key in seen_db_keys:
             continue
         seen_db_keys.add(key)
@@ -328,6 +349,10 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
         if finding is not None:
             merged_findings.append(finding)
 
+    logger.info(
+        "_load_full_findings: run=%s admin_findings=%d db_kept=%d total=%d",
+        run_id, len(admin_findings_raw), len(selected_records), len(merged_findings),
+    )
     return merged_findings
 
 

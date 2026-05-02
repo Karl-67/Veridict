@@ -13,7 +13,6 @@ parameters:
   type: pd-ssd
 reclaimPolicy: Retain
 volumeBindingMode: WaitForFirstConsumer
-
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -21,6 +20,7 @@ metadata:
   name: verdict-documents
   namespace: verdict
 spec:
+  storageClassName: standard-rwo
   accessModes: [ReadWriteOnce]
   resources:
     requests:
@@ -33,64 +33,22 @@ metadata:
   name: verdict-rag
   namespace: verdict
 spec:
+  storageClassName: standard-rwo
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 10Gi
 
 ---
-# Fine-tune adapter output — expanded to hold LoRA weights + merged checkpoint
+# Fine-tune adapter output — holds LoRA weights uploaded from RunPod
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: verdict-fine-tune-output
   namespace: verdict
 spec:
-  storageClassName: verdict-premium-ssd
+  storageClassName: standard-rwo
   accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 20Gi
-
----
-# HuggingFace model cache for the base Gemma 4 26B vLLM pod
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: verdict-vllm-base-cache
-  namespace: verdict
-spec:
-  storageClassName: verdict-premium-ssd
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 60Gi
-
----
-# HuggingFace model cache for the Kira vLLM pod — BLUE slot
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: verdict-vllm-kira-cache
-  namespace: verdict
-spec:
-  storageClassName: verdict-premium-ssd
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 60Gi
-
----
-# HuggingFace model cache for the Kira vLLM pod — GREEN slot
-# Separate disk so blue and green can cache independently (avoids lock contention).
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: verdict-vllm-kira-cache-green
-  namespace: verdict
-spec:
-  storageClassName: verdict-premium-ssd
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 60Gi

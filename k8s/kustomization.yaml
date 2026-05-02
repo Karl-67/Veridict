@@ -14,9 +14,6 @@ resources:
   - configmap.yaml
   - storage.yaml
   - postgres.yaml
-  - vllm-base.yaml
-  - vllm-kira.yaml
-  - vllm-kira-green.yaml
   - api.yaml
   - worker.yaml
   - frontend.yaml

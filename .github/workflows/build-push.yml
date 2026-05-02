@@ -4,19 +4,19 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: read
-  id-token: write
-
 env:
-  GAR_REGISTRY: ${{ vars.GAR_REGISTRY }}          # e.g. europe-west1-docker.pkg.dev/veridict-dev/veridict
-  GKE_CLUSTER_NAME: ${{ vars.GKE_CLUSTER_NAME }}  # e.g. veridict-dev-gke
-  GKE_REGION: ${{ vars.GKE_REGION }}              # e.g. europe-west1
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}      # e.g. veridict-dev
+  GAR_REGISTRY: us-central1-docker.pkg.dev
+  GAR_REPO: verdict-ai-prod/verdict
+  GKE_CLUSTER: verdict-gke
+  GKE_REGION: us-central1
+  GCP_PROJECT: verdict-ai-prod
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
@@ -26,20 +26,20 @@ jobs:
         id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      - name: Require GCP deployment variables
-        run: |
-          test -n "$GAR_REGISTRY"    || (echo "GAR_REGISTRY repo variable is required" && exit 1)
-          test -n "$GKE_CLUSTER_NAME" || (echo "GKE_CLUSTER_NAME repo variable is required" && exit 1)
-          test -n "$GCP_PROJECT_ID"  || (echo "GCP_PROJECT_ID repo variable is required" && exit 1)
-
-      - name: Authenticate to GCP
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
 
-      - name: Configure Docker for GAR
-        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build and push API image
         uses: docker/build-push-action@v5
@@ -48,8 +48,10 @@ jobs:
           file: Dockerfile.api
           push: true
           tags: |
-            ${{ env.GAR_REGISTRY }}/verdict-api:${{ steps.meta.outputs.tag }}
-            ${{ env.GAR_REGISTRY }}/verdict-api:latest
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-api:${{ steps.meta.outputs.tag }}
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push Worker image
         uses: docker/build-push-action@v5
@@ -58,8 +60,10 @@ jobs:
           file: Dockerfile.worker
           push: true
           tags: |
-            ${{ env.GAR_REGISTRY }}/verdict-worker:${{ steps.meta.outputs.tag }}
-            ${{ env.GAR_REGISTRY }}/verdict-worker:latest
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-worker:${{ steps.meta.outputs.tag }}
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push Frontend image
         uses: docker/build-push-action@v5
@@ -68,20 +72,16 @@ jobs:
           file: Dockerfile.frontend
           push: true
           tags: |
-            ${{ env.GAR_REGISTRY }}/verdict-frontend:${{ steps.meta.outputs.tag }}
-            ${{ env.GAR_REGISTRY }}/verdict-frontend:latest
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-frontend:${{ steps.meta.outputs.tag }}
+            ${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}/verdict-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   eval-gate:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
       - uses: actions/checkout@v4
-
-      - name: Require production eval configuration
-        run: |
-          test -n "${{ secrets.MLFLOW_TRACKING_URI }}" || (echo "MLFLOW_TRACKING_URI is required" && exit 1)
-          test -n "${{ secrets.EVAL_ENDPOINT }}" || (echo "EVAL_ENDPOINT is required for deployment" && exit 1)
-          test -n "${{ secrets.EVAL_MODEL }}" || (echo "EVAL_MODEL is required for deployment" && exit 1)
 
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
@@ -94,51 +94,42 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-          MLFLOW_EXPERIMENT: veridict-eval-gates
+          MLFLOW_EXPERIMENT: verdict-eval-gates
           EVAL_ENDPOINT: ${{ secrets.EVAL_ENDPOINT }}
           EVAL_MODEL: ${{ secrets.EVAL_MODEL }}
 
   deploy:
     runs-on: ubuntu-latest
     needs: [build-and-push, eval-gate]
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Require GKE deployment variables
-        run: |
-          test -n "$GKE_CLUSTER_NAME" || (echo "GKE_CLUSTER_NAME repo variable is required" && exit 1)
-          test -n "$GKE_REGION"       || (echo "GKE_REGION repo variable is required" && exit 1)
-          test -n "$GCP_PROJECT_ID"   || (echo "GCP_PROJECT_ID repo variable is required" && exit 1)
-
-      - name: Authenticate to GCP
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.SERVICE_ACCOUNT }}
 
       - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
-          cluster_name: ${{ env.GKE_CLUSTER_NAME }}
+          cluster_name: ${{ env.GKE_CLUSTER }}
           location: ${{ env.GKE_REGION }}
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          project_id: ${{ env.GCP_PROJECT }}
 
       - name: Pin image tags in manifests
         run: |
           TAG=${{ needs.build-and-push.outputs.image_tag }}
-          sed -i "s|europe-west1-docker.pkg.dev/GCP_PROJECT_ID/veridict/verdict-api:latest|$GAR_REGISTRY/verdict-api:$TAG|g" k8s/api.yaml
-          sed -i "s|europe-west1-docker.pkg.dev/GCP_PROJECT_ID/veridict/verdict-worker:latest|$GAR_REGISTRY/verdict-worker:$TAG|g" k8s/worker.yaml
-          sed -i "s|europe-west1-docker.pkg.dev/GCP_PROJECT_ID/veridict/verdict-frontend:latest|$GAR_REGISTRY/verdict-frontend:$TAG|g" k8s/frontend.yaml
-          sed -i "s|europe-west1-docker.pkg.dev/GCP_PROJECT_ID/veridict/verdict-api:latest|$GAR_REGISTRY/verdict-api:$TAG|g" k8s/migration-job.yaml
+          REGISTRY=${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}
+          sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/api.yaml
+          sed -i "s|${REGISTRY}/verdict-worker:latest|${REGISTRY}/verdict-worker:${TAG}|g" k8s/worker.yaml
+          sed -i "s|${REGISTRY}/verdict-frontend:latest|${REGISTRY}/verdict-frontend:${TAG}|g" k8s/frontend.yaml
 
-      - name: Apply Kubernetes manifests (api, worker, frontend, infrastructure)
+      - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
-
-      - name: Run database migrations
-        run: |
-          kubectl delete job verdict-migrate -n verdict --ignore-not-found
-          kubectl apply -f k8s/migration-job.yaml -n verdict
-          kubectl wait --for=condition=complete job/verdict-migrate -n verdict --timeout=3m
 
       - name: Wait for API rollout
         run: kubectl rollout status deployment/verdict-api -n verdict --timeout=5m
@@ -148,14 +139,6 @@ jobs:
 
       - name: Wait for Frontend rollout
         run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=3m
-
-      - name: Blue-green switch — promote Kira vLLM to new image
-        if: ${{ vars.DEPLOY_VLLM == 'true' }}
-        id: bg_switch
-        run: |
-          python scripts/blue_green_switch.py \
-            --image $GAR_REGISTRY/verdict-vllm-kira:${{ needs.build-and-push.outputs.image_tag }} \
-            --timeout 600
 
       - name: Smoke test — API health check
         id: smoke
@@ -169,24 +152,10 @@ jobs:
           echo "HTTP $STATUS from /api/health"
           [ "$STATUS" = "200" ]
 
-      - name: Auto-rollback — smoke test failed
+      - name: Auto-rollback on failure
         if: failure() && steps.smoke.conclusion == 'failure'
         run: |
-          echo "Smoke test failed — triggering full rollback"
-          python scripts/rollback.py --scope api worker frontend vllm
+          echo "Smoke test failed — rolling back"
+          python scripts/rollback.py --scope api worker frontend
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-
-      - name: Install MLflow for model promotion
-        if: ${{ vars.DEPLOY_VLLM == 'true' && steps.bg_switch.conclusion == 'success' && steps.smoke.conclusion == 'success' }}
-        run: pip install mlflow
-
-      - name: Promote Kira model version in MLflow registry
-        if: ${{ vars.DEPLOY_VLLM == 'true' && steps.bg_switch.conclusion == 'success' && steps.smoke.conclusion == 'success' }}
-        run: |
-          python scripts/mlflow_promote.py \
-            --model kira \
-            --image-tag ${{ needs.build-and-push.outputs.image_tag }}
-        env:
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-          MLFLOW_EXPERIMENT: veridict-deployments

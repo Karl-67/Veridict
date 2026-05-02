@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-api:latest
+          image: us-central1-docker.pkg.dev/verdict-ai-prod/verdict/verdict-api:latest
           ports:
             - containerPort: 8000
           envFrom:
@@ -72,7 +72,10 @@ kind: Service
 metadata:
   name: verdict-api
   namespace: verdict
+  annotations:
+    cloud.google.com/backend-config: '{"default":"verdict-api-backendconfig"}'
 spec:
+  type: NodePort
   selector:
     app: verdict-api
   ports:

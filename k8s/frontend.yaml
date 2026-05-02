@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: europe-west1-docker.pkg.dev/veridict/veridict/verdict-frontend:latest
+          image: us-central1-docker.pkg.dev/verdict-ai-prod/verdict/verdict-frontend:latest
           ports:
             - containerPort: 80
           readinessProbe:
@@ -46,6 +46,7 @@ metadata:
   name: verdict-frontend
   namespace: verdict
 spec:
+  type: NodePort
   selector:
     app: verdict-frontend
   ports:

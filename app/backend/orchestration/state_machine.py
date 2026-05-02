@@ -375,7 +375,7 @@ async def _run_kira_review_block(
         iterations: list[dict] = []
 
         for iteration in range(1, max_iterations + 1):
-            decisions = [await reviewer.review(current_findings) for reviewer in panel]
+            decisions = [await reviewer.review(current_findings, clause_index) for reviewer in panel]
             approval_count = sum(1 for d in decisions if d.decision == "approve")
             approved = approval_count >= 2
 
@@ -463,6 +463,17 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                         ocr_used=clause["ocr_used"],
                     )
                 )
+            # Prime the pdf2docx cache now so the editor has full formatting on first open.
+            try:
+                from pdf2docx import Converter as _Cv
+                _storage_path = run.storage_path
+                _docx_cache = Path(_storage_path).with_suffix(".original.docx")
+                if not _docx_cache.exists():
+                    _cv = _Cv(str(_storage_path))
+                    _cv.convert(str(_docx_cache), start=0, end=None)
+                    _cv.close()
+            except Exception as _e:
+                logger.warning("pdf2docx priming failed for %s: %s", run.id, _e)
             advance_stage(session, stage, {"document_hash": parsed.document_hash, "low_confidence": parsed.low_confidence})
             return
 

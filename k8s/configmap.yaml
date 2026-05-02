@@ -5,10 +5,10 @@ metadata:
   namespace: verdict
 data:
   LLM_PROVIDER: "vllm"
-  VLLM_BASE_URL: "http://verdict-vllm-base:8000/v1"
+  VLLM_BASE_URL: "https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1"
   VLLM_BASE_MODEL: "google/gemma-4-26B-A4B-it"
-  KIRA_MODEL_URL: "http://verdict-vllm-kira:8000/v1"
-  KIRA_MODEL_NAME: "google/gemma-4-26B-A4B-it"
+  KIRA_MODEL_URL: "https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1"
+  KIRA_MODEL_NAME: "kira"
 
   # RAG / embeddings
   EMBEDDING_PROVIDER: "local"

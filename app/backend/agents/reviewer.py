@@ -479,11 +479,25 @@ Flag clauses that have:
 For EVERY finding you MUST provide a recommended_change: a specific, concrete suggested
 rewrite. Generic advice ("clarify this term") is not acceptable — write the actual text.
 
+RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
+- Begin your replacement text with the original section number and title verbatim
+  (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
+  with "2. Indemnification").
+- Preserve paragraph structure and line breaks where present in the original clause.
+- Output ONLY the replacement clause text — do NOT prepend commentary, preambles, or
+  explanations such as "I recommend...", "The revised clause reads:", etc.
+- If the original clause is multi-paragraph, your replacement MUST keep the same number
+  of paragraphs (or more, if you are splitting an ambiguous paragraph for clarity).
+- Do NOT strip the section heading from your replacement.
+
 CRITICAL RULES:
 - You MUST cite at least one contract_evidence (clause_uid) per finding.
 - You are STRICTLY FORBIDDEN from referencing RAG chunk_ids or any external corpus.
 - Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when confidence is below 0.7."""
+- Set uncertainty=true when confidence is below 0.7.
+- When writing recommended_change, keep the full contract structure in mind: you are
+  editing one clause within a multi-section document. Your rewrite must remain coherent
+  with the surrounding sections listed in the Contract Structure above."""
 
 _KIRA_WORKER_REVISION = """\
 [KIRA WORKER — Revision Pass]
@@ -503,6 +517,17 @@ You must:
 - Replace any recommended_change that was flagged as too generic with actual rewrite text.
 - Keep findings the panel did not raise concerns about.
 
+RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
+- Begin each replacement text with the original section number and title verbatim
+  (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
+  with "2. Indemnification").
+- Preserve paragraph structure and line breaks where present in the original clause.
+- Output ONLY the replacement clause text — do NOT prepend commentary, preambles, or
+  explanations such as "I recommend...", "The revised clause reads:", etc.
+- If the original clause is multi-paragraph, your replacement MUST keep the same number
+  of paragraphs (or more, if splitting an ambiguous paragraph for clarity).
+- Do NOT strip the section heading from your replacement.
+
 CRITICAL RULES:
 - You MUST cite at least one contract_evidence (clause_uid) per finding.
 - Do NOT reference RAG chunk_ids or any external corpus.
@@ -518,6 +543,13 @@ Assess against:
 2. ACCURACY — Are findings real issues, or boilerplate that is not a problem?
 3. ACTIONABILITY — Is each recommended_change a concrete rewrite, not vague advice?
 4. SEVERITY CALIBRATION — Are severities appropriate for a senior lawyer's bar?
+5. SECTION HEADING PRESERVATION — For EVERY finding, verify that the worker's
+   recommended_change begins with the same section number and title as the original
+   clause (e.g. "2. Indemnification\n\n..."). If a recommended_change omits or strips
+   the section heading, you MUST REJECT the finding and state in your feedback:
+   "Finding <finding_id>: recommended_change must begin with the original section number
+   and title (e.g. '2. Indemnification')." Do not approve findings where the replacement
+   text silently drops the section label.
 
 Decide APPROVE if findings meet the bar. REJECT if they need changes.
 If rejecting, your feedback must be specific and actionable. Name exactly what to change."""
@@ -529,10 +561,14 @@ If rejecting, your feedback must be specific and actionable. Name exactly what t
 
 
 def _format_clauses(clause_index: list[dict]) -> str:
-    return "\n\n".join(
-        f"[{c['clause_uid']}] page={c['page']}\n{c['normalized_text']}"
-        for c in clause_index
-    )
+    parts: list[str] = []
+    for c in clause_index:
+        heading = c.get("section_heading") or ""
+        # Prepend the section heading before normalized_text so the model sees it as
+        # part of the clause. This ensures recommended_change rewrites include the heading.
+        prefix = f"{heading}\n\n" if heading else ""
+        parts.append(f"[{c['clause_uid']}] page={c['page']}\n{prefix}{c['normalized_text']}")
+    return "\n\n".join(parts)
 
 
 def _format_policy_context(context: dict) -> str:
@@ -573,6 +609,64 @@ def _format_compliance_context(context: dict) -> str:
     for rule in context.get("internal_rules", [])[:50]:
         parts.append(f"- {rule}")
     return "\n".join(parts)
+
+
+_KIRA_NEIGHBOR_WINDOW = 2  # clauses before and after the target to include as neighbors
+
+
+def _build_kira_context(clause_index: list[dict], target_uid: str | None = None) -> str:
+    """Build a contract-structure block for Kira's prompts.
+
+    Always includes:
+    - A numbered list of ALL section headings (so the model sees the full document shape).
+    - When target_uid is given: the full text of the target clause plus the
+      _KIRA_NEIGHBOR_WINDOW clauses immediately before and after it, so the model
+      can see what surrounds the clause it is rewriting.
+
+    This prevents the model from composing recommended_change in isolation and
+    stripping section numbers/titles.
+    """
+    # --- Section structure (all headings) ---
+    heading_lines: list[str] = []
+    for i, c in enumerate(clause_index, start=1):
+        heading = c.get("section_heading") or ""
+        uid = c.get("clause_uid", f"clause_{i}")
+        if heading:
+            heading_lines.append(f"  {i}. [{uid}] {heading}")
+        else:
+            # Fall back to first line of text as a label so every clause is listed.
+            first_line = (c.get("normalized_text") or "").split("\n")[0][:80]
+            heading_lines.append(f"  {i}. [{uid}] {first_line}")
+
+    structure_block = "Contract Structure (all sections):\n" + "\n".join(heading_lines)
+
+    # --- Neighbor window around the target clause ---
+    if target_uid is None:
+        return structure_block
+
+    uids = [c["clause_uid"] for c in clause_index]
+    try:
+        idx = uids.index(target_uid)
+    except ValueError:
+        return structure_block
+
+    lo = max(0, idx - _KIRA_NEIGHBOR_WINDOW)
+    hi = min(len(clause_index) - 1, idx + _KIRA_NEIGHBOR_WINDOW)
+    window_parts: list[str] = []
+    for j in range(lo, hi + 1):
+        c = clause_index[j]
+        label = "(TARGET CLAUSE)" if j == idx else ""
+        heading = c.get("section_heading") or ""
+        prefix = f"{heading}\n\n" if heading else ""
+        window_parts.append(
+            f"[{c['clause_uid']}] page={c['page']} {label}\n{prefix}{c['normalized_text']}"
+        )
+    neighbor_block = (
+        f"Neighboring Clauses (window of {_KIRA_NEIGHBOR_WINDOW} before/after the target):\n\n"
+        + "\n\n---\n\n".join(window_parts)
+    )
+
+    return f"{structure_block}\n\n{neighbor_block}"
 
 
 def _format_findings_for_stage(findings: list[Finding]) -> str:
@@ -896,8 +990,11 @@ class KiraWorker(FineTunableAgent):
         clause_index: list[dict],
         compliance_context: dict,
     ) -> list[Finding]:
+        contract_context = _build_kira_context(clause_index)
         prompt = (
             f"{_KIRA_WORKER_INITIAL}\n\n"
+            "## Contract Structure\n"
+            f"{contract_context}\n\n"
             "## Compliance Context\n"
             f"{_format_compliance_context(compliance_context)}\n\n"
             "## Contract Clauses\n"
@@ -926,11 +1023,14 @@ class KiraWorker(FineTunableAgent):
         aggregated_feedback: str,
         iteration: int,
     ) -> list[Finding]:
+        contract_context = _build_kira_context(clause_index)
         prompt = (
             _KIRA_WORKER_REVISION.format(
                 feedback=aggregated_feedback,
                 current_findings=_format_findings_for_panel(current_findings),
             ) + "\n\n"
+            "## Contract Structure\n"
+            f"{contract_context}\n\n"
             "## Compliance Context\n"
             f"{_format_compliance_context(compliance_context)}\n\n"
             "## Contract Clauses\n"
@@ -982,10 +1082,19 @@ class KiraPanelReviewer(FineTunableAgent):
     def agent_role(self) -> str:
         return f"kira_panel_reviewer_{self._reviewer_index}"
 
-    async def review(self, worker_findings: list[Finding]) -> KiraReviewerDecision:
+    async def review(
+        self,
+        worker_findings: list[Finding],
+        clause_index: list[dict] | None = None,
+    ) -> KiraReviewerDecision:
         findings_block = _format_findings_for_panel(worker_findings)
+        context_block = _build_kira_context(clause_index or []) if clause_index else ""
+        context_section = (
+            f"## Contract Structure\n{context_block}\n\n" if context_block else ""
+        )
         prompt = (
             f"{_KIRA_PANEL_REVIEWER}\n\n"
+            f"{context_section}"
             "## Kira Worker Findings\n"
             f"{findings_block}\n\n"
             "Return ONLY a JSON object matching the schema."

@@ -70,6 +70,56 @@ function renderInlineDiff(chunks: DiffChunk[]): React.ReactNode {
   });
 }
 
+function applyMarks(
+  text: string,
+  marks: Array<{ type: string; from_pos: number; to_pos: number }>,
+): React.ReactNode {
+  if (!marks.length) return text;
+
+  // Build a sorted list of boundary events
+  type Event = { pos: number; open: boolean; type: string; idx: number };
+  const events: Event[] = [];
+  marks.forEach((m, idx) => {
+    events.push({ pos: m.from_pos, open: true, type: m.type, idx });
+    events.push({ pos: m.to_pos, open: false, type: m.type, idx });
+  });
+  events.sort((a, b) => a.pos - b.pos || (a.open ? -1 : 1));
+
+  // Collect all unique boundary positions and sort them
+  const positions = Array.from(new Set([0, text.length, ...events.map((e) => e.pos)]))
+    .filter((p) => p >= 0 && p <= text.length)
+    .sort((a, b) => a - b);
+
+  const parts: React.ReactNode[] = [];
+  const activeMarks: Set<string> = new Set();
+
+  for (let i = 0; i < positions.length - 1; i++) {
+    const from = positions[i];
+    const to = positions[i + 1];
+    // Update active marks at `from`
+    for (const ev of events) {
+      if (ev.pos === from) {
+        if (ev.open) activeMarks.add(ev.type);
+        else activeMarks.delete(ev.type);
+      }
+    }
+    const segment = text.slice(from, to);
+    if (!segment) continue;
+    const isBold = activeMarks.has("bold");
+    const isItalic = activeMarks.has("italic");
+    if (isBold && isItalic) {
+      parts.push(<strong key={i}><em>{segment}</em></strong>);
+    } else if (isBold) {
+      parts.push(<strong key={i}>{segment}</strong>);
+    } else if (isItalic) {
+      parts.push(<em key={i}>{segment}</em>);
+    } else {
+      parts.push(segment);
+    }
+  }
+  return <>{parts}</>;
+}
+
 function renderTextWithAnchors(
   text: string,
   anchors: CommentAnchor[],
@@ -263,6 +313,7 @@ function DocumentBlock({
 
     const displayText = block.text;
     if (block.comment_anchors.length > 0) {
+      // Anchors take priority; skip inline marks to avoid span overlap complexity
       return renderTextWithAnchors(
         displayText,
         block.comment_anchors,
@@ -271,6 +322,9 @@ function DocumentBlock({
         onAnnotationActivate,
         onAnnotationHover,
       );
+    }
+    if (block.marks && block.marks.length > 0) {
+      return applyMarks(displayText, block.marks);
     }
     return displayText;
   };

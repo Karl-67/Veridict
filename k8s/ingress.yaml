@@ -1,35 +1,37 @@
-# nginx-ingress controller ingress for GKE.
-# Prerequisites (install once per cluster):
-#   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/cloud/deploy.yaml
-#
-# For TLS: create a cert-manager Certificate or upload a secret and uncomment tls block.
+# GKE native L7 load balancer ingress.
+# Provisioning takes ~3 minutes after first apply.
+# Get the IP with: kubectl get ingress verdict -n verdict
+# After getting the IP, update CORS_ORIGINS in configmap.yaml and re-apply.
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: verdict-api-backendconfig
+  namespace: verdict
+spec:
+  timeoutSec: 300
+
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: verdict
   namespace: verdict
   annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    kubernetes.io/ingress.class: "gce"
 spec:
-  # tls:
-  #   - hosts:
-  #       - verdict.yourdomain.com
-  #     secretName: verdict-tls
   rules:
     - http:
         paths:
-          - path: /api
-            pathType: Prefix
+          - path: /api/*
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: verdict-api
                 port:
                   number: 8000
-          - path: /
-            pathType: Prefix
+          - path: /*
+            pathType: ImplementationSpecific
             backend:
               service:
                 name: verdict-frontend
