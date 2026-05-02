@@ -201,13 +201,13 @@ function HistoryScreen({ navigate }) {
 function ProfileScreen() {
   const current = window.verdictApi.currentUser();
   const [user, setUser]           = React.useState({
-    displayName: current?.display_name ?? MOCK_USER_PROFILE.displayName,
-    email: current?.email ?? MOCK_USER_PROFILE.email,
+    displayName: current?.display_name ?? "",
+    email: current?.email ?? "",
     jobTitle: current?.job_title ?? "",
     department: current?.department ?? "",
-    orgName: current?.org_name ?? MOCK_USER_PROFILE.orgName,
+    orgName: current?.org_name ?? "",
     orgRole: current?.org_role ?? "member",
-    avatarColor: current?.avatar_color ?? MOCK_USER_PROFILE.avatarColor,
+    avatarColor: current?.avatar_color ?? AVATAR_COLORS[0],
   });
   const [avatarColor, setColor]   = React.useState(user.avatarColor);
   const [workspaces, setWorkspaces] = React.useState([]);
@@ -215,7 +215,11 @@ function ProfileScreen() {
   const [savedState, setSaved]    = React.useState(null);
   const [pwFields, setPwFields]   = React.useState({ current: "", next: "", confirm: "" });
 
-  function initials(n) { return n.split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase(); }
+  function initials(n) {
+    const parts = (n || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return parts.map(p => p[0]).join("").slice(0, 2).toUpperCase();
+  }
 
   function save() {
     setSaved("saving");

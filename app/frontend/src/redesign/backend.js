@@ -1,4 +1,13 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+// Default `/api` = same origin as the Vite dev server (see vite.config proxy) or production host; required for refresh cookies (SameSite=Lax, path=/api/auth).
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const ACCESS_TOKEN_REFRESH_MS = 14 * 60 * 1000; // refresh 1 min before typical 15-min access expiry
+
+export const VERDICT_SESSION_EXPIRED = "verdict-session-expired";
+
+let refreshTimer = null;
+let sessionExpiredPending = false;
+/** Single in-flight refresh — backend rotates (revokes) the old refresh token, so parallel refreshes race and log the user out. */
+let refreshInFlight = null;
 
 function token() {
   return localStorage.getItem("veridict_token");
@@ -31,19 +40,68 @@ async function readJson(res, fallback) {
 }
 
 // Try to refresh the access token using the httpOnly refresh cookie.
-// Returns true on success, false if the refresh token is also expired/missing.
+// fatal: true when the refresh token is invalid/expired (caller should clear the session).
+// fatal: false on network errors — do not clear the session.
 async function tryRefreshToken() {
-  try {
-    const res = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
-    if (!res.ok) return false;
-    const data = await res.json();
-    const user = mapAuthUser(data);
-    localStorage.setItem("veridict_token", user.token);
-    localStorage.setItem("veridict_user", JSON.stringify(user));
-    return true;
-  } catch {
-    return false;
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const errBody = await res.json();
+          detail = typeof errBody?.detail === "string" ? errBody.detail : "";
+        } catch {
+          /* ignore */
+        }
+        // Cookie not sent (common dev mis-match: localhost UI + 127.0.0.1 API) — not a revoked session.
+        const missingRefreshCookie = res.status === 401 && detail === "No refresh token";
+        const fatal = (res.status === 401 || res.status === 403) && !missingRefreshCookie;
+        return { ok: false, fatal, missingRefreshCookie };
+      }
+      const data = await res.json();
+      const user = mapAuthUser(data);
+      localStorage.setItem("veridict_token", user.token);
+      localStorage.setItem("veridict_user", JSON.stringify(user));
+      return { ok: true, fatal: false, missingRefreshCookie: false };
+    } catch {
+      return { ok: false, fatal: false, missingRefreshCookie: false };
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+function clearSession() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
   }
+  localStorage.removeItem("veridict_token");
+  localStorage.removeItem("veridict_user");
+  sessionExpiredPending = true;
+  window.dispatchEvent(new CustomEvent(VERDICT_SESSION_EXPIRED, { detail: { reason: "expired" } }));
+}
+
+/** Returns true once after clearSession() if the auth UI should show a session-expired message. */
+function consumeSessionExpiredNotice() {
+  const v = sessionExpiredPending;
+  sessionExpiredPending = false;
+  return v;
+}
+
+function scheduleSilentRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (!currentUser()) return;
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null;
+    const r = await tryRefreshToken();
+    if (r.ok) scheduleSilentRefresh();
+    else if (r.fatal) clearSession();
+    else scheduleSilentRefresh();
+  }, ACCESS_TOKEN_REFRESH_MS);
 }
 
 // Fetch wrapper that retries once after auto-refreshing the access token on 401.
@@ -63,7 +121,7 @@ async function apiFetch(url, options = {}) {
   }
   if (res.status === 401) {
     const refreshed = await tryRefreshToken();
-    if (refreshed) {
+    if (refreshed.ok) {
       const newHeaders = { ...(fetchOptions.headers || {}) };
       const t = token();
       if (t) newHeaders.Authorization = `Bearer ${t}`;
@@ -72,6 +130,9 @@ async function apiFetch(url, options = {}) {
       } catch {
         throw new Error("Network error — please check your connection and try again.");
       }
+      if (res.status === 401) clearSession();
+    } else if (refreshed.fatal || refreshed.missingRefreshCookie) {
+      clearSession();
     }
   }
   return res;
@@ -96,6 +157,7 @@ function saveAuth(data) {
   const user = mapAuthUser(data);
   localStorage.setItem("veridict_token", user.token);
   localStorage.setItem("veridict_user", JSON.stringify(user));
+  scheduleSilentRefresh();
   return user;
 }
 
@@ -147,6 +209,10 @@ async function registerFromInvite(payload) {
 }
 
 async function logout() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
   await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
   localStorage.removeItem("veridict_token");
   localStorage.removeItem("veridict_user");
@@ -422,6 +488,15 @@ async function adminSend(method, path, body) {
   return readJson(res, "Admin request failed");
 }
 
+// Validate session on load: refresh if we have cached user (network errors keep local session).
+(async function bootSession() {
+  if (!currentUser()) return;
+  const r = await tryRefreshToken();
+  if (r.ok) scheduleSilentRefresh();
+  else if (r.fatal) clearSession();
+  else scheduleSilentRefresh();
+})();
+
 window.verdictApi = {
   API_BASE,
   login,
@@ -430,6 +505,8 @@ window.verdictApi = {
   registerFromInvite,
   logout,
   currentUser,
+  VERDICT_SESSION_EXPIRED,
+  consumeSessionExpiredNotice,
   listContracts,
   getContract,
   listWorkspaces,

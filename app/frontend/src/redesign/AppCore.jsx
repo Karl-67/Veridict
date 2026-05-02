@@ -139,6 +139,7 @@ function Header({ screen, onNavigate, onAdmin, onProfile, onSearch, isDark, onTo
   const [notifs, setNotifs]       = React.useState([]);
   const notifRef = React.useRef(null);
   const user = window.verdictApi.currentUser();
+  const isOrgAdmin = user?.org_role === "org_admin";
 
   React.useEffect(() => {
     window.verdictApi.listHistory(50).then(rows => {
@@ -249,7 +250,9 @@ function Header({ screen, onNavigate, onAdmin, onProfile, onSearch, isDark, onTo
 
           <button {...iconBtn(onToggleTheme, null, false, isDark ? "Light mode" : "Dark mode")}>{isDark ? <IconSun /> : <IconMoon />}</button>
           <div style={{ width: 1, height: 18, background: "var(--border)", margin: "0 4px" }} />
-          <button {...iconBtn(onAdmin, null, screen === "admin", "Admin")}><IconSettings /></button>
+          {isOrgAdmin && (
+            <button {...iconBtn(onAdmin, null, screen === "admin", "Admin")}><IconSettings /></button>
+          )}
           <button onClick={onProfile} title="Profile" style={{ width: 28, height: 28, borderRadius: "50%", background: user?.avatar_color || "var(--accent)", color: "white", fontSize: 10, fontWeight: 700, border: screen === "profile" ? "2px solid var(--accent)" : "2px solid transparent", outline: screen === "profile" ? "2px solid var(--bg)" : "none", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.12s", flexShrink: 0 }}>{initials}</button>
           <button onClick={onLogout} title="Sign out" style={{ width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 7, color: "var(--text-3)", background: "transparent", cursor: "pointer", transition: "all 0.12s", border: "none" }}
             onMouseEnter={e => { e.currentTarget.style.background = "var(--hover-bg)"; e.currentTarget.style.color = "var(--risk-high)"; }}
@@ -424,6 +427,7 @@ function App() {
   }, [isDark, accent, density, serifHeaders]);
 
   const [loggedIn, setLoggedIn] = React.useState(() => Boolean(window.verdictApi.currentUser()));
+  const [sessionExpired, setSessionExpired] = React.useState(false);
   const [screen, setScreen] = React.useState("dashboard");
   const [selectedContractId, setSelectedContractId] = React.useState(null);
   const [selectedRunId, setSelectedRunId] = React.useState(null);
@@ -433,6 +437,8 @@ function App() {
   const [tweakPanelVisible, setTweakPanelVisible] = React.useState(false);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [workspaceFilter, setWorkspaceFilter] = React.useState(null);
+  const currentUser = window.verdictApi.currentUser();
+  const isOrgAdmin = currentUser?.org_role === "org_admin";
 
   // Tweaks panel protocol
   React.useEffect(() => {
@@ -446,16 +452,45 @@ function App() {
   }, []);
 
   React.useEffect(() => {
+    const evt = window.verdictApi.VERDICT_SESSION_EXPIRED;
+    function applySessionExpired() {
+      setLoggedIn(false);
+      setSessionExpired(true);
+      setScreen("dashboard");
+      setSelectedContractId(null);
+      setSelectedRunId(null);
+    }
+    function onEvent() {
+      window.verdictApi.consumeSessionExpiredNotice();
+      applySessionExpired();
+    }
+    window.addEventListener(evt, onEvent);
+    if (window.verdictApi.consumeSessionExpiredNotice()) applySessionExpired();
+    return () => window.removeEventListener(evt, onEvent);
+  }, []);
+
+  React.useEffect(() => {
     if (screen !== "processing") setProcessingRunId(null);
   }, [screen]);
 
   function navigate(s, id = null, runId = null) {
+    if (s === "admin" && !isOrgAdmin) {
+      s = "dashboard";
+      id = null;
+      runId = null;
+    }
     if (s !== "dashboard") setWorkspaceFilter(null);
     setSelectedContractId(id);
     setSelectedRunId(runId);
     setScreen(s);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
+
+  React.useEffect(() => {
+    if (loggedIn && screen === "admin" && !isOrgAdmin) {
+      navigate("dashboard");
+    }
+  }, [loggedIn, screen, isOrgAdmin]);
 
   React.useEffect(() => {
     function handler(e) {
@@ -468,13 +503,31 @@ function App() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const screenProps = { screen, navigate, selectedContractId, selectedRunId, fileName, processingRunId, pendingError, workspaceFilter, onClearWorkspaceFilter: () => setWorkspaceFilter(null) };
+  const screenProps = {
+    screen,
+    navigate,
+    selectedContractId,
+    selectedRunId,
+    fileName,
+    processingRunId,
+    pendingError,
+    workspaceFilter,
+    onWorkspaceFilterChange: setWorkspaceFilter,
+    onClearWorkspaceFilter: () => setWorkspaceFilter(null),
+  };
 
-  if (!loggedIn) return <AuthScreen onLogin={() => setLoggedIn(true)} />;
+  if (!loggedIn) {
+    return (
+      <AuthScreen
+        sessionExpired={sessionExpired}
+        onLogin={() => { setSessionExpired(false); setLoggedIn(true); }}
+      />
+    );
+  }
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--bg)", transition: "background 0.3s, color 0.3s" }}>
-      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} onSearch={() => setSearchOpen(true)} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={async () => { await window.verdictApi.logout(); setLoggedIn(false); }} />
+      <Header screen={screen} onNavigate={(s, id) => navigate(s, id)} onAdmin={() => navigate("admin")} onProfile={() => navigate("profile")} onSearch={() => setSearchOpen(true)} isDark={isDark} onToggleTheme={() => setTweak("theme", isDark ? "light" : "dark")} onLogout={async () => { await window.verdictApi.logout(); setSessionExpired(false); setLoggedIn(false); }} />
 
       <main style={{ flex: 1, maxWidth: 1400, margin: "0 auto", width: "100%", padding: "0 52px" }}>
         {screen === "dashboard"        && <DashboardScreen {...screenProps} />}
@@ -511,7 +564,7 @@ function App() {
         {screen === "verdict"          && <VerdictScreen {...screenProps} onApprove={() => navigate("contract_detail", selectedContractId ?? 2)} onReject={() => navigate("contract_detail", selectedContractId ?? 2)} />}
         {screen === "history" && <HistoryScreen {...screenProps} />}
         {screen === "profile" && <ProfileScreen {...screenProps} />}
-        {screen === "admin"   && <AdminScreen  {...screenProps} />}
+        {screen === "admin" && isOrgAdmin && <AdminScreen  {...screenProps} />}
       </main>
 
       <footer style={{ borderTop: "1px solid var(--border)", padding: "18px 52px", display: "flex", justifyContent: "space-between", alignItems: "center", transition: "border-color 0.3s" }}>

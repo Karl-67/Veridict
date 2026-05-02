@@ -22,7 +22,7 @@ import type {
   Workspace,
 } from "@/types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 // ----------------------------------------------------------------------------
 // Default run metadata. The backend's POST /api/runs requires these form
@@ -153,7 +153,7 @@ export async function submitHumanReview(
 }
 
 export function getRunFileUrl(runId: string): string {
-  return `${API_BASE}/runs/${runId}/file`;
+  return withAuthQuery(`${API_BASE}/runs/${runId}/file`);
 }
 
 export async function retryRun(runId: string): Promise<{ run_id: string; state: string }> {
@@ -304,11 +304,12 @@ export async function saveBlockEdit(
 }
 
 export function getDocxExportUrl(runId: string, original = false): string {
-  return `${API_BASE}/runs/${runId}/export-docx${original ? "?original=true" : ""}`;
+  const url = `${API_BASE}/runs/${runId}/export-docx${original ? "?original=true" : ""}`;
+  return withAuthQuery(url);
 }
 
 export function getEditedPdfUrl(runId: string): string {
-  return `${API_BASE}/runs/${runId}/export-edited`;
+  return withAuthQuery(`${API_BASE}/runs/${runId}/export-edited`);
 }
 
 export async function uploadRagDocument(payload: {
@@ -389,6 +390,13 @@ function mapAuthResponse(data: BackendAuthResponse): AuthResponse {
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("veridict_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function withAuthQuery(url: string): string {
+  const token = localStorage.getItem("veridict_token");
+  if (!token) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}token=${encodeURIComponent(token)}`;
 }
 
 export async function registerUser(email: string, display_name: string, password: string): Promise<AuthResponse> {

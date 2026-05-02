@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from "react";
 import type { AuthUser } from "@/types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const ACCESS_TOKEN_TTL_MS = 14 * 60 * 1000; // refresh 1 min before 15-min expiry
 
 interface AuthContextValue {

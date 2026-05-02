@@ -1,7 +1,7 @@
 
 // ── Auth Screen ───────────────────────────────────────────────────────────────
 
-function AuthScreen({ onLogin }) {
+function AuthScreen({ onLogin, sessionExpired = false }) {
   const [mode, setMode]       = React.useState("login"); // "login" | "create-org" | "invite"
   const [email, setEmail]     = React.useState("");
   const [password, setPass]   = React.useState("");
@@ -15,6 +15,13 @@ function AuthScreen({ onLogin }) {
   // Invite flow state
   const [inviteToken, setInviteToken] = React.useState("");
   const [invitePreview, setInvitePreviewData] = React.useState(null); // null | { email, org_name, invited_by, workspace_role }
+
+  React.useEffect(() => {
+    if (sessionExpired) {
+      setMode("login");
+      setError(null);
+    }
+  }, [sessionExpired]);
 
   // Auto-detect invite token from URL on mount (e.g. /register?invite=TOKEN)
   React.useEffect(() => {
@@ -146,6 +153,30 @@ function AuthScreen({ onLogin }) {
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 72px" }}>
         <div style={{ width: "100%", maxWidth: 360 }}>
 
+          {sessionExpired && (
+            <div
+              role="alert"
+              style={{
+                marginBottom: 28,
+                padding: "14px 16px",
+                borderRadius: 8,
+                border: "1px solid color-mix(in srgb, var(--risk-medium) 42%, var(--border))",
+                borderLeft: "4px solid var(--risk-medium)",
+                background: "color-mix(in srgb, var(--risk-medium) 10%, var(--surface))",
+              }}
+            >
+              <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.11em", color: "var(--risk-medium)", marginBottom: 10 }}>
+                Session expired
+              </p>
+              <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: 8, lineHeight: 1.4 }}>
+                You have been signed out because your session timed out or is no longer valid.
+              </p>
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, margin: 0 }}>
+                Sign in again below, or create an organisation / use an invite if you need a different account.
+              </p>
+            </div>
+          )}
+
           {/* Mode switch */}
           <div style={{ display: "flex", gap: 0, marginBottom: 40, borderBottom: "1px solid var(--border)" }}>
             {[{ key: "login", label: "Sign In" }, { key: "create-org", label: "Create Organisation" }, { key: "invite", label: "Use Invite" }].map(m => (
@@ -227,7 +258,7 @@ function AuthScreen({ onLogin }) {
                   <Field label="Department"        value={dept}     onChange={setDept}     placeholder="e.g. Corporate M&A"    style={inputStyle} />
                 </>
               )}
-              <Field label="Email" type="email" value={email} onChange={setEmail} placeholder="you@firm.com" autoComplete="email" style={inputStyle} />
+              <Field id="veridict-auth-email" label="Email" type="email" value={email} onChange={setEmail} placeholder="you@firm.com" autoComplete="email" style={inputStyle} />
               <Field label="Password" type="password" value={password} onChange={setPass} placeholder="••••••••" autoComplete={mode === "login" ? "current-password" : "new-password"} style={inputStyle} />
 
               {error && (
@@ -257,11 +288,11 @@ function AuthScreen({ onLogin }) {
 
 // ── Tiny field helper ─────────────────────────────────────────────────────────
 
-function Field({ label, value, onChange, type = "text", placeholder, autoComplete, style }) {
+function Field({ id, label, value, onChange, type = "text", placeholder, autoComplete, style }) {
   return (
     <div>
-      <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 8 }}>{label}</label>
-      <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete}
+      <label htmlFor={id} style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 8 }}>{label}</label>
+      <input id={id} type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete}
         style={style}
         onFocus={e => e.target.style.borderColor = "var(--text-2)"}
         onBlur={e => e.target.style.borderColor = "var(--border)"} />

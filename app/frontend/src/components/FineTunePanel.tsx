@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Play, Settings2, BarChart3, Terminal, CheckCircle2, XCircle, Loader2, ArrowUp, ArrowDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 function authHeaders(): Record<string, string> {
   const token = localStorage.getItem("veridict_token");
