@@ -326,6 +326,9 @@ class ParsedClauseRecord(Base):
     # OCR fallback indicator
     ocr_used: bool = Column(Boolean, nullable=False, default=False)
 
+    # Document reading order (0-based position in extraction sequence)
+    order_index: int = Column(Integer, nullable=True)
+
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
 
     # Relationships

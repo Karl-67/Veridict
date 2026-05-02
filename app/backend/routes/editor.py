@@ -694,7 +694,7 @@ async def list_clauses(run_id: str, db: DbSession) -> list[ClauseOut]:
     result = await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc())
     )
     clauses = result.scalars().all()
     return [
@@ -735,7 +735,7 @@ async def get_document_layout(run_id: str, db: DbSession) -> DocumentLayoutOut:
     clauses = (await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     annotations = (await db.execute(
@@ -815,7 +815,7 @@ async def export_edited_contract(run_id: str, db: DbSession) -> StreamingRespons
     clauses = (await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     edits: dict = run.contract_edits or {}
@@ -873,7 +873,7 @@ async def export_edited_contract_legacy(run_id: str, db: DbSession) -> Streaming
     clauses = (await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     annotations_rows = (await db.execute(
@@ -1591,7 +1591,7 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
     clauses = (await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     annotations = (await db.execute(
@@ -1863,7 +1863,7 @@ async def export_docx(run_id: str, db: DbSession, original: bool = False) -> Str
     clauses = (await db.execute(
         select(ParsedClauseRecord)
         .where(ParsedClauseRecord.run_id == run_id)
-        .order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
+        .order_by(ParsedClauseRecord.order_index.asc().nullslast(), ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     )).scalars().all()
 
     edits: dict = {} if original else (run.contract_edits or {})

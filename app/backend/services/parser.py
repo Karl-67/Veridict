@@ -332,6 +332,7 @@ def parse_pdf_to_canonical_document(pdf_bytes: bytes, settings: Settings) -> Can
                         "extraction_confidence": confidence,
                         "section_heading": None,
                         "ocr_used": used_ocr_fallback and not page.extract_text(),
+                        "order_index": len(clauses),
                     }
                 )
 
@@ -358,6 +359,7 @@ def build_clause_index(parsed_document: CanonicalDocument) -> list[dict]:
             "extraction_confidence": clause["extraction_confidence"],
             "section_heading": clause.get("section_heading"),
             "ocr_used": clause.get("ocr_used", False),
+            "order_index": clause.get("order_index"),
         }
         for clause in parsed_document.clauses
     ]

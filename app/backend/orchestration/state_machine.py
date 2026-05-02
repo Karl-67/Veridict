@@ -461,6 +461,7 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                         normalized_text=clause["normalized_text"],
                         extraction_confidence=clause["extraction_confidence"],
                         ocr_used=clause["ocr_used"],
+                        order_index=clause.get("order_index"),
                     )
                 )
             # Prime the pdf2docx cache now so the editor has full formatting on first open.
