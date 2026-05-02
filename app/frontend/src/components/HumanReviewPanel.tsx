@@ -151,8 +151,14 @@ export default function HumanReviewPanel({
                         <p className="text-sm italic text-text-secondary leading-relaxed">
                           &ldquo;{f.description}&rdquo;
                         </p>
-                        {f.recommendation && (
-                          <p className="text-xs text-text-primary/70">{f.recommendation}</p>
+                        {f.recommendation_detail && (
+                          <p className="text-xs text-text-primary/70">{f.recommendation_detail}</p>
+                        )}
+                        {f.recommended_change && (
+                          <div className="rounded-lg border border-risk-low/20 bg-risk-low/5 px-3 py-2">
+                            <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-risk-low">Suggested replacement</p>
+                            <p className="text-xs text-text-primary/80">{f.recommended_change}</p>
+                          </div>
                         )}
                       </div>
                     </motion.div>

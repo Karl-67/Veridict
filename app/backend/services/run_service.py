@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.config import Settings
-from app.backend.db.models import FindingRecord, HumanReviewRecord, RunRecord, StageExecutionRecord
+from app.backend.db.models import FindingRecord, HumanReviewRecord, ParsedClauseRecord, RunRecord, StageExecutionRecord
 from app.backend.models.schemas import (
     AdminMergeOutput,
     ContractEvidence,
@@ -136,13 +136,28 @@ def _coerce_rag_citations(raw_items: list | None) -> list[RagCitation]:
     return coerced
 
 
-def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
-    """Convert a FindingRecord DB row into a Finding schema object."""
+def _finding_record_to_finding(
+    fr: FindingRecord,
+    clause_lookup: dict[str, tuple[int, str]] | None = None,
+) -> Finding | None:
+    """Convert a FindingRecord DB row into a Finding schema object.
+
+    clause_lookup maps clause_uid → (page_number, normalized_text) from
+    ParsedClauseRecord so highlights land on the right page with the real text.
+    """
     try:
-        clause_text = fr.clause_text or fr.issue or ""
         clause_uid = fr.clause_uid or "unknown"
         agent = fr.source_agent or "unknown"
         branch = "kira" if agent.startswith("kira") else "harvey"
+
+        # Prefer actual parsed clause text + page for accurate highlighting.
+        page_num = 1
+        clause_text = fr.clause_text or fr.issue or ""
+        if clause_lookup and clause_uid in clause_lookup:
+            page_num, parsed_text = clause_lookup[clause_uid]
+            if parsed_text:
+                clause_text = parsed_text
+
         contract_evidence = _coerce_contract_evidence(fr.contract_evidence, clause_uid)
         rag_citations = _coerce_rag_citations(fr.rag_citations)
         return Finding.model_construct(
@@ -155,6 +170,7 @@ def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
             description=fr.issue,
             recommendation="negotiate",
             recommendation_detail=fr.recommendation or "",
+            recommended_change=fr.recommended_change,
             contract_evidence=contract_evidence,
             rag_citations=rag_citations,
             evidence=[
@@ -163,7 +179,7 @@ def _finding_record_to_finding(fr: FindingRecord) -> Finding | None:
                     document_hash="",
                     parser_version="",
                     clause_uid=clause_uid,
-                    page=evidence.page,
+                    page=evidence.page if contract_evidence else page_num,
                     bbox=[0.0, 0.0, 0.0, 0.0],
                     normalized_text=evidence.text,
                     extraction_confidence=evidence.confidence,
@@ -235,6 +251,14 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
 
     final_reviewer is no longer a valid source and is skipped.
     """
+    inactive_result = await session.execute(
+        select(FindingRecord.id).where(
+            FindingRecord.run_id == run_id,
+            (FindingRecord.dismissed_at.is_not(None)) | (FindingRecord.accepted_at.is_not(None)),
+        )
+    )
+    inactive_finding_ids = {str(row[0]) for row in inactive_result.all()}
+
     # 1. Primary: admin_merge structured output (latest round).
     stage_result = await session.execute(
         select(StageExecutionRecord)
@@ -247,39 +271,60 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
     )
     stage = stage_result.scalars().first()
     merged_findings: list[Finding] = []
-    seen_clause_uids: set[str] = set()
+    seen_finding_keys: set[tuple[str, str, str]] = set()
     if stage and stage.structured_output:
         for f in stage.structured_output.get("merged_findings", []):
             try:
                 finding = Finding.model_validate(f)
+                if finding.finding_id in inactive_finding_ids:
+                    continue
                 merged_findings.append(finding)
-                seen_clause_uids.add(finding.clause_uid)
+                seen_finding_keys.add((finding.clause_uid, finding.issue_type, finding.description))
             except Exception:
                 continue
 
     # 2. Supplement with FindingRecord rows not already covered.
+    # Exclude findings that the user has dismissed or accepted via the editor.
     db_result = await session.execute(
         select(FindingRecord)
-        .where(FindingRecord.run_id == run_id)
+        .where(
+            FindingRecord.run_id == run_id,
+            FindingRecord.dismissed_at.is_(None),
+            FindingRecord.accepted_at.is_(None),
+        )
         .order_by(FindingRecord.created_at.asc())
     )
     db_findings = db_result.scalars().all()
 
-    best_by_clause: dict[str, FindingRecord] = {}
+    # Build clause lookup for accurate page numbers and clause text.
+    clause_result = await session.execute(
+        select(
+            ParsedClauseRecord.clause_uid,
+            ParsedClauseRecord.page_number,
+            ParsedClauseRecord.normalized_text,
+        ).where(ParsedClauseRecord.run_id == run_id)
+    )
+    clause_lookup: dict[str, tuple[int, str]] = {
+        row.clause_uid: (row.page_number, row.normalized_text)
+        for row in clause_result.all()
+    }
+
+    selected_records: list[FindingRecord] = []
+    seen_db_keys: set[tuple[str, str, str]] = set()
     for fr in db_findings:
-        uid = fr.clause_uid or str(fr.id)
-        if uid in seen_clause_uids:
-            continue
         agent = fr.source_agent or ""
         # final_reviewer is not a valid source in the current topology.
         if agent.startswith("final_reviewer"):
             continue
-        existing = best_by_clause.get(uid)
-        if existing is None or _source_priority(fr.source_agent) < _source_priority(existing.source_agent):
-            best_by_clause[uid] = fr
+        key = (fr.clause_uid or str(fr.id), "liability_exposure", fr.issue or "")
+        if key in seen_finding_keys or key in seen_db_keys:
+            continue
+        seen_db_keys.add(key)
+        selected_records.append(fr)
 
-    for fr in best_by_clause.values():
-        finding = _finding_record_to_finding(fr)
+    selected_records.sort(key=lambda fr: (_source_priority(fr.source_agent), fr.created_at))
+    for fr in selected_records:
+        finding = _finding_record_to_finding(fr, clause_lookup=clause_lookup)
         if finding is not None:
             merged_findings.append(finding)
 
@@ -343,7 +388,15 @@ def _build_final_verdict(
     unresolved_by_consensus flags, and evidence per evidence-schema.
     """
     if run.verdict_payload is not None:
-        cached = FinalVerdict.model_validate(run.verdict_payload)
+        # Backfill fields added after old runs were finalized so legacy payloads still validate.
+        payload: dict = {**run.verdict_payload}
+        payload.setdefault("run_id", run.id)
+        payload.setdefault("finalized_at", (run.updated_at or run.created_at).isoformat())
+        payload.setdefault("overall_risk_level", "low")
+        payload.setdefault("summary", "")
+        payload.setdefault("recommendations", [])
+        payload.setdefault("human_action", "approved")
+        cached = FinalVerdict.model_validate(payload)
         # Backfill findings if the cached payload has none (legacy runs stored before this fix).
         if not cached.findings and full_findings:
             annotated = _annotate_consensus(full_findings, harvey_block, kira_block)
@@ -372,7 +425,11 @@ def _build_final_verdict(
 
     recommendations: list[str] = []
     for fr in findings:
-        if fr.recommendation:
+        if fr.accepted_at is not None or fr.dismissed_at is not None:
+            continue
+        if fr.recommended_change:
+            recommendations.append(fr.recommended_change)
+        elif fr.recommendation:
             recommendations.append(fr.recommendation)
 
     # Build summary incorporating branch breakdown.

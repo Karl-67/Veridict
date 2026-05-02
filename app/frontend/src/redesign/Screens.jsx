@@ -1,7 +1,7 @@
 
 // ── Dashboard Screen ──────────────────────────────────────────────────────────
 
-function DashboardScreen({ navigate }) {
+function DashboardScreen({ navigate, workspaceFilter, onClearWorkspaceFilter }) {
   const [filter, setFilter] = React.useState("all");
   const [contracts, setContracts] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -16,17 +16,24 @@ function DashboardScreen({ navigate }) {
     return () => { active = false; };
   }, []);
 
-  const IN_PROGRESS_STATES = ["processing", "under_review"];
+  const IN_PROGRESS_STATES = ["created", "processing", "under_review"];
 
-  const total     = contracts.length;
-  const awaiting  = contracts.filter(c => c.latestRunState === "awaiting_human_review").length;
-  const inProg    = contracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState)).length;
-  const finalized = contracts.filter(c => c.latestRunState === "finalized").length;
+  const scopedContracts = workspaceFilter
+    ? contracts.filter(c =>
+        (workspaceFilter.id && c.workspaceId === workspaceFilter.id) ||
+        c.workspace === workspaceFilter.name
+      )
+    : contracts;
 
-  const filtered = filter === "all"      ? contracts
-    : filter === "review"   ? contracts.filter(c => c.latestRunState === "awaiting_human_review")
-    : filter === "progress" ? contracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState))
-    : contracts.filter(c => c.latestRunState === "finalized");
+  const total     = scopedContracts.length;
+  const awaiting  = scopedContracts.filter(c => c.latestRunState === "awaiting_human_review").length;
+  const inProg    = scopedContracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState)).length;
+  const finalized = scopedContracts.filter(c => c.latestRunState === "finalized").length;
+
+  const filtered = filter === "all"      ? scopedContracts
+    : filter === "review"   ? scopedContracts.filter(c => c.latestRunState === "awaiting_human_review")
+    : filter === "progress" ? scopedContracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState))
+    : scopedContracts.filter(c => c.latestRunState === "finalized");
 
   return (
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, animation: "fadeIn 0.35s ease both" }}>
@@ -35,6 +42,16 @@ function DashboardScreen({ navigate }) {
         <div>
           <p style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 6 }}>{greeting()}, {(window.verdictApi.currentUser()?.display_name || "").split(" ")[0] || "there"}</p>
           <h1 style={{ fontFamily: "var(--h-font)", fontSize: 42, fontWeight: 700, letterSpacing: "-0.025em", color: "var(--text)", lineHeight: 1 }}>Contracts</h1>
+          {workspaceFilter && (
+            <button
+              onClick={onClearWorkspaceFilter}
+              style={{ marginTop: 12, display: "inline-flex", alignItems: "center", gap: 7, border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface)", color: "var(--text-2)", padding: "5px 9px", fontSize: 12, cursor: "pointer" }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: 2, background: "var(--accent)" }} />
+              {workspaceFilter.name}
+              <span style={{ color: "var(--text-3)" }}>Clear</span>
+            </button>
+          )}
         </div>
         <button onClick={() => navigate("new_contract")} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 8, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", transition: "opacity 0.15s", flexShrink: 0 }}
           onMouseEnter={e => e.currentTarget.style.opacity = "0.82"}
@@ -317,7 +334,7 @@ const STAGE_LABELS = {
   parse_ocr_normalize:    "Parsing & OCR",
   clause_index:           "Clause Indexing",
   harvey_context_load:    "Loading Policy Context",
-  harvey_review_block:    "AI Review",
+  harvey_review_block:    "Policy Review",
   kira_review_block:      "Compliance Review",
   admin_merge:            "Merging Analysis",
   final_review_block:     "Final Review",
@@ -329,7 +346,6 @@ const DISPLAY_STAGE_NAMES = [
   "parse_ocr_normalize",
   "clause_index",
   "harvey_context_load",
-  "harvey_review_block",
   "kira_review_block",
   "admin_merge",
   "awaiting_human_review",

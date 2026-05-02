@@ -1,916 +1,699 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
-import "react-pdf/dist/Page/TextLayer.css";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import { Loader2, AlertCircle, MessageSquare, X, Pencil, Trash2, Check, FileEdit } from "lucide-react";
-import { createContractComment, deleteContractComment, updateContractComment, getRunFileUrl, listContractComments } from "@/lib/api";
-import type { Comment, CommentAnchor, DocumentComment, Finding, FindingAnchor } from "@/types";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Check,
+  ChevronDown,
+  Download,
+  Edit3,
+  FileText,
+  GitCompare,
+  MessageSquare,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  acceptFinding,
+  createAnnotation,
+  deleteAnnotation,
+  dismissFinding,
+  getDocxExportUrl,
+  getEditedPdfUrl,
+  getRunFileUrl,
+  listAnnotations,
+} from "@/lib/api";
+import type {
+  DocumentAnnotation,
+  Finding,
+} from "@/types";
 import { cn } from "@/lib/utils";
-import ContractEditor from "@/components/ContractEditor";
+import DocumentEditor, { type CommentDraft } from "@/components/DocumentEditor";
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url
-).toString();
-
-// ── Severity styling ─────────────────────────────────────────────────────────
-
-const SEVERITY_CLASSES: Record<string, string> = {
-  high: "cr-high",
-  critical: "cr-high",
-  medium: "cr-medium",
-  low: "cr-low",
+const SEV_COLOR: Record<string, string> = {
+  critical: "#dc2626",
+  high: "#dc2626",
+  medium: "#d97706",
+  low: "#16a34a",
 };
 
-const SEVERITY_CHIP: Record<string, string> = {
-  high: "bg-risk-high/15 text-risk-high border-risk-high/30",
-  critical: "bg-risk-high/15 text-risk-high border-risk-high/30",
-  medium: "bg-risk-medium/15 text-risk-medium border-risk-medium/30",
-  low: "bg-risk-low/15 text-risk-low border-risk-low/30",
+const SEV_BG: Record<string, string> = {
+  critical: "rgba(220,38,38,0.07)",
+  high: "rgba(220,38,38,0.07)",
+  medium: "rgba(217,119,6,0.07)",
+  low: "rgba(22,163,74,0.07)",
 };
 
-// ── Ordered findings ──────────────────────────────────────────────────────────
+const SEV_BORDER: Record<string, string> = {
+  critical: "rgba(220,38,38,0.25)",
+  high: "rgba(220,38,38,0.25)",
+  medium: "rgba(217,119,6,0.25)",
+  low: "rgba(22,163,74,0.25)",
+};
+
+const COMMENT_COLOR = "#2563eb";
+const COMMENT_BG = "rgba(37,99,235,0.06)";
+const COMMENT_BORDER = "rgba(37,99,235,0.22)";
+
+type ViewMode = "comment" | "edit";
 
 interface OrderedFinding {
   finding: Finding;
-  index: number;       // 1-based display number
-  firstPage: number | null;   // earliest page this finding appears on
-  anchors: FindingAnchor[];
+  index: number;
 }
-
-function evidenceFor(finding: Finding) {
-  return Array.isArray(finding.evidence) ? finding.evidence : [];
-}
-
-function normalizeForMatch(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function usableEvidenceText(value: string): string {
-  const normalized = normalizeForMatch(value);
-  // Very long spans are usually whole-page/whole-document extraction artifacts.
-  // Using them for highlighting paints unrelated text, so keep them for page
-  // placement only and require a focused quote for marks.
-  return normalized.length <= 900 ? normalized : "";
-}
-
-function wordsForMatch(value: string): string[] {
-  return normalizeForMatch(value).match(/\b[\w'-]{4,}\b/g) ?? [];
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function uniqueAnchors(anchors: FindingAnchor[]): FindingAnchor[] {
-  const seen = new Set<string>();
-  return anchors.filter((anchor) => {
-    const key = `${anchor.pageNumber}:${normalizeForMatch(anchor.selectedText)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function anchorsFor(finding: Finding): FindingAnchor[] {
-  const anchors: FindingAnchor[] = [];
-
-  for (const evidence of finding.contract_evidence ?? []) {
-    const selectedText = usableEvidenceText(evidence.text ?? "");
-    const pageNumber = Number(evidence.page);
-    if (!selectedText || !Number.isFinite(pageNumber) || pageNumber < 1) continue;
-    anchors.push({
-      findingId: finding.finding_id,
-      pageNumber,
-      selectedText,
-      source: "contract_evidence",
-      confidence: evidence.confidence,
-    });
-  }
-
-  for (const evidence of evidenceFor(finding)) {
-    const selectedText = usableEvidenceText(evidence.normalized_text ?? "");
-    const pageNumber = Number(evidence.page);
-    if (!selectedText || !Number.isFinite(pageNumber) || pageNumber < 1) continue;
-    anchors.push({
-      findingId: finding.finding_id,
-      pageNumber,
-      selectedText,
-      bbox: evidence.bbox,
-      source: "legacy_evidence",
-      confidence: evidence.extraction_confidence,
-    });
-  }
-
-  return uniqueAnchors(anchors);
-}
-
-function anchorMatchesText(anchor: FindingAnchor | CommentAnchor, normalizedItem: string): boolean {
-  const quote = usableEvidenceText(anchor.selectedText);
-  if (!quote) return false;
-  if (quote.includes(normalizedItem) && normalizedItem.length >= 10) return true;
-  if (normalizedItem.includes(quote) && quote.length >= 18) return true;
-
-  const itemWords = wordsForMatch(normalizedItem);
-  const quoteWords = new Set(wordsForMatch(quote));
-  if (itemWords.length === 0 || quoteWords.size === 0) return false;
-
-  const overlap = itemWords.filter((w) => quoteWords.has(w));
-  const coverage = overlap.length / itemWords.length;
-  return itemWords.length >= 3 && coverage >= 0.72 && overlap.some((w) => w.length >= 7);
-}
-
-function orderFindings(findings: Finding[]): OrderedFinding[] {
-  return findings
-    .map((f) => {
-      const anchors = anchorsFor(f);
-      return {
-        finding: f,
-        anchors,
-        firstPage: anchors.length > 0 ? Math.min(...anchors.map((a) => a.pageNumber)) : null,
-      };
-    })
-    .sort((a, b) => (a.firstPage ?? 999) - (b.firstPage ?? 999))
-    .map((item, i) => ({ ...item, index: i + 1 }));
-}
-
-// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface ContractReaderProps {
   runId: string;
   findings: Finding[];
-  workspaceId?: string | null;
-  contractId?: string | number | null;
-  filename?: string;
-  currentUserName?: string;
+  jumpToIndex?: number | null;
+  onJumpHandled?: () => void;
 }
 
-interface SelectionTarget {
-  anchor: CommentAnchor;
-  top: number;
-  left: number;
+function orderFindings(findings: Finding[]): OrderedFinding[] {
+  return findings.map((f, i) => ({ finding: f, index: i + 1 }));
 }
 
-function mapApiComment(comment: Comment, runId: string): DocumentComment | null {
-  if (!comment.anchor || !comment.page_number || !comment.selected_text) return null;
-  return {
-    id: comment.id,
-    runId,
-    workspaceId: comment.workspace_id ?? comment.anchor.workspaceId,
-    contractId: comment.contract_id ?? comment.anchor.contractId,
-    pageNumber: comment.page_number,
-    selectedText: comment.selected_text,
-    anchor: comment.anchor,
-    userId: comment.author_id,
-    username: comment.author_name,
-    note: comment.body,
-    createdAt: comment.created_at,
-    updatedAt: comment.updated_at,
-  };
+function firstFindingQuote(finding: Finding): string {
+  return (
+    finding.contract_evidence?.[0]?.text ||
+    finding.evidence?.[0]?.normalized_text ||
+    "No direct quote available."
+  );
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+type DiffChunk = { type: "keep" | "del" | "add"; text: string };
 
-export default function ContractReader({ runId, findings, workspaceId = null, contractId = null, filename = "contract.pdf", currentUserName }: ContractReaderProps) {
-  const [numPages, setNumPages] = useState<number | null>(null);
-  const [activePage, setActivePage] = useState(1);
-  const [editorMode, setEditorMode] = useState(false);   // tracks which page is in view (for sidebar chips)
-  const [loadError, setLoadError] = useState(false);
-  const [viewerWidth, setViewerWidth] = useState(800);
-  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
-  const [comments, setComments] = useState<DocumentComment[]>([]);
-  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
-  const [selectionTarget, setSelectionTarget] = useState<SelectionTarget | null>(null);
-  const [commentDraft, setCommentDraft] = useState("");
-  const [commentError, setCommentError] = useState<string | null>(null);
-  const [postingComment, setPostingComment] = useState(false);
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
-  const viewerRef = useRef<HTMLDivElement | null>(null);
-  // per-page shell refs so we can locate which page a selection is on
-  const pageShellRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+function computeWordDiff(original: string, replacement: string): DiffChunk[] {
+  const origWords = original.trim().split(/\s+/).filter(Boolean);
+  const replWords = replacement.trim().split(/\s+/).filter(Boolean);
+  const m = origWords.length;
+  const n = replWords.length;
+  if (m > 400 || n > 400) {
+    return [
+      { type: "del", text: original.trim() },
+      { type: "add", text: replacement.trim() },
+    ];
+  }
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = origWords[i - 1].toLowerCase() === replWords[j - 1].toLowerCase()
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const ops: Array<{ type: "keep" | "del" | "add"; word: string }> = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && origWords[i - 1].toLowerCase() === replWords[j - 1].toLowerCase()) {
+      ops.unshift({ type: "keep", word: replWords[j - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.unshift({ type: "add", word: replWords[j - 1] }); j--;
+    } else {
+      ops.unshift({ type: "del", word: origWords[i - 1] }); i--;
+    }
+  }
+  const chunks: DiffChunk[] = [];
+  for (const op of ops) {
+    const last = chunks[chunks.length - 1];
+    if (last && last.type === op.type) last.text += " " + op.word;
+    else chunks.push({ type: op.type, text: op.word });
+  }
+  return chunks;
+}
 
-  const ordered = useMemo(() => orderFindings(findings), [findings]);
+function DiffView({ chunks, fontSize = 11 }: { chunks: DiffChunk[]; fontSize?: number }) {
+  return (
+    <span style={{ fontSize, lineHeight: 1.5, fontFamily: "Georgia, 'Times New Roman', serif", wordBreak: "break-word" }}>
+      {chunks.map((chunk, i) => {
+        if (chunk.type === "del")
+          return <span key={i} style={{ textDecoration: "line-through", color: "#dc2626", opacity: 0.85 }}>{chunk.text} </span>;
+        if (chunk.type === "add")
+          return <span key={i} style={{ color: "#15803d", background: "rgba(21,128,61,0.08)", borderRadius: 2 }}>{chunk.text} </span>;
+        return <span key={i} style={{ color: "#374151" }}>{chunk.text} </span>;
+      })}
+    </span>
+  );
+}
+
+export default function ContractReader({ runId, findings, jumpToIndex, onJumpHandled }: ContractReaderProps) {
+  const [viewMode, setViewMode] = useState<ViewMode>("comment");
+  const [showRedlines, setShowRedlines] = useState(true);
+  const [annotations, setAnnotations] = useState<DocumentAnnotation[]>([]);
+  const [hiddenFindingIds, setHiddenFindingIds] = useState<Set<string>>(new Set());
+  const [expandedFindingIds, setExpandedFindingIds] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState("");
+  const [selectionDraft, setSelectionDraft] = useState<CommentDraft | null>(null);
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
+  const [draftRefreshKey, setDraftRefreshKey] = useState(0);
+
   const fileUrl = getRunFileUrl(runId);
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
 
-  // measure PDF column width
   useEffect(() => {
-    const el = viewerRef.current;
-    if (!el) return;
-    const update = () => setViewerWidth(Math.max(320, Math.min(900, Math.floor(el.getBoundingClientRect().width))));
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // load comments
-  useEffect(() => {
-    let active = true;
-    setCommentError(null);
-    listContractComments(runId)
-      .then((items) => {
-        if (!active) return;
-        setComments(items.map((item) => mapApiComment(item, runId)).filter(Boolean) as DocumentComment[]);
-      })
-      .catch(() => { if (active) setCommentError("Comments could not be loaded."); });
-    return () => { active = false; };
-  }, [runId]);
-
-  // track which page is currently visible via IntersectionObserver
-  useEffect(() => {
-    if (!viewerRef.current) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (visible.length > 0) {
-          const pageNum = Number((visible[0].target as HTMLElement).dataset.pageNumber);
-          if (pageNum > 0) setActivePage(pageNum);
-        }
-      },
-      { threshold: 0.3 }
-    );
-    // observe all page shells once they mount
-    const shellEls = viewerRef.current.querySelectorAll<HTMLElement>("[data-page-number]");
-    shellEls.forEach((el) => io.observe(el));
-    return () => io.disconnect();
-  }, [numPages]); // re-run when pages load
-
-  // Build a lookup: page → list of OrderedFinding on that page
-  const findingsByPage = useMemo(() => {
-    const map = new Map<number, OrderedFinding[]>();
-    for (const of_ of ordered) {
-      const pages = of_.anchors
-        .map((anchor) => anchor.pageNumber)
-        .filter((p) => Number.isFinite(p) && p > 0);
-      const uniquePages = [...new Set(pages)];
-      for (const p of uniquePages) {
-        if (!map.has(p)) map.set(p, []);
-        map.get(p)!.push(of_);
+    function onClickOutside(e: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
       }
     }
-    return map;
-  }, [ordered]);
-
-  const commentsByPage = useMemo(() => {
-    const map = new Map<number, DocumentComment[]>();
-    for (const comment of comments) {
-      if (!map.has(comment.pageNumber)) map.set(comment.pageNumber, []);
-      map.get(comment.pageNumber)!.push(comment);
-    }
-    return map;
-  }, [comments]);
-
-  const onDocumentLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
-    setNumPages(numPages);
-    setLoadError(false);
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  const onDocumentLoadError = useCallback(() => setLoadError(true), []);
-
-  const scrollIntoViewIfNeeded = useCallback((el: Element) => {
-    const rect = el.getBoundingClientRect();
-    const fullyVisible = rect.top >= 80 && rect.bottom <= window.innerHeight - 40;
-    if (!fullyVisible) el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-  }, []);
-
-  const scrollToSelector = useCallback((selector: string, fallbackPageNum?: number) => {
-    window.setTimeout(() => {
-      const el = viewerRef.current?.querySelector(selector);
-      if (el) {
-        scrollIntoViewIfNeeded(el);
-      } else if (fallbackPageNum) {
-        // mark not in DOM (no text anchor) — scroll to the page shell instead
-        const shell = pageShellRefs.current.get(fallbackPageNum);
-        if (shell) scrollIntoViewIfNeeded(shell);
-      }
-    }, 80);
-  }, [scrollIntoViewIfNeeded]);
-
-  const goToFinding = useCallback((item: OrderedFinding) => {
-    setSelectedCommentId(null);
-    setSelectedFindingId(item.finding.finding_id);
-    scrollToSelector(
-      `[data-finding-id="${CSS.escape(item.finding.finding_id)}"]`,
-      item.firstPage ?? undefined
-    );
-  }, [scrollToSelector]);
-
-  const goToComment = useCallback((comment: DocumentComment) => {
-    setSelectedFindingId(null);
-    setSelectedCommentId(comment.id);
-    scrollToSelector(
-      `[data-comment-id="${CSS.escape(comment.id)}"]`,
-      comment.pageNumber
-    );
-  }, [scrollToSelector]);
-
-  const handleViewerClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    const findingMark = target.closest<HTMLElement>("[data-finding-id]");
-    if (findingMark?.dataset.findingId) {
-      setSelectedCommentId(null);
-      setSelectedFindingId(findingMark.dataset.findingId);
-      return;
-    }
-    const commentMark = target.closest<HTMLElement>("[data-comment-id]");
-    if (commentMark?.dataset.commentId) {
-      setSelectedFindingId(null);
-      setSelectedCommentId(commentMark.dataset.commentId);
-    }
-  }, []);
-
-  const captureSelection = useCallback(() => {
-    const selection = window.getSelection();
-    const text = selection?.toString().replace(/\s+/g, " ").trim() ?? "";
-    if (!selection || selection.rangeCount === 0 || text.length < 2) {
-      setSelectionTarget(null);
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-
-    // detect which page this selection is on
-    let detectedPageNum: number | null = null;
-    let detectedPageEl: HTMLElement | null = null;
-    for (const [pageNum, shell] of pageShellRefs.current) {
-      const pageEl = shell.querySelector<HTMLElement>(".react-pdf__Page");
-      if (pageEl && pageEl.contains(range.commonAncestorContainer)) {
-        detectedPageNum = pageNum;
-        detectedPageEl = pageEl;
-        break;
-      }
-    }
-    if (!detectedPageEl || !detectedPageNum) {
-      setSelectionTarget(null);
-      return;
-    }
-
-    const pageRect = detectedPageEl.getBoundingClientRect();
-    const rects = Array.from(range.getClientRects())
-      .filter((rect) => rect.width > 2 && rect.height > 2)
-      .map((rect) => ({
-        x: ((rect.left - pageRect.left) / pageRect.width) * 100,
-        y: ((rect.top - pageRect.top) / pageRect.height) * 100,
-        width: (rect.width / pageRect.width) * 100,
-        height: (rect.height / pageRect.height) * 100,
-      }));
-    if (rects.length === 0) return;
-
-    const lastRect = range.getBoundingClientRect();
-    const viewerRect = viewerRef.current?.getBoundingClientRect();
-    setSelectionTarget({
-      anchor: {
-        workspaceId,
-        contractId,
-        runId,
-        pageNumber: detectedPageNum,
-        selectedText: text,
-        rects,
-      },
-      top: viewerRect ? lastRect.bottom - viewerRect.top + 8 : lastRect.bottom + 8,
-      left: viewerRect ? Math.min(lastRect.left - viewerRect.left, viewerRect.width - 180) : lastRect.left,
-    });
-  }, [contractId, runId, workspaceId]);
-
-  const addComment = useCallback(async () => {
-    const note = commentDraft.trim();
-    if (!selectionTarget || !note || postingComment) return;
-    setPostingComment(true);
-    setCommentError(null);
-    try {
-      const saved = await createContractComment(runId, {
-        runId,
-        workspaceId,
-        contractId,
-        pageNumber: selectionTarget.anchor.pageNumber,
-        selectedText: selectionTarget.anchor.selectedText,
-        anchor: selectionTarget.anchor,
-        note,
-      });
-      const mapped = mapApiComment(saved, runId);
-      if (mapped) setComments((items) => [...items, mapped]);
-      setSelectedCommentId(saved.id);
-      setCommentDraft("");
-      setSelectionTarget(null);
-      window.getSelection()?.removeAllRanges();
-    } catch {
-      setCommentError("Comment could not be saved.");
-    } finally {
-      setPostingComment(false);
-    }
-  }, [commentDraft, contractId, postingComment, runId, selectionTarget, workspaceId]);
-
-  const deleteComment = useCallback(async (commentId: string) => {
-    try {
-      await deleteContractComment(runId, commentId);
-      setComments((items) => items.filter((c) => c.id !== commentId));
-      if (selectedCommentId === commentId) setSelectedCommentId(null);
-    } catch {
-      setCommentError("Could not delete comment.");
-    }
-  }, [runId, selectedCommentId]);
-
-  const saveEditComment = useCallback(async (commentId: string) => {
-    const note = editDraft.trim();
-    if (!note) return;
-    try {
-      const saved = await updateContractComment(runId, commentId, note);
-      setComments((items) => items.map((c) =>
-        c.id === commentId ? { ...c, note: saved.body } : c
-      ));
-      setEditingCommentId(null);
-      setEditDraft("");
-    } catch {
-      setCommentError("Could not update comment.");
-    }
-  }, [runId, editDraft]);
-
-  const makeTextRenderer = useCallback(
-    (pageNum: number) => {
-      const pagefindings = findingsByPage.get(pageNum) ?? [];
-      return (textItem: { str: string }) => {
-        const str = textItem.str;
-        const trimmed = str.trim();
-        if (trimmed.length < 8) return str;
-        const normalizedItem = normalizeForMatch(trimmed);
-        if (normalizedItem.length < 8) return str;
-        const match = pagefindings.find((of_) =>
-          of_.anchors
-            .filter((anchor) => anchor.pageNumber === pageNum)
-            .some((anchor) => anchorMatchesText(anchor, normalizedItem))
-        );
-        if (match) {
-          const cls = SEVERITY_CLASSES[match.finding.severity] ?? "cr-low";
-          const selected = selectedFindingId === match.finding.finding_id ? "cr-selected" : "";
-          const rawTip = `#${match.index} · ${match.finding.description.slice(0, 120)}${match.finding.description.length > 120 ? "..." : ""}`;
-          return `<mark class="cr-mark ${cls} ${selected}" data-finding-id="${escapeHtml(match.finding.finding_id)}" data-num="#${match.index}" data-tip="${escapeHtml(rawTip)}">${str}</mark>`;
-        }
-        return str;
-      };
-    },
-    [findingsByPage, selectedFindingId]
+  const ordered = useMemo(
+    () => orderFindings(findings.filter((f) => !hiddenFindingIds.has(f.finding_id))),
+    [findings, hiddenFindingIds],
   );
 
-  const pagefindings = findingsByPage.get(activePage) ?? [];
+  // Load annotations and poll
+  useEffect(() => {
+    if (!runId) return;
+    listAnnotations(runId).then(setAnnotations).catch(() => {});
+    const id = setInterval(() => {
+      listAnnotations(runId).then(setAnnotations).catch(() => {});
+    }, 8000);
+    return () => clearInterval(id);
+  }, [runId]);
 
-  // All anchored comments for the left rail, sorted chronologically
-  const railComments = useMemo(() => {
-    const anchored = comments.filter((c) => c.anchor && c.pageNumber);
-    return [...anchored]
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .map((comment, i) => ({ comment, number: i + 1 }));
-  }, [comments]);
+  // Jump-to-finding: scroll the browser to that finding's card in the right sidebar
+  useEffect(() => {
+    if (jumpToIndex == null) return;
+    onJumpHandled?.();
+  }, [jumpToIndex, onJumpHandled]);
 
-  const commentNumbers = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const item of railComments) map.set(item.comment.id, item.number);
-    return map;
-  }, [railComments]);
+  async function handleAccept(findingId: string, replacementText: string) {
+    setActionError("");
+    try {
+      await acceptFinding(runId, findingId, replacementText);
+      setHiddenFindingIds((prev) => new Set(prev).add(findingId));
+      setDraftRefreshKey((k) => k + 1);
+    } catch (err) {
+      setActionError((err as Error).message || "Failed to accept suggestion.");
+    }
+  }
+
+  async function handleDismiss(findingId: string) {
+    setActionError("");
+    try {
+      await dismissFinding(runId, findingId);
+      setHiddenFindingIds((prev) => new Set(prev).add(findingId));
+    } catch (err) {
+      setActionError((err as Error).message || "Failed to dismiss suggestion.");
+    }
+  }
+
+  async function saveSelectionComment() {
+    if (!selectionDraft) return;
+    setActionError("");
+    try {
+      const annotation = await createAnnotation(runId, {
+        clause_uid: selectionDraft.clauseUid,
+        annotation_type: "comment",
+        body: commentBody.trim(),
+        selected_text: selectionDraft.selectedText,
+        span_start: selectionDraft.fromPos,
+        span_end: selectionDraft.toPos,
+        page_number: selectionDraft.pageNumber,
+      });
+      setAnnotations((prev) => [...prev, annotation]);
+      setSelectionDraft(null);
+      setCommentBody("");
+      setDraftRefreshKey((k) => k + 1);
+    } catch (err) {
+      setActionError((err as Error).message || "Failed to save comment.");
+    }
+  }
+
+  async function removeAnnotation(annotationId: string) {
+    await deleteAnnotation(runId, annotationId);
+    setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
+    setDraftRefreshKey((k) => k + 1);
+  }
+
+  const [commentBody, setCommentBody] = useState("");
+  // Clear body when a new selection draft is set
+  useEffect(() => { if (selectionDraft) setCommentBody(""); }, [selectionDraft]);
 
   return (
     <div className="w-full">
-      {/* Injected CSS for highlights and tooltip */}
-      <style>{`
-        .cr-mark {
-          border-radius: 2px;
-          cursor: pointer;
-          position: relative;
-          transition: opacity 0.15s;
-          color: transparent; /* keep text layer invisible; only show background */
-          box-shadow: 0 0 0 1px rgba(0,0,0,0.02);
-        }
-        .cr-mark.cr-high   { background: rgba(239,68,68,0.38);  }
-        .cr-mark.cr-medium { background: rgba(234,179,8,0.42);  }
-        .cr-mark.cr-low    { background: rgba(34,197,94,0.36);  }
-        .cr-mark::before {
-          content: attr(data-num);
-          position: absolute;
-          top: -0.95em;
-          left: 0;
-          min-width: 1.5em;
-          height: 1.35em;
-          padding: 0 0.32em;
-          border-radius: 4px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 0.62em;
-          font-weight: 800;
-          line-height: 1;
-          color: #fff;
-          z-index: 20;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.12s;
-        }
-        .cr-mark.cr-high::before   { background: rgb(220,38,38);  }
-        .cr-mark.cr-medium::before { background: rgb(202,138,4);  }
-        .cr-mark.cr-low::before    { background: rgb(22,163,74);  }
-        .cr-mark.cr-selected::before { opacity: 1; }
-        .cr-mark:hover { opacity: 0.78; }
-        .cr-mark.cr-selected {
-          opacity: 0.98;
-          box-shadow: 0 0 0 2px rgba(37,99,235,0.75), 0 0 0 4px rgba(37,99,235,0.14);
-        }
-        .cr-mark::after {
-          content: attr(data-tip);
-          position: absolute;
-          bottom: calc(100% + 10px);
-          left: 50%;
-          transform: translateX(-50%);
-          background: var(--color-surface, #1a1a1a);
-          border: 1px solid var(--color-border, #333);
-          color: var(--color-text-primary, #fff);
-          font-size: 11px;
-          line-height: 1.4;
-          padding: 6px 10px;
-          border-radius: 6px;
-          white-space: pre-wrap;
-          max-width: 260px;
-          word-break: break-word;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.15s;
-          z-index: 50;
-        }
-        .cr-mark:hover::after { opacity: 1; }
-        .cr-comment-rect {
-          position: absolute;
-          z-index: 25;
-          border-radius: 2px;
-          cursor: pointer;
-          background: rgba(99,102,241,0.14);
-          border-bottom: 2px solid rgba(99,102,241,0.62);
-          transition: background 0.12s, box-shadow 0.12s;
-        }
-        .cr-comment-rect:hover,
-        .cr-comment-rect.cr-comment-selected {
-          background: rgba(99,102,241,0.24);
-          box-shadow: 0 0 0 2px rgba(99,102,241,0.42);
-        }
-        .cr-comment-num {
-          position: absolute;
-          top: -0.9rem;
-          left: 0;
-          min-width: 1.35rem;
-          height: 1.2rem;
-          padding: 0 0.25rem;
-          border-radius: 4px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          background: rgb(79,70,229);
-          color: #fff;
-          font-size: 0.58rem;
-          font-weight: 800;
-          line-height: 1;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.12s;
-        }
-        .cr-comment-rect.cr-comment-selected .cr-comment-num { opacity: 1; }
-        .cr-comment-rect:hover .cr-comment-num { opacity: 1; }
-        /* Allow badges/tooltips to escape the pdf.js text layer container */
-        .react-pdf__Page__textContent { overflow: visible !important; }
-        .react-pdf__Page { overflow: visible !important; }
-      `}</style>
-
-      {/* ── 3-column grid: Notes | PDF | Findings ── */}
-      <div className="grid items-start" style={{ gridTemplateColumns: "256px 1fr 272px", gap: "24px" }}>
-
-        {/* ── LEFT: Notes / anchored comments ── */}
-        <div className="sticky top-24 min-h-0">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/40 mb-3">
-            Notes
-          </p>
-          {commentError && (
-            <p className="mb-2 text-[10px] leading-snug text-risk-high/70">{commentError}</p>
-          )}
-          {comments.filter(c => c.anchor).length === 0 && !commentError && (
-            <p className="text-[10px] text-text-secondary/35 leading-snug">
-              Select text in the document to add a note.
-            </p>
-          )}
-          <div className="space-y-2">
-            {railComments.map(({ comment, number }) => {
-              const active = selectedCommentId === comment.id;
-              const isCurrentPage = comment.pageNumber === activePage;
-              const isEditing = editingCommentId === comment.id;
-              return (
-                <div
-                  key={comment.id}
-                  className={cn(
-                    "rounded-md border px-2.5 py-2 shadow-sm transition-all",
-                    active
-                      ? "border-indigo-400 bg-indigo-50"
-                      : isCurrentPage
-                        ? "border-indigo-200/60 bg-surface hover:border-indigo-300"
-                        : "border-border bg-surface hover:border-indigo-200"
-                  )}
-                >
-                  <div className="mb-1 flex min-w-0 items-center gap-1">
-                    <span className={cn(
-                      "inline-flex h-5 shrink-0 items-center justify-center rounded border px-1 text-[10px] font-bold",
-                      active ? "border-indigo-400 bg-indigo-100 text-indigo-700" : "border-indigo-200 bg-indigo-50 text-indigo-600"
-                    )}>
-                      #{number}
-                    </span>
-                    <MessageSquare className={cn("h-3 w-3 shrink-0 ml-0.5", active ? "text-indigo-600" : "text-text-secondary/50")} />
-                    <button
-                      onClick={() => goToComment(comment)}
-                      className="min-w-0 flex-1 truncate text-left text-[11px] font-semibold text-text-primary ml-1"
-                    >
-                      {comment.username}
-                    </button>
-                    <span className="shrink-0 text-[10px] text-text-secondary/40 mr-1">p.{comment.pageNumber}</span>
-                    <button
-                      onClick={() => { setEditingCommentId(comment.id); setEditDraft(comment.note); }}
-                      className="shrink-0 rounded p-0.5 text-text-secondary/30 hover:text-indigo-500 transition-colors"
-                      title="Edit note"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => deleteComment(comment.id)}
-                      className="shrink-0 rounded p-0.5 text-text-secondary/30 hover:text-risk-high transition-colors"
-                      title="Delete note"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                  {isEditing ? (
-                    <>
-                      <textarea
-                        value={editDraft}
-                        onChange={(e) => setEditDraft(e.target.value)}
-                        className="w-full resize-none rounded border border-indigo-200 bg-background px-2 py-1 text-[11px] text-text-primary outline-none focus:border-indigo-400 min-h-12"
-                        autoFocus
-                      />
-                      <div className="mt-1.5 flex justify-end gap-1.5">
-                        <button
-                          onClick={() => { setEditingCommentId(null); setEditDraft(""); }}
-                          className="rounded px-2 py-0.5 text-[10px] text-text-secondary/60 hover:text-text-primary border border-border"
-                        >Cancel</button>
-                        <button
-                          onClick={() => saveEditComment(comment.id)}
-                          className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold text-white bg-indigo-500 hover:bg-indigo-600"
-                        >
-                          <Check className="h-3 w-3" /> Save
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => goToComment(comment)}
-                      className="w-full text-left"
-                      title={comment.note}
-                    >
-                      <span className="block break-words text-[11px] leading-snug text-text-secondary/75">
-                        {comment.note}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      {/* Toolbar */}
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 text-xs text-text-secondary/60">
+          <span>{ordered.length} AI finding{ordered.length !== 1 ? "s" : ""}</span>
+          <span style={{ color: COMMENT_COLOR }}>
+            {annotations.length} comment{annotations.length !== 1 ? "s" : ""}
+          </span>
         </div>
-
-        {/* ── CENTER: PDF viewer (all pages scrollable) or Editor ── */}
-        <div className="min-w-0 flex flex-col gap-4">
-          {/* Editor toggle */}
-          <div className="flex items-center justify-end">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 overflow-hidden rounded-lg border border-border bg-surface text-sm font-semibold shadow-sm">
             <button
-              onClick={() => setEditorMode((m) => !m)}
+              onClick={() => setViewMode("comment")}
               className={cn(
-                "flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-semibold transition-all",
-                editorMode
-                  ? "bg-text-primary text-background border-text-primary"
-                  : "border-border text-text-secondary hover:border-text-primary hover:text-text-primary"
+                "flex min-w-[112px] items-center justify-center gap-2 px-3 transition-all",
+                viewMode === "comment"
+                  ? "bg-accent/12 text-accent"
+                  : "text-text-secondary hover:bg-drop-zone/20 hover:text-text-primary",
               )}
             >
-              <FileEdit className="h-3.5 w-3.5" />
-              {editorMode ? "✓ Done" : "Edit Document"}
+              <MessageSquare className="h-4 w-4 shrink-0" /> Comment
+            </button>
+            <button
+              onClick={() => setViewMode("edit")}
+              className={cn(
+                "flex min-w-[92px] items-center justify-center gap-2 border-l border-border px-3 transition-all",
+                viewMode === "edit"
+                  ? "bg-accent/12 text-accent"
+                  : "text-text-secondary hover:bg-drop-zone/20 hover:text-text-primary",
+              )}
+            >
+              <Edit3 className="h-4 w-4 shrink-0" /> Edit
             </button>
           </div>
 
-          {editorMode ? (
-            <ContractEditor runId={runId} filename={filename} currentUserName={currentUserName} />
-          ) : (
-        <div
-          ref={viewerRef}
-          className="relative min-w-0"
-          onClick={handleViewerClick}
-          onMouseUp={captureSelection}
-        >
-          {loadError ? (
-            <div className="flex items-center gap-2 py-12 text-sm text-risk-high">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              Could not load the PDF file. It may no longer be on disk.
-            </div>
-          ) : (
-            <Document
-              file={fileUrl}
-              onLoadSuccess={onDocumentLoadSuccess}
-              onLoadError={onDocumentLoadError}
-              loading={
-                <div className="flex items-center justify-center py-24">
-                  <Loader2 className="h-5 w-5 animate-spin text-text-secondary/40" />
-                </div>
-              }
-            >
-              {numPages && (
-                <div className="flex flex-col gap-4">
-                  {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => {
-                    const pageComments = commentsByPage.get(pageNum) ?? [];
-                    return (
-                      <div
-                        key={pageNum}
-                        data-page-number={pageNum}
-                        ref={(el) => {
-                          if (el) pageShellRefs.current.set(pageNum, el);
-                          else pageShellRefs.current.delete(pageNum);
-                        }}
-                        className="relative rounded-xl overflow-hidden border border-border shadow-sm"
-                      >
-                        <Page
-                          pageNumber={pageNum}
-                          width={viewerWidth}
-                          renderAnnotationLayer={false}
-                          customTextRenderer={makeTextRenderer(pageNum)}
-                        />
-                        {/* Comment overlay rects */}
-                        <div className="pointer-events-none absolute inset-0">
-                          {pageComments.flatMap((comment) =>
-                            comment.anchor.rects.map((rect, index) => (
-                              <button
-                                key={`${comment.id}-${index}`}
-                                type="button"
-                                data-comment-id={comment.id}
-                                aria-label={`Comment by ${comment.username}: ${comment.note}`}
-                                title={`${comment.username}: ${comment.note}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  goToComment(comment);
-                                }}
-                                className={cn(
-                                  "pointer-events-auto cr-comment-rect",
-                                  selectedCommentId === comment.id && "cr-comment-selected"
-                                )}
-                                style={{
-                                  left: `${rect.x}%`,
-                                  top: `${rect.y}%`,
-                                  width: `${rect.width}%`,
-                                  height: `${rect.height}%`,
-                                }}
-                              >
-                                {index === 0 && (
-                                  <span className="cr-comment-num">
-                                    #{commentNumbers.get(comment.id) ?? "?"}
-                                  </span>
-                                )}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                        {/* Page label */}
-                        <div className="absolute bottom-2 right-3 text-[10px] text-text-secondary/30 pointer-events-none select-none">
-                          {pageNum} / {numPages}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+          <button
+            onClick={() => setShowRedlines((v) => !v)}
+            className={cn(
+              "flex h-9 min-w-[118px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition-all",
+              showRedlines
+                ? "border-risk-high/35 bg-risk-high/8 text-risk-high shadow-sm"
+                : "border-border bg-surface text-text-secondary shadow-sm hover:border-text-secondary/30 hover:bg-drop-zone/20 hover:text-text-primary",
+            )}
+          >
+            <GitCompare className="h-4 w-4 shrink-0" /> Redlines
+          </button>
+
+          {/* Export dropdown */}
+          <div ref={exportRef} className="relative">
+            <button
+              onClick={() => setExportOpen((v) => !v)}
+              className={cn(
+                "flex h-9 min-w-[118px] items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition-all",
+                exportOpen
+                  ? "border-accent/45 bg-accent/10 text-accent shadow-sm"
+                  : "border-border bg-surface text-text-secondary shadow-sm hover:border-text-secondary/30 hover:bg-drop-zone/20 hover:text-text-primary",
               )}
-            </Document>
-          )}
-
-          {/* Selection → add note popover */}
-          {selectionTarget && (
-            <div
-              className="absolute z-50 w-64 rounded-lg border border-border bg-surface p-2 shadow-lg"
-              style={{ top: selectionTarget.top, left: Math.max(0, selectionTarget.left) }}
-              onClick={(event) => event.stopPropagation()}
-              onMouseDown={(event) => event.stopPropagation()}
-              onMouseUp={(event) => event.stopPropagation()}
             >
-              <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="h-3.5 w-3.5 text-indigo-500" />
-                <span className="text-[11px] font-semibold text-text-primary">Add note</span>
-                <button
-                  onClick={() => setSelectionTarget(null)}
-                  className="ml-auto rounded p-0.5 text-text-secondary hover:text-text-primary"
-                  type="button"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <textarea
-                value={commentDraft}
-                onChange={(event) => setCommentDraft(event.target.value)}
-                placeholder="Write a note…"
-                className="min-h-16 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-text-primary outline-none focus:border-indigo-300"
-                autoFocus
+              <Download className="h-4 w-4 shrink-0" />
+              Export
+              <ChevronDown
+                className={cn("h-3.5 w-3.5 shrink-0 transition-transform duration-150", exportOpen && "rotate-180")}
               />
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="truncate text-[10px] text-text-secondary/60">
-                  p.{selectionTarget.anchor.pageNumber}
-                </span>
-                <button
-                  onClick={addComment}
-                  disabled={!commentDraft.trim() || postingComment}
-                  className="rounded-md bg-text-primary px-2 py-1 text-[11px] font-semibold text-background disabled:opacity-40"
-                  type="button"
+            </button>
+
+            {exportOpen && (
+              <div className="absolute right-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-xl border border-border bg-surface shadow-lg">
+                {/* Section: Original */}
+                <div className="border-b border-border px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/50">
+                    Original Contract
+                  </p>
+                </div>
+                <a
+                  href={fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
                 >
-                  {postingComment ? "Saving…" : "Save"}
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">PDF</div>
+                    <div className="text-[10px] text-text-secondary/60">As uploaded</div>
+                  </div>
+                </a>
+                <a
+                  href={getDocxExportUrl(runId, true)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 border-b border-border px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">DOCX</div>
+                    <div className="text-[10px] text-text-secondary/60">Original formatting</div>
+                  </div>
+                </a>
+
+                {/* Section: Modified */}
+                <div className="px-3 py-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/50">
+                    Modified Contract
+                  </p>
+                </div>
+                <a
+                  href={getEditedPdfUrl(runId)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">PDF</div>
+                    <div className="text-[10px] text-text-secondary/60">With accepted edits</div>
+                  </div>
+                </a>
+                <a
+                  href={getDocxExportUrl(runId)}
+                  download
+                  onClick={() => setExportOpen(false)}
+                  className="flex items-center gap-2.5 px-3 py-2.5 text-xs text-text-secondary transition-colors hover:bg-accent/5 hover:text-text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                  <div>
+                    <div className="font-medium text-text-primary">DOCX</div>
+                    <div className="text-[10px] text-text-secondary/60">With accepted edits</div>
+                  </div>
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {actionError && (
+        <div className="mb-4 rounded-md border border-risk-high/30 bg-risk-high/5 px-3 py-2 text-xs text-risk-high">
+          {actionError}
+        </div>
+      )}
+
+      <div className="grid grid-cols-[220px_minmax(0,1fr)_280px] gap-x-6">
+        {/* Left: Comments sidebar */}
+        <aside>
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-text-secondary/40">
+            Comments · {annotations.length}
+          </p>
+          {selectionDraft && (
+            <div
+              className="mb-3 rounded-lg p-3"
+              style={{ background: COMMENT_BG, border: `1px solid ${COMMENT_BORDER}` }}
+            >
+              <p
+                className="mb-1 text-[10px] font-semibold uppercase tracking-widest"
+                style={{ color: COMMENT_COLOR }}
+              >
+                New comment
+              </p>
+              <p className="mb-2 line-clamp-2 text-[11px] italic text-text-secondary/70">
+                &ldquo;{selectionDraft.selectedText}&rdquo;
+              </p>
+              <textarea
+                value={commentBody}
+                onChange={(e) => setCommentBody(e.target.value)}
+                rows={2}
+                className="mb-2 w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-xs text-text-primary outline-none focus:border-accent/60"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveSelectionComment();
+                }}
+                placeholder="Add a comment... (Ctrl+Enter to save)"
+              />
+              <div className="flex justify-end gap-1.5">
+                <button
+                  onClick={() => setSelectionDraft(null)}
+                  className="rounded border border-border px-2 py-1 text-[10px] text-text-secondary hover:bg-drop-zone"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveSelectionComment}
+                  disabled={!commentBody.trim()}
+                  className="rounded px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-50"
+                  style={{ background: COMMENT_COLOR }}
+                >
+                  Add
                 </button>
               </div>
             </div>
           )}
-        </div>
-          )}
-        </div>
+          <div className="space-y-2">
+            {annotations.map((annotation, index) => (
+              <AnnotationCard
+                key={annotation.id}
+                annotation={annotation}
+                num={index + 1}
+                isActive={activeAnnotationId === annotation.id}
+                isHoveredFromDoc={hoveredAnnotationId === annotation.id}
+                onActivate={() => setActiveAnnotationId(annotation.id)}
+                onDelete={() => removeAnnotation(annotation.id)}
+              />
+            ))}
+          </div>
+        </aside>
 
-        {/* ── RIGHT: Findings sidebar ── */}
-        <div className="sticky top-24 space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-text-secondary/50 mb-3">
-            Findings · {ordered.length} total
+        {/* Center: Document editor */}
+        <main>
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-text-secondary/40">
+            {viewMode === "comment"
+              ? "Document · select text to comment"
+              : "Document · click text to edit in place"}
           </p>
+          <DocumentEditor
+            runId={runId}
+            findings={findings}
+            annotations={annotations}
+            viewMode={viewMode}
+            showRedlines={showRedlines}
+            activeAnnotationId={activeAnnotationId}
+            hoveredAnnotationId={hoveredAnnotationId}
+            draftRefreshKey={draftRefreshKey}
+            onAnnotationActivate={(id) => setActiveAnnotationId(id)}
+            onAnnotationHover={(id) => setHoveredAnnotationId(id)}
+            onCommentDraft={(draft) => setSelectionDraft(draft)}
+            onFindingAccept={handleAccept}
+            onFindingDismiss={handleDismiss}
+          />
+        </main>
 
-          {ordered.map((item) => {
-            const { finding, index, firstPage, anchors } = item;
-            const isOnPage = (findingsByPage.get(activePage) ?? []).some((f) => f.index === index);
-            const isSelected = selectedFindingId === finding.finding_id;
-            const chipCls = SEVERITY_CHIP[finding.severity] ?? SEVERITY_CHIP.low;
-            const targetPage = firstPage && numPages ? Math.min(firstPage, numPages) : null;
-            return (
-              <button
+        {/* Right: AI Findings sidebar */}
+        <aside>
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-text-secondary/40">
+            AI Findings · {ordered.length}
+          </p>
+          <div className="space-y-2">
+            {ordered.map(({ finding, index }) => (
+              <SuggestionCard
                 key={finding.finding_id}
-                onClick={() => targetPage && goToFinding(item)}
-                disabled={!targetPage}
-                className={cn(
-                  "w-full text-left rounded-lg border px-3 py-3 transition-all cursor-pointer",
-                  isSelected
-                    ? "border-blue-500 bg-blue-50/40 shadow-sm"
-                    : isOnPage
-                      ? "border-accent/40 bg-accent/5"
-                      : "border-border hover:border-border/80 hover:bg-drop-zone/20",
-                  !targetPage && "cursor-default opacity-70"
-                )}
-              >
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded border", chipCls)}>
-                    #{index}
-                  </span>
-                  <span className={cn("text-[10px] font-semibold uppercase", chipCls.split(" ")[1])}>
-                    {finding.severity === "critical" ? "CRITICAL" : finding.severity.toUpperCase()}
-                  </span>
-                  <span className="ml-auto text-[10px] text-text-secondary/40">
-                    {firstPage ? `p.${firstPage}` : "location unavailable"}
-                  </span>
-                </div>
-                <p className="text-xs font-medium text-text-primary leading-snug line-clamp-2 mb-1">
-                  {finding.description}
-                </p>
-                {anchors.length === 0 && (
-                  <p className="text-[10px] text-text-secondary/50 leading-snug mb-1">
-                    No reliable document anchor was returned for this finding.
-                  </p>
-                )}
-                {finding.recommendation_detail && (
-                  <p className="text-[10px] text-text-secondary/70 leading-snug line-clamp-2 italic">
-                    → {finding.recommendation_detail}
-                  </p>
-                )}
-              </button>
-            );
-          })}
+                finding={finding}
+                index={index}
+                expanded={expandedFindingIds.has(finding.finding_id)}
+                onToggle={() =>
+                  setExpandedFindingIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(finding.finding_id)) next.delete(finding.finding_id);
+                    else next.add(finding.finding_id);
+                    return next;
+                  })
+                }
+                onAccept={() => {
+                  const replacement = finding.recommended_change?.trim();
+                  if (!replacement) {
+                    setActionError(
+                      "This finding has no concrete replacement text. Use Edit mode to rewrite manually.",
+                    );
+                    return;
+                  }
+                  handleAccept(finding.finding_id, replacement);
+                }}
+                onDismiss={() => handleDismiss(finding.finding_id)}
+              />
+            ))}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
 
-          {pagefindings.length > 0 && (
-            <div className="pt-3 border-t border-border/60">
-              <p className="text-[10px] text-text-secondary/50 mb-2">On this page:</p>
-              <div className="flex flex-wrap gap-1.5">
-                {pagefindings.map(({ index, finding }) => {
-                  const chipCls = SEVERITY_CHIP[finding.severity] ?? SEVERITY_CHIP.low;
-                  return (
-                    <span key={index} className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded border", chipCls)}>
-                      #{index}
-                    </span>
-                  );
-                })}
+function SuggestionCard({
+  finding,
+  index,
+  expanded,
+  onToggle,
+  onAccept,
+  onDismiss,
+}: {
+  finding: Finding;
+  index: number;
+  expanded: boolean;
+  onToggle: () => void;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  const [showFullDiff, setShowFullDiff] = useState(false);
+  const color = SEV_COLOR[finding.severity] ?? SEV_COLOR.low;
+  const bg = SEV_BG[finding.severity] ?? SEV_BG.low;
+  const border = SEV_BORDER[finding.severity] ?? SEV_BORDER.low;
+  const replacement = finding.recommended_change?.trim();
+  const guidance = !replacement
+    ? finding.recommendation_detail?.trim() || finding.recommendation?.trim() || null
+    : null;
+
+  const diffChunks = useMemo(() => {
+    if (!replacement) return null;
+    const evidence = finding.contract_evidence?.[0]?.text || finding.evidence?.[0]?.normalized_text || "";
+    if (!evidence) return null;
+    return computeWordDiff(evidence, replacement);
+  }, [replacement, finding]);
+
+  const hasMeaningfulDiff = diffChunks && diffChunks.some((c) => c.type !== "keep");
+
+  return (
+    <div className="rounded-lg p-3" style={{ background: bg, border: `1px solid ${border}` }}>
+      <button onClick={onToggle} className="w-full text-left">
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <span
+            className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+            style={{ background: color }}
+          >
+            {index}
+          </span>
+          <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>
+            {finding.severity}
+          </span>
+        </div>
+        <p className="line-clamp-3 text-xs leading-snug text-text-primary">{finding.description}</p>
+      </button>
+
+      {expanded && (
+        <div className="mt-3 space-y-2 border-t border-border/50 pt-3">
+          <blockquote
+            className="border-l-2 pl-2 text-[11px] italic leading-relaxed text-text-secondary"
+            style={{ borderColor: color }}
+          >
+            {firstFindingQuote(finding)}
+          </blockquote>
+          {replacement && hasMeaningfulDiff ? (
+            <div className="rounded border p-2" style={{ borderColor: `${color}25`, background: `${color}0a` }}>
+              <div className="mb-1.5 flex items-center justify-between">
+                <p className="text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>
+                  Proposed change
+                </p>
+                {diffChunks && diffChunks.length > 20 && (
+                  <button
+                    onClick={() => setShowFullDiff((v) => !v)}
+                    className="text-[9px] font-medium text-text-secondary/60 hover:text-text-secondary"
+                  >
+                    {showFullDiff ? "Show less" : "Show all"}
+                  </button>
+                )}
+              </div>
+              <div className="rounded bg-white/60 px-2 py-1.5" style={{ borderLeft: "2px solid #2563eb" }}>
+                {showFullDiff || (diffChunks?.length ?? 0) <= 20 ? (
+                  <DiffView chunks={diffChunks!} fontSize={10.5} />
+                ) : (
+                  <>
+                    <DiffView chunks={diffChunks!.slice(0, 20)} fontSize={10.5} />
+                    <button
+                      onClick={() => setShowFullDiff(true)}
+                      className="mt-1 text-[9px] text-text-secondary/50 hover:text-text-secondary"
+                    >
+                      ... {diffChunks!.length - 20} more words
+                    </button>
+                  </>
+                )}
               </div>
             </div>
+          ) : replacement ? (
+            <div className="rounded border p-2" style={{ borderColor: `${color}25`, background: `${color}0a` }}>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>
+                Replace with
+              </p>
+              <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-text-primary">{replacement}</p>
+            </div>
+          ) : guidance ? (
+            <div className="rounded border p-2" style={{ borderColor: `${color}20`, background: `${color}08` }}>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>
+                Suggested action
+              </p>
+              <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-text-primary">{guidance}</p>
+            </div>
+          ) : (
+            <p className="text-[11px] italic text-text-secondary/60">
+              No specific guidance. Use Edit mode to rewrite this clause manually.
+            </p>
           )}
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              onClick={onAccept}
+              disabled={!replacement}
+              className="flex items-center gap-1 rounded border border-risk-low/30 bg-risk-low/5 px-2 py-1 text-[10px] font-semibold text-risk-low transition-colors hover:bg-risk-low/15 disabled:opacity-40"
+              title={replacement ? "Apply replacement text" : "No replacement text — use Edit mode"}
+            >
+              <Check className="h-2.5 w-2.5" /> Accept
+            </button>
+            <button
+              onClick={onDismiss}
+              className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[10px] font-semibold text-text-secondary/70 transition-colors hover:border-text-secondary/40"
+            >
+              <X className="h-2.5 w-2.5" /> Deny
+            </button>
+          </div>
         </div>
+      )}
+    </div>
+  );
+}
 
+function AnnotationCard({
+  annotation,
+  num,
+  isActive,
+  isHoveredFromDoc,
+  onActivate,
+  onDelete,
+}: {
+  annotation: DocumentAnnotation;
+  num?: number;
+  isActive?: boolean;
+  isHoveredFromDoc?: boolean;
+  onActivate?: () => void;
+  onDelete: () => void;
+}) {
+  const highlighted = isActive || isHoveredFromDoc;
+  return (
+    <div
+      className="cursor-pointer rounded-lg p-3 transition-all"
+      style={{
+        background: highlighted ? "rgba(37,99,235,0.12)" : COMMENT_BG,
+        border: `1px solid ${highlighted ? COMMENT_COLOR : COMMENT_BORDER}`,
+        boxShadow: isActive ? "0 0 0 2px rgba(37,99,235,0.2)" : undefined,
+      }}
+      onClick={onActivate}
+    >
+      <div className="mb-1.5 flex items-center gap-2">
+        {num != null && (
+          <span
+            className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white transition-transform"
+            style={{
+              background: COMMENT_COLOR,
+              transform: highlighted ? "scale(1.2)" : "scale(1)",
+            }}
+          >
+            {num}
+          </span>
+        )}
+        <span
+          className="text-[10px] font-semibold uppercase tracking-widest"
+          style={{ color: COMMENT_COLOR }}
+        >
+          {annotation.author_name ?? "Comment"}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="ml-auto text-text-secondary/50 transition-colors hover:text-risk-high"
+          title="Delete comment"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
       </div>
+      {annotation.selected_text && (
+        <p className="mb-2 line-clamp-2 text-[11px] italic text-text-secondary/70">
+          &ldquo;{annotation.selected_text}&rdquo;
+        </p>
+      )}
+      <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-primary">{annotation.body}</p>
     </div>
   );
 }

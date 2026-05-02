@@ -237,12 +237,16 @@ function AdminScreen() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  const isOrgAdmin = window.verdictApi.currentUser()?.org_role === "org_admin";
+
   const tabs = [
     { key: "users",      label: "Users",          count: users.length },
     { key: "workspaces", label: "Workspaces",      count: workspaces.length },
     { key: "invites",    label: "Invites",          count: invites.length },
     { key: "rag",        label: "Knowledge Base",   count: ragDocs.length },
   ];
+
+  const visibleTabs = isOrgAdmin ? tabs : tabs.filter(t => t.key === "users" || t.key === "workspaces");
 
   // ── shared styles ──
   const colLabel = { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)" };
@@ -260,7 +264,7 @@ function AdminScreen() {
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", marginBottom: 40 }}>
-        {tabs.map(t => (
+        {visibleTabs.map(t => (
           <button key={t.key} onClick={() => { setTab(t.key); setSel(null); setWsCreateOpen(false); }}
             style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", fontSize: 13, fontWeight: 500, color: tab === t.key ? "var(--text)" : "var(--text-2)", background: "none", border: "none", borderBottom: tab === t.key ? "2px solid var(--text)" : "2px solid transparent", marginBottom: -1, cursor: "pointer", transition: "all 0.15s" }}>
             {t.label}
@@ -302,11 +306,13 @@ function AdminScreen() {
       {/* ── Workspaces list ── */}
       {tab === "workspaces" && !selectedWs && !wsCreateOpen && (
         <div style={{ animation: "fadeIn 0.2s ease" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 28 }}>
-            <button onClick={openCreateWorkspace} style={{ padding: "9px 18px", borderRadius: 7, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}>
-              <IconPlus size={11} />Create workspace
-            </button>
-          </div>
+          {isOrgAdmin && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 28 }}>
+              <button onClick={openCreateWorkspace} style={{ padding: "9px 18px", borderRadius: 7, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 7 }}>
+                <IconPlus size={11} />Create workspace
+              </button>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 28px", gap: "0 16px", padding: "0 0 11px", borderBottom: "1px solid var(--border)" }}>
             {["Workspace", "Members", ""].map(h => <span key={h} style={colLabel}>{h}</span>)}
           </div>

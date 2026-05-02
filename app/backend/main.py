@@ -17,6 +17,7 @@ from app.backend.routes.admin import router as admin_router
 from app.backend.routes.workspaces import router as workspaces_router
 from app.backend.routes.rag import router as rag_router
 from app.backend.routes.fine_tune import router as fine_tune_router
+from app.backend.routes.editor import router as editor_router
 from app.backend.services.metrics import setup_metrics
 
 
@@ -53,5 +54,6 @@ app.include_router(workspaces_router)
 app.include_router(rag_router)
 app.include_router(history_router)
 app.include_router(fine_tune_router)
+app.include_router(editor_router)
 if settings.metrics_enabled:
     setup_metrics(app)

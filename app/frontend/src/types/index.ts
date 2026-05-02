@@ -87,6 +87,7 @@ export interface Finding {
   description: string;
   recommendation: string;
   recommendation_detail: string;
+  recommended_change?: string | null;
   evidence: EvidenceRef[];
   contract_evidence?: ContractEvidence[];
   rag_citations?: RagCitation[];
@@ -97,7 +98,102 @@ export interface Finding {
   unresolved_by_consensus?: boolean;
 }
 
+export interface ClauseData {
+  clause_uid: string;
+  page_number: number;
+  normalized_text: string;
+  bbox: number[];
+}
+
+export interface PdfRect {
+  page: number;
+  x0: number;
+  top: number;
+  x1: number;
+  bottom: number;
+}
+
+export interface PdfPageLayout {
+  page: number;
+  width: number;
+  height: number;
+}
+
+export interface DocumentLayout {
+  pages: PdfPageLayout[];
+  finding_rects: Record<string, PdfRect[]>;
+  annotation_rects: Record<string, PdfRect[]>;
+  clause_rects: Record<string, PdfRect[]>;
+}
+
+export interface ContractEdit {
+  text: string;
+  plain_text?: string | null;
+  rich_text?: Array<Record<string, unknown>> | null;
+  page?: number | null;
+  rects?: PdfRect[] | null;
+  anchor_text?: string | null;
+  edited_at: string;
+}
+
+// ============================================================================
+// Document draft — Google Docs-style structured editor
+// ============================================================================
+
 export interface CommentAnchor {
+  annotation_id: string;
+  from_pos: number;
+  to_pos: number;
+}
+
+export interface PendingSuggestion {
+  finding_id: string;
+  severity: string;
+  description: string;
+  replacement_text: string;
+}
+
+export type BlockStyle = "heading1" | "heading2" | "heading3" | "body" | "list_item";
+
+export interface DraftBlock {
+  block_id: string;
+  clause_uid: string;
+  page_number: number;
+  style: BlockStyle;
+  text: string;
+  original_text: string;
+  marks: Array<{ type: string; from_pos: number; to_pos: number }>;
+  pending_suggestion: PendingSuggestion | null;
+  comment_anchors: CommentAnchor[];
+}
+
+export interface DocumentDraft {
+  blocks: DraftBlock[];
+  revision: number;
+}
+
+export interface DocumentAnnotation {
+  id: string;
+  run_id: string;
+  clause_uid: string;
+  page_number?: number | null;
+  selected_text?: string | null;
+  span_start?: number | null;
+  span_end?: number | null;
+  annotation_type: "comment" | "suggestion";
+  body: string;
+  suggested_replacement?: string | null;
+  status: "open" | "accepted" | "dismissed" | "deleted";
+  source: "human" | "ai";
+  finding_id?: string | null;
+  author_id?: string | null;
+  author_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// PDF-viewer anchor (rects-based, used by the PDF ContractReader variant)
+export interface PdfCommentAnchor {
   workspaceId?: string | null;
   contractId?: string | number | null;
   runId: string;
@@ -118,7 +214,7 @@ export interface DocumentComment {
   contractId?: string | number | null;
   pageNumber: number;
   selectedText: string;
-  anchor: CommentAnchor;
+  anchor: PdfCommentAnchor;
   userId: string;
   username: string;
   note: string;

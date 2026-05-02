@@ -104,7 +104,12 @@ async def start_review(run_id: str, db: DbSession):
 
 
 @router.post("/runs/{run_id}/human-review", response_model=HumanReviewResult)
-async def post_human_review(run_id: str, payload: HumanReviewPayload, db: DbSession) -> HumanReviewResult:
+async def post_human_review(
+    run_id: str,
+    payload: HumanReviewPayload,
+    db: DbSession,
+    token: dict = Depends(require_auth),
+) -> HumanReviewResult:
     return await submit_human_review(db, run_id, payload)
 
 

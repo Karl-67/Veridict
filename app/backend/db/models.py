@@ -98,6 +98,9 @@ class RunRecord(Base):
     # Final verdict payload (populated by AdminMergeAgent after approval)
     verdict_payload: dict = Column(JSON, nullable=True)
 
+    # Clause-level edits accepted by the human reviewer: {clause_uid: {text, edited_at}}
+    contract_edits: dict = Column(JSON, nullable=True)
+
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
 
@@ -236,6 +239,11 @@ class FindingRecord(Base):
     business_impact: str = Column(Text, nullable=True)
     exploitability: str = Column(Text, nullable=True)
     unresolved_by_consensus: bool = Column(Boolean, nullable=False, default=False)
+
+    # Suggestion persistence — Kira concrete replacement text and acceptance state
+    recommended_change: str = Column(Text, nullable=True)
+    dismissed_at: datetime = Column(DateTime, nullable=True)
+    accepted_at: datetime = Column(DateTime, nullable=True)
 
     created_at: datetime = Column(DateTime, nullable=False, default=_now)
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
@@ -685,6 +693,55 @@ class FindingCommentRecord(Base):
     updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
 
     author = relationship("UserRecord", back_populates="finding_comments")
+
+
+# ---------------------------------------------------------------------------
+# DocumentAnnotationRecord
+# Persistent anchored comments and suggestions on extracted contract text.
+# Supports both human text-selection comments and AI finding suggestions.
+# ---------------------------------------------------------------------------
+
+
+class DocumentAnnotationRecord(Base):
+    __tablename__ = "document_annotations"
+
+    id: str = Column(String(36), primary_key=True, default=_uuid)
+    run_id: str = Column(String(36), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Anchor
+    clause_uid: str = Column(String(128), nullable=False, index=True)
+    page_number: int = Column(Integer, nullable=True)
+    selected_text: str = Column(Text, nullable=True)   # verbatim text the user highlighted
+    span_start: int = Column(Integer, nullable=True)    # char offset within clause text
+    span_end: int = Column(Integer, nullable=True)
+
+    # Content
+    annotation_type: str = Column(String(16), nullable=False, default="comment")  # comment | suggestion
+    body: str = Column(Text, nullable=False)             # comment body or issue description
+    suggested_replacement: str = Column(Text, nullable=True)  # exact replacement text (suggestions only)
+
+    # State
+    status: str = Column(String(16), nullable=False, default="open")  # open | accepted | dismissed | deleted
+
+    # Provenance
+    source: str = Column(String(8), nullable=False, default="human")  # human | ai
+    finding_id: str = Column(
+        String(36), ForeignKey("findings.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    author_id: str = Column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    created_at: datetime = Column(DateTime, nullable=False, default=_now)
+    updated_at: datetime = Column(DateTime, nullable=False, default=_now, onupdate=_now)
+
+    run = relationship("RunRecord")
+    finding = relationship("FindingRecord")
+    author = relationship("UserRecord")
+
+    __table_args__ = (
+        Index("ix_doc_annotation_run_clause", "run_id", "clause_uid"),
+    )
 
 
 # ---------------------------------------------------------------------------
