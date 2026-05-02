@@ -1,22 +1,46 @@
 
 // ── Dashboard Screen ──────────────────────────────────────────────────────────
 
-function DashboardScreen({ navigate, workspaceFilter, onClearWorkspaceFilter }) {
+function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, onClearWorkspaceFilter }) {
   const [filter, setFilter] = React.useState("all");
   const [contracts, setContracts] = React.useState([]);
+  const [workspaces, setWorkspaces] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
     let active = true;
     setLoading(true);
-    window.verdictApi.listContracts()
-      .then(data => { if (active) setContracts(data); })
-      .catch(() => { if (active) setContracts([]); })
+    Promise.all([
+      window.verdictApi.listContracts().catch(() => []),
+      window.verdictApi.listWorkspaces().catch(() => []),
+    ])
+      .then(([contractRows, workspaceRows]) => {
+        if (!active) return;
+        setContracts(contractRows);
+        setWorkspaces(workspaceRows);
+      })
+      .catch(() => {
+        if (!active) return;
+        setContracts([]);
+        setWorkspaces([]);
+      })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []);
 
   const IN_PROGRESS_STATES = ["created", "processing", "under_review"];
+  const workspaceCounts = React.useMemo(() => {
+    const counts = new Map();
+    contracts.forEach(c => {
+      if (!c.workspaceId) return;
+      counts.set(c.workspaceId, (counts.get(c.workspaceId) || 0) + 1);
+    });
+    return counts;
+  }, [contracts]);
+
+  const selectedWorkspace = workspaceFilter
+    ? workspaces.find(w => w.workspace_id === workspaceFilter.id) ?? workspaceFilter
+    : null;
 
   const scopedContracts = workspaceFilter
     ? contracts.filter(c =>
@@ -35,23 +59,22 @@ function DashboardScreen({ navigate, workspaceFilter, onClearWorkspaceFilter }) 
     : filter === "progress" ? scopedContracts.filter(c => IN_PROGRESS_STATES.includes(c.latestRunState))
     : scopedContracts.filter(c => c.latestRunState === "finalized");
 
+  function selectWorkspace(ws) {
+    setFilter("all");
+    if (!ws) {
+      onClearWorkspaceFilter?.();
+      return;
+    }
+    onWorkspaceFilterChange?.({ id: ws.workspace_id, name: ws.name });
+  }
+
   return (
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, animation: "fadeIn 0.35s ease both" }}>
       {/* Page header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 40 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 28 }}>
         <div>
           <p style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 6 }}>{greeting()}, {(window.verdictApi.currentUser()?.display_name || "").split(" ")[0] || "there"}</p>
           <h1 style={{ fontFamily: "var(--h-font)", fontSize: 42, fontWeight: 700, letterSpacing: "-0.025em", color: "var(--text)", lineHeight: 1 }}>Contracts</h1>
-          {workspaceFilter && (
-            <button
-              onClick={onClearWorkspaceFilter}
-              style={{ marginTop: 12, display: "inline-flex", alignItems: "center", gap: 7, border: "1px solid var(--border)", borderRadius: 7, background: "var(--surface)", color: "var(--text-2)", padding: "5px 9px", fontSize: 12, cursor: "pointer" }}
-            >
-              <span style={{ width: 6, height: 6, borderRadius: 2, background: "var(--accent)" }} />
-              {workspaceFilter.name}
-              <span style={{ color: "var(--text-3)" }}>Clear</span>
-            </button>
-          )}
         </div>
         <button onClick={() => navigate("new_contract")} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: 8, background: "var(--text)", color: "var(--bg)", fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", transition: "opacity 0.15s", flexShrink: 0 }}
           onMouseEnter={e => e.currentTarget.style.opacity = "0.82"}
@@ -73,6 +96,33 @@ function DashboardScreen({ navigate, workspaceFilter, onClearWorkspaceFilter }) 
             <span style={{ fontSize: 12, color: "var(--text-2)", paddingBottom: 2 }}>{label}</span>
           </button>
         ))}
+      </div>
+
+      {/* Workspace nav */}
+      <div style={{ marginBottom: 0, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+        <div style={{ display: "flex", alignItems: "stretch", gap: 0, minWidth: "max-content" }}>
+          {[
+            { workspace_id: null, name: "All workspaces", count: contracts.length },
+            ...workspaces.map(ws => ({ ...ws, count: workspaceCounts.get(ws.workspace_id) || 0 })),
+          ].map(ws => {
+            const active = ws.workspace_id
+              ? selectedWorkspace?.workspace_id === ws.workspace_id || selectedWorkspace?.id === ws.workspace_id
+              : !selectedWorkspace;
+            return (
+              <button
+                key={ws.workspace_id ?? "all"}
+                onClick={() => selectWorkspace(ws.workspace_id ? ws : null)}
+                style={{ display: "flex", alignItems: "center", gap: 9, padding: "13px 22px 12px 0", marginRight: 10, border: "none", borderBottom: active ? "2px solid var(--text)" : "2px solid transparent", marginBottom: -1, background: "transparent", color: active ? "var(--text)" : "var(--text-2)", cursor: "pointer", transition: "color 0.12s, opacity 0.12s", opacity: active ? 1 : 0.72 }}
+                onMouseEnter={e => { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.opacity = "1"; }}
+                onMouseLeave={e => { e.currentTarget.style.color = active ? "var(--text)" : "var(--text-2)"; e.currentTarget.style.opacity = active ? "1" : "0.72"; }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: active && ws.workspace_id ? "var(--accent)" : "var(--border)", flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: active ? 650 : 500, maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ws.name}</span>
+                <span style={{ fontSize: 11, color: "var(--text-3)", background: active ? "var(--border-light)" : "transparent", borderRadius: 8, padding: active ? "1px 6px" : 0 }}>{ws.count}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {loading && (
@@ -352,8 +402,12 @@ const DISPLAY_STAGE_NAMES = [
 ];
 
 function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, selectedContractId }) {
-  const [runStages, setRunStages] = React.useState([]);
-  const [runState, setRunState]   = React.useState(null);
+  const [runStages, setRunStages]       = React.useState([]);
+  const [runState, setRunState]         = React.useState(null);
+  const [blockedReason, setBlockedReason] = React.useState(null);
+  const [contractId, setContractId]     = React.useState(selectedContractId);
+  const [retrying, setRetrying]         = React.useState(false);
+  const [retryError, setRetryError]     = React.useState(null);
 
   React.useEffect(() => {
     if (!processingRunId) return;
@@ -365,12 +419,16 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
         if (!active) return;
         setRunState(run.state);
         setRunStages(run.stages ?? []);
-        const done = ["awaiting_human_review", "finalized", "failed", "blocked"].includes(run.state);
-        if (done) {
+        if (run.blocked_reason) setBlockedReason(run.blocked_reason);
+        if (run.contract_id) setContractId(run.contract_id);
+        const success = ["awaiting_human_review", "finalized"].includes(run.state);
+        const terminal = ["failed", "blocked"].includes(run.state);
+        if (success) {
           setTimeout(() => { if (active) navigate("contract_detail", run.contract_id ?? selectedContractId); }, 800);
-        } else {
+        } else if (!terminal) {
           setTimeout(poll, 3000);
         }
+        // On failed/blocked: stop polling, stay on screen so user can retry
       } catch {
         if (active) setTimeout(poll, 5000);
       }
@@ -380,13 +438,51 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
     return () => { active = false; };
   }, [processingRunId]);
 
-  // Build display list from real backend stage data
+  async function handleRetry() {
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await window.verdictApi.retryRun(processingRunId);
+      // Reset local state and restart polling
+      setRunState(null);
+      setBlockedReason(null);
+      setRetrying(false);
+      // Re-trigger the polling effect by navigating back then forward isn't ideal;
+      // instead just reload the run state inline
+      let active = true;
+      async function poll() {
+        try {
+          const run = await window.verdictApi.getRun(processingRunId);
+          if (!active) return;
+          setRunState(run.state);
+          setRunStages(run.stages ?? []);
+          if (run.blocked_reason) setBlockedReason(run.blocked_reason);
+          const success = ["awaiting_human_review", "finalized"].includes(run.state);
+          const terminal = ["failed", "blocked"].includes(run.state);
+          if (success) {
+            setTimeout(() => { navigate("contract_detail", run.contract_id ?? contractId); }, 800);
+          } else if (!terminal) {
+            setTimeout(poll, 3000);
+          }
+        } catch {
+          if (active) setTimeout(poll, 5000);
+        }
+      }
+      poll();
+      return () => { active = false; };
+    } catch (err) {
+      setRetryError(err.message || "Retry failed — please try again.");
+      setRetrying(false);
+    }
+  }
+
+  // Build display list from real backend stage data (including error detail)
   const stageMap = {};
-  runStages.forEach(s => { stageMap[s.stage_name] = s.state; });
+  runStages.forEach(s => { stageMap[s.stage_name] = { state: s.state, errorDetail: s.error_detail, retryCount: s.retry_count ?? 0 }; });
 
   const displayStages = DISPLAY_STAGE_NAMES.map(name => {
-    const state = stageMap[name] ?? "pending";
-    return { name, label: STAGE_LABELS[name] ?? name, state };
+    const info = stageMap[name] ?? { state: "pending", errorDetail: null, retryCount: 0 };
+    return { name, label: STAGE_LABELS[name] ?? name, ...info };
   });
 
   const doneCount  = displayStages.filter(s => s.state === "done").length;
@@ -396,40 +492,63 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
   const isFailed  = runState === "failed" || runState === "blocked";
   const isReady   = runState === "awaiting_human_review" || runState === "finalized";
 
+  // Find the failed stage's error message for display
+  const failedStage = displayStages.find(s => s.state === "failed" || s.state === "blocked");
+  const failureMessage = blockedReason || failedStage?.errorDetail || null;
+
   return (
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, maxWidth: 520, margin: "0 auto", animation: "fadeIn 0.35s ease both" }}>
       <div style={{ textAlign: "center", marginBottom: 56 }}>
-        <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--text-3)", marginBottom: 14 }}>Analysis in Progress</p>
-        <h1 style={{ fontFamily: "var(--h-font)", fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 10 }}>Processing your contract</h1>
+        <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--text-3)", marginBottom: 14 }}>
+          {isFailed ? "Analysis Failed" : "Analysis in Progress"}
+        </p>
+        <h1 style={{ fontFamily: "var(--h-font)", fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 10 }}>
+          {isFailed ? "Something went wrong" : "Processing your contract"}
+        </h1>
         <p style={{ fontSize: 14, color: "var(--text-2)" }}>{fileName || "Your document"} is being analyzed by the AI engine.</p>
         {pendingError && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>{pendingError}</p>}
         {isReady && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-low)" }}>Analysis complete — redirecting…</p>}
-        {isFailed && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>Analysis encountered an error.</p>}
+        {isFailed && (
+          <div style={{ marginTop: 16, padding: "14px 18px", background: "rgba(var(--risk-high-rgb, 200,50,50),0.07)", borderRadius: 10, textAlign: "left" }}>
+            <p style={{ fontSize: 13, color: "var(--risk-high)", fontWeight: 600, marginBottom: failureMessage ? 6 : 0 }}>
+              {runState === "blocked" ? "Pipeline blocked" : "Analysis encountered an error"}
+            </p>
+            {failureMessage && (
+              <p style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5, wordBreak: "break-word" }}>{failureMessage}</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Stage list */}
       <div style={{ marginBottom: 40 }}>
         {displayStages.map((stage, i) => {
           const isDone    = stage.state === "done";
-          const isRunning = stage.state === "running" || stage.state === "retrying";
+          const isRunning = stage.state === "running";
+          const isRetrying = stage.state === "retrying";
           const isFail    = stage.state === "failed" || stage.state === "blocked";
           return (
-            <div key={stage.name} style={{ display: "flex", alignItems: "center", gap: 16, padding: "13px 0", borderBottom: i < displayStages.length - 1 ? "1px solid var(--border-light)" : "none", opacity: stage.state === "pending" ? 0.28 : 1, transition: "opacity 0.4s" }}>
-              <div style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {isDone ? (
-                  <span style={{ color: "var(--risk-low)" }}><IconCheck size={16} /></span>
-                ) : isFail ? (
-                  <span style={{ fontSize: 13, color: "var(--risk-high)" }}>✕</span>
-                ) : isRunning ? (
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", display: "block" }} className="pulse" />
-                ) : (
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", border: "1.5px solid var(--border)", display: "block" }} />
-                )}
+            <div key={stage.name} style={{ padding: "13px 0", borderBottom: i < displayStages.length - 1 ? "1px solid var(--border-light)" : "none", opacity: stage.state === "pending" ? 0.28 : 1, transition: "opacity 0.4s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                <div style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {isDone ? (
+                    <span style={{ color: "var(--risk-low)" }}><IconCheck size={16} /></span>
+                  ) : isFail ? (
+                    <span style={{ fontSize: 13, color: "var(--risk-high)" }}>✕</span>
+                  ) : (isRunning || isRetrying) ? (
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--accent)", display: "block" }} className="pulse" />
+                  ) : (
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", border: "1.5px solid var(--border)", display: "block" }} />
+                  )}
+                </div>
+                <span style={{ fontSize: 14, fontWeight: (isRunning || isRetrying) ? 600 : 400, color: (isRunning || isRetrying) ? "var(--text)" : isDone ? "var(--text-2)" : isFail ? "var(--risk-high)" : "var(--text-3)", transition: "color 0.3s" }}>{stage.label}</span>
+                <span style={{ marginLeft: "auto", fontSize: 11, color: isDone ? "var(--text-3)" : isRetrying ? "var(--risk-medium, #e0900a)" : (isRunning) ? "var(--accent)" : isFail ? "var(--risk-high)" : "transparent", transition: "color 0.3s" }}>
+                  {isDone ? "Done" : isRetrying ? `Retrying (${stage.retryCount})` : isRunning ? "Running" : isFail ? "Failed" : "—"}
+                </span>
               </div>
-              <span style={{ fontSize: 14, fontWeight: isRunning ? 600 : 400, color: isRunning ? "var(--text)" : isDone ? "var(--text-2)" : isFail ? "var(--risk-high)" : "var(--text-3)", transition: "color 0.3s" }}>{stage.label}</span>
-              <span style={{ marginLeft: "auto", fontSize: 11, color: isDone ? "var(--text-3)" : isRunning ? "var(--accent)" : isFail ? "var(--risk-high)" : "transparent", transition: "color 0.3s" }}>
-                {isDone ? "Done" : isRunning ? "Running" : isFail ? "Failed" : "—"}
-              </span>
+              {isFail && stage.errorDetail && (
+                <p style={{ marginTop: 5, marginLeft: 38, fontSize: 11, color: "var(--text-3)", lineHeight: 1.45, wordBreak: "break-word" }}>{stage.errorDetail}</p>
+              )}
             </div>
           );
         })}
@@ -441,12 +560,30 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
       </div>
 
       <div style={{ textAlign: "center" }}>
-        <p style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 12 }}>This may take a few minutes depending on document length.</p>
-        <button onClick={() => navigate("dashboard")} style={{ fontSize: 13, color: "var(--text-3)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer", transition: "color 0.12s" }}
-          onMouseEnter={e => e.currentTarget.style.color = "var(--text-2)"}
-          onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>
-          Run in background — go to dashboard
-        </button>
+        {isFailed ? (
+          <div>
+            {retryError && <p style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 12 }}>{retryError}</p>}
+            <button
+              onClick={handleRetry}
+              disabled={retrying}
+              style={{ fontSize: 13, fontWeight: 600, color: "#fff", background: retrying ? "var(--text-3)" : "var(--accent)", border: "none", borderRadius: 8, padding: "10px 24px", cursor: retrying ? "not-allowed" : "pointer", marginBottom: 12, transition: "background 0.15s" }}>
+              {retrying ? "Retrying…" : "Retry Failed Stages"}
+            </button>
+            <br />
+            <button onClick={() => navigate("contract_detail", contractId ?? selectedContractId)} style={{ fontSize: 13, color: "var(--text-3)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer" }}>
+              View contract anyway
+            </button>
+          </div>
+        ) : (
+          <div>
+            <p style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 12 }}>This may take a few minutes depending on document length.</p>
+            <button onClick={() => navigate("dashboard")} style={{ fontSize: 13, color: "var(--text-3)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer", transition: "color 0.12s" }}
+              onMouseEnter={e => e.currentTarget.style.color = "var(--text-2)"}
+              onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>
+              Run in background — go to dashboard
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

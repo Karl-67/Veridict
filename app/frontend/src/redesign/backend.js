@@ -14,6 +14,9 @@ function authHeaders(json = false) {
 async function readJson(res, fallback) {
   const data = await res.json().catch(() => ({ detail: fallback }));
   if (!res.ok) {
+    if (res.status === 429) throw new Error("Too many requests — please wait a moment and try again.");
+    if (res.status === 403) throw new Error("You don't have permission to perform this action.");
+    if (res.status >= 500) throw new Error("Server error — please try again shortly.");
     const detail = data.detail;
     const message = typeof detail === "string"
       ? detail
@@ -44,16 +47,31 @@ async function tryRefreshToken() {
 }
 
 // Fetch wrapper that retries once after auto-refreshing the access token on 401.
+// Also handles network failures and enforces a timeout (default 30s; pass timeoutMs in options to override).
 async function apiFetch(url, options = {}) {
-  let res = await fetch(url, { ...options, credentials: "include" });
+  const { timeoutMs = 30000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, { ...fetchOptions, credentials: "include", signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error("Request timed out — the server took too long to respond.");
+    throw new Error("Network error — please check your connection and try again.");
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (res.status === 401) {
     const refreshed = await tryRefreshToken();
     if (refreshed) {
-      // Rebuild Authorization header with new token
-      const newHeaders = { ...(options.headers || {}) };
+      const newHeaders = { ...(fetchOptions.headers || {}) };
       const t = token();
       if (t) newHeaders.Authorization = `Bearer ${t}`;
-      res = await fetch(url, { ...options, headers: newHeaders, credentials: "include" });
+      try {
+        res = await fetch(url, { ...fetchOptions, headers: newHeaders, credentials: "include" });
+      } catch {
+        throw new Error("Network error — please check your connection and try again.");
+      }
     }
   }
   return res;
@@ -166,8 +184,9 @@ function mapContractDetail(c) {
   };
 }
 
-async function listContracts() {
-  const res = await apiFetch(`${API_BASE}/contracts`, { headers: authHeaders() });
+async function listContracts(workspaceId = null) {
+  const qs = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+  const res = await apiFetch(`${API_BASE}/contracts${qs}`, { headers: authHeaders() });
   return (await readJson(res, "Failed to load contracts")).map(mapContract);
 }
 
@@ -201,6 +220,7 @@ async function addContractVersion(contractId, file) {
     method: "POST",
     headers: authHeaders(),
     body: formData,
+    timeoutMs: 300000,
   });
   return readJson(res, "Failed to add version");
 }
@@ -218,6 +238,14 @@ async function getRun(runId) {
 async function getRunFindings(runId) {
   const res = await apiFetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
   return readJson(res, "Failed to load findings");
+}
+
+async function retryRun(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/retry`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return readJson(res, "Retry failed");
 }
 
 async function submitHumanReview(runId, action, reason = "") {
@@ -263,6 +291,7 @@ async function uploadRagDocument(file, docType = "policy", workspaceId = null) {
     method: "POST",
     headers: authHeaders(),
     body: formData,
+    timeoutMs: 300000,
   });
   return readJson(res, "Upload failed");
 }
@@ -409,6 +438,7 @@ window.verdictApi = {
   listHistory,
   getRun,
   getRunFindings,
+  retryRun,
   submitHumanReview,
   updateProfile,
   getRunFileUrl,
