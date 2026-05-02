@@ -4,7 +4,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from app.backend.core.limiter import limiter, _key_by_user
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -16,6 +17,7 @@ from app.backend.services.event_stream import list_run_events, stream_run_events
 from app.backend.db.models import ParsedClauseRecord, RunRecord
 from app.backend.services.run_service import create_run, get_run_detail, submit_human_review, _load_full_findings
 from app.backend.services.auth_service import require_auth
+from app.backend.services.workspace_access import assert_run_access
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -50,7 +52,9 @@ async def get_failures(limit: int = 50) -> list[dict]:
 
 
 @router.post("/runs", response_model=RunCreateResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("20/hour", key_func=_key_by_user)
 async def post_run(
+    request: Request,
     db: DbSession,
     settings: SettingsDep,
     token: dict = Depends(require_auth),
@@ -75,26 +79,26 @@ async def post_run(
 
 
 @router.get("/runs/{run_id}", response_model=RunDetail)
-async def get_run(run_id: str, db: DbSession) -> RunDetail:
+async def get_run(run_id: str, db: DbSession, token: dict = Depends(require_auth)) -> RunDetail:
+    await assert_run_access(db, run_id, token)
     return await get_run_detail(db, run_id)
 
 
 @router.get("/runs/{run_id}/events")
-async def get_run_events(run_id: str, after: int = 0) -> EventSourceResponse:
+async def get_run_events(run_id: str, db: DbSession, after: int = 0, token: dict = Depends(require_auth)) -> EventSourceResponse:
+    await assert_run_access(db, run_id, token)
     return EventSourceResponse(stream_run_events(get_session_factory(), run_id, after_sequence=after))
 
 
 @router.get("/runs/{run_id}/events/list")
-async def get_run_events_list(run_id: str, after: int = 0):
+async def get_run_events_list(run_id: str, db: DbSession, after: int = 0, token: dict = Depends(require_auth)):
+    await assert_run_access(db, run_id, token)
     return await list_run_events(get_session_factory(), run_id, after_sequence=after)
 
 
 @router.post("/runs/{run_id}/start-review")
-async def start_review(run_id: str, db: DbSession):
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def start_review(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
+    run = await assert_run_access(db, run_id, token)
     if run.status != "awaiting_human_review":
         raise HTTPException(status_code=409, detail="Run is not awaiting human review")
     run.status = "under_review"
@@ -110,16 +114,14 @@ async def post_human_review(
     db: DbSession,
     token: dict = Depends(require_auth),
 ) -> HumanReviewResult:
+    await assert_run_access(db, run_id, token)
     return await submit_human_review(db, run_id, payload)
 
 
 @router.post("/runs/{run_id}/retry")
-async def retry_run(run_id: str, db: DbSession):
+async def retry_run(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
     from app.backend.db.models import StageExecutionRecord
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await assert_run_access(db, run_id, token)
     if run.status not in ("blocked", "failed"):
         raise HTTPException(status_code=409, detail="Only blocked or failed runs can be retried")
 
@@ -144,11 +146,8 @@ async def retry_run(run_id: str, db: DbSession):
 
 
 @router.get("/runs/{run_id}/findings")
-async def get_run_findings(run_id: str, db: DbSession):
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def get_run_findings(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
+    await assert_run_access(db, run_id, token)
     findings = await _load_full_findings(db, run_id)
     return [f.model_dump(mode="json") for f in findings]
 
@@ -159,11 +158,8 @@ class EditorSavePayload(BaseModel):
 
 
 @router.get("/runs/{run_id}/editor")
-async def get_editor_content(run_id: str, db: DbSession):
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def get_editor_content(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
+    run = await assert_run_access(db, run_id, token)
 
     editor_state = (run.verdict_payload or {}).get("editor_state")
     if editor_state:
@@ -186,11 +182,8 @@ async def get_editor_content(run_id: str, db: DbSession):
 
 
 @router.put("/runs/{run_id}/editor")
-async def save_editor_content(run_id: str, body: EditorSavePayload, db: DbSession):
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def save_editor_content(run_id: str, body: EditorSavePayload, db: DbSession, token: dict = Depends(require_auth)):
+    run = await assert_run_access(db, run_id, token)
 
     current = dict(run.verdict_payload or {})
     current_version = (current.get("editor_state") or {}).get("version", 0) or 0
@@ -209,11 +202,8 @@ async def save_editor_content(run_id: str, body: EditorSavePayload, db: DbSessio
 
 
 @router.get("/runs/{run_id}/file")
-async def get_run_file(run_id: str, db: DbSession) -> FileResponse:
-    result = await db.execute(select(RunRecord).where(RunRecord.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def get_run_file(run_id: str, db: DbSession, token: dict = Depends(require_auth)) -> FileResponse:
+    run = await assert_run_access(db, run_id, token)
     path = Path(run.storage_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")

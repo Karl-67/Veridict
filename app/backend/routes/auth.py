@@ -4,7 +4,8 @@ import secrets
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from app.backend.core.limiter import limiter
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -122,7 +123,8 @@ def _build_auth_response(user: UserRecord, access_token: str, org_name: str | No
 # ---------------------------------------------------------------------------
 
 @router.post("/create-org", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def create_org(body: CreateOrgRequest, response: Response, db: DbSession) -> AuthResponse:
+@limiter.limit("3/hour")
+async def create_org(request: Request, body: CreateOrgRequest, response: Response, db: DbSession) -> AuthResponse:
     """First user from a firm creates the organisation and becomes org_admin."""
     existing = (await db.execute(select(UserRecord).where(UserRecord.email == body.email.lower().strip()))).scalar_one_or_none()
     if existing:
@@ -207,7 +209,8 @@ async def invite_preview(token: str, db: DbSession) -> InvitePreviewResponse:
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-async def register_from_invite(body: RegisterFromInviteRequest, response: Response, db: DbSession) -> AuthResponse:
+@limiter.limit("5/minute")
+async def register_from_invite(request: Request, body: RegisterFromInviteRequest, response: Response, db: DbSession) -> AuthResponse:
     """Complete registration using an invite token."""
     invite = (await db.execute(select(OrgInviteRecord).where(OrgInviteRecord.token == body.token))).scalar_one_or_none()
     if not invite or invite.used_at or (invite.expires_at and invite.expires_at < datetime.utcnow()):
@@ -280,7 +283,8 @@ async def register_from_invite(body: RegisterFromInviteRequest, response: Respon
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest, response: Response, db: DbSession) -> AuthResponse:
+@limiter.limit("10/minute")
+async def login(request: Request, body: LoginRequest, response: Response, db: DbSession) -> AuthResponse:
     user = (await db.execute(select(UserRecord).where(UserRecord.email == body.email.lower().strip()))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -307,7 +311,8 @@ async def login(body: LoginRequest, response: Response, db: DbSession) -> AuthRe
 
 
 @router.post("/refresh", response_model=AuthResponse)
-async def refresh(response: Response, db: DbSession, veridict_refresh: str | None = Cookie(default=None)) -> AuthResponse:
+@limiter.limit("20/minute")
+async def refresh(request: Request, response: Response, db: DbSession, veridict_refresh: str | None = Cookie(default=None)) -> AuthResponse:
     if not veridict_refresh:
         raise HTTPException(status_code=401, detail="No refresh token")
     new_raw, user = await rotate_refresh_token(db, veridict_refresh)
