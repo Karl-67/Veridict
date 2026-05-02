@@ -2,6 +2,7 @@
 # Excludes docling, sentence-transformers, mlflow (all pull in PyTorch ~2GB).
 # Tests only exercise editor.py export helpers — no ML inference needed.
 fastapi>=0.111.0
+slowapi>=0.1.9
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 pydantic>=2.7.0
