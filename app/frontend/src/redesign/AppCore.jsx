@@ -396,6 +396,32 @@ function SearchOverlay({ open, onClose, onOpenContract, onOpenWorkspace }) {
   );
 }
 
+// ── URL ↔ screen helpers ──────────────────────────────────────────────────────
+
+function screenToUrl(s, id, runId) {
+  if (s === "contract_detail" && id) return `/contracts/${id}`;
+  if (s === "verdict" && id && runId) return `/contracts/${id}/runs/${runId}`;
+  if (s === "new_contract") return "/new";
+  if (s === "processing") return "/processing";
+  if (s === "history") return "/history";
+  if (s === "profile") return "/profile";
+  if (s === "admin") return "/admin";
+  return "/";
+}
+
+function urlToScreen(pathname) {
+  const verdictMatch = pathname.match(/^\/contracts\/([^/]+)\/runs\/([^/]+)$/);
+  if (verdictMatch) return { screen: "verdict", id: verdictMatch[1], runId: verdictMatch[2] };
+  const contractMatch = pathname.match(/^\/contracts\/([^/]+)$/);
+  if (contractMatch) return { screen: "contract_detail", id: contractMatch[1], runId: null };
+  if (pathname === "/history") return { screen: "history", id: null, runId: null };
+  if (pathname === "/profile") return { screen: "profile", id: null, runId: null };
+  if (pathname === "/admin") return { screen: "admin", id: null, runId: null };
+  if (pathname === "/new") return { screen: "new_contract", id: null, runId: null };
+  if (pathname === "/processing") return { screen: "processing", id: null, runId: null };
+  return { screen: "dashboard", id: null, runId: null };
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 function App() {
@@ -428,9 +454,9 @@ function App() {
 
   const [loggedIn, setLoggedIn] = React.useState(() => Boolean(window.verdictApi.currentUser()));
   const [sessionExpired, setSessionExpired] = React.useState(false);
-  const [screen, setScreen] = React.useState("dashboard");
-  const [selectedContractId, setSelectedContractId] = React.useState(null);
-  const [selectedRunId, setSelectedRunId] = React.useState(null);
+  const [screen, setScreen] = React.useState(() => urlToScreen(window.location.pathname).screen);
+  const [selectedContractId, setSelectedContractId] = React.useState(() => urlToScreen(window.location.pathname).id);
+  const [selectedRunId, setSelectedRunId] = React.useState(() => urlToScreen(window.location.pathname).runId);
   const [pendingError, setPendingError] = React.useState(null);
   const [fileName, setFileName] = React.useState("");
   const [processingRunId, setProcessingRunId] = React.useState(null);
@@ -484,7 +510,25 @@ function App() {
     setSelectedRunId(runId);
     setScreen(s);
     window.scrollTo({ top: 0, behavior: "smooth" });
+    history.pushState({ screen: s, id, runId }, "", screenToUrl(s, id, runId));
   }
+
+  // Stamp the initial history entry and handle browser back/forward
+  React.useEffect(() => {
+    const init = urlToScreen(window.location.pathname);
+    history.replaceState({ screen: init.screen, id: init.id, runId: init.runId }, "", window.location.pathname + window.location.search);
+
+    function onPopState(e) {
+      const state = e.state || urlToScreen(window.location.pathname);
+      setScreen(state.screen || "dashboard");
+      setSelectedContractId(state.id || null);
+      setSelectedRunId(state.runId || null);
+      setWorkspaceFilter(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   React.useEffect(() => {
     if (loggedIn && screen === "admin" && !isOrgAdmin) {
