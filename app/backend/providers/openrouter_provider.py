@@ -262,10 +262,15 @@ class OpenRouterProvider(StructuredLLMProvider):
         if isinstance(last_exc, RateLimitError):
             if last_exc.retry_after_seconds:
                 return min(last_exc.retry_after_seconds, self._max_backoff)
-            # Free-tier upstream rate limits: always wait the full max backoff
+            return self._max_backoff
+        # 405/502/503 = llama.cpp / vLLM crashed and is reloading weights.
+        # Recovery takes 2-5 minutes — always wait the full max_backoff rather than
+        # a short random delay that would burn retries before the server is back.
+        crash_codes = (405, 502, 503)
+        if isinstance(last_exc, TransientProviderError) and getattr(last_exc, "status_code", None) in crash_codes:
             return self._max_backoff
         cap = min(self._max_backoff, self._base_backoff * (2 ** attempt))
-        return random.uniform(0, cap)
+        return random.uniform(cap / 2, cap)
 
 
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
@@ -365,13 +370,13 @@ def build_vllm_provider(
     model_name: str = "google/gemma-4-26B-A4B-it",
     temperature: float = 0.3,
     max_output_tokens: int = 8192,
-    max_retries: int = 5,
+    max_retries: int = 8,
 ) -> OpenRouterProvider:
-    """Build a provider pointing at a cluster-internal vLLM server (OpenAI-compatible API).
+    """Build a provider pointing at a cluster-internal vLLM/llama.cpp server (OpenAI-compatible API).
 
-    vLLM requires a non-empty api_key but ignores its value for unauthenticated
-    cluster-internal endpoints. Thinking mode is disabled so responses arrive
-    immediately without a long reasoning trace.
+    max_retries defaults to 8 — higher than stage-level retries because llama.cpp on RunPod
+    can take 2-5 minutes to reload weights after a crash, and we want to absorb that
+    within a single stage attempt rather than failing the whole run.
     """
     return OpenRouterProvider(
         api_key="vllm",
@@ -381,5 +386,5 @@ def build_vllm_provider(
         max_output_tokens=max_output_tokens,
         max_retries=max_retries,
         base_backoff_seconds=5.0,
-        max_backoff_seconds=90.0,
+        max_backoff_seconds=120.0,
     )
