@@ -311,6 +311,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
   const [rawFindings, setRawFindings] = React.useState([]);
   const [harveyFindings, setHarveyFindings] = React.useState([]);
   const [harveyLoading, setHarveyLoading] = React.useState(false);
+  const [harveySkippedNoRag, setHarveySkippedNoRag] = React.useState(null);
   const [loadErr, setLoadErr]         = React.useState(false);
   const [fileName, setFileName]       = React.useState("Contract analysis report.pdf");
   const [expandedIdx, setExpandedIdx] = React.useState(null);
@@ -326,10 +327,11 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
   React.useEffect(() => {
     if (!selectedRunId) { setVerdict(null); return; }
     let active = true;
-    setVerdict(null); setLoadErr(false); setRawFindings([]); setHarveyFindings([]); setHarveyLoading(true);
+    setVerdict(null); setLoadErr(false); setRawFindings([]); setHarveyFindings([]); setHarveyLoading(true); setHarveySkippedNoRag(null);
     window.verdictApi.getRun(selectedRunId).then(async run => {
       if (!active) return;
       setFileName(run.filename || "Contract analysis report.pdf");
+      if (run.harvey_skipped_no_rag != null) setHarveySkippedNoRag(run.harvey_skipped_no_rag);
       const findings = run.verdict?.findings ?? await window.verdictApi.getRunFindings(selectedRunId).catch(() => []);
       if (active) setRawFindings(findings);
       const localCounts = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -453,6 +455,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
               contractId={selectedContractId}
               filename={fileName}
               currentUserName={currentUser?.display_name || currentUser?.full_name || "Unknown"}
+              harveySkippedNoRag={harveySkippedNoRag}
             />
           ) : (
             <div style={{ padding: "48px 0", color: "var(--text-3)", fontSize: 14 }}>Document viewer not available.</div>

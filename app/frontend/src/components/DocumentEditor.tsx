@@ -70,6 +70,102 @@ function renderInlineDiff(chunks: DiffChunk[]): React.ReactNode {
   });
 }
 
+interface FindingMark {
+  findingId: string;
+  from_pos: number;
+  to_pos: number;
+  category: "redline" | "recommendation";
+}
+
+function renderTextWithAllAnchors(
+  text: string,
+  commentAnchors: CommentAnchor[],
+  findingMarks: FindingMark[],
+  activeAnnotationId: string | null,
+  hoveredAnnotationId: string | null,
+  onAnnotationActivate: (id: string | null) => void,
+  onAnnotationHover: (id: string | null) => void,
+  onFindingClick: (findingId: string) => void,
+): React.ReactNode {
+  // Build unified span list; comments take priority over findings
+  type Span =
+    | { kind: "comment"; id: string; from: number; to: number }
+    | { kind: "finding"; id: string; from: number; to: number; category: "redline" | "recommendation" };
+
+  const spans: Span[] = [
+    ...commentAnchors.map((a) => ({ kind: "comment" as const, id: a.annotation_id, from: Math.max(0, Math.min(a.from_pos, text.length)), to: Math.max(0, Math.min(a.to_pos, text.length)) })),
+    ...findingMarks.map((f) => ({ kind: "finding" as const, id: f.findingId, from: Math.max(0, Math.min(f.from_pos, text.length)), to: Math.max(0, Math.min(f.to_pos, text.length)), category: f.category })),
+  ].filter((s) => s.from < s.to);
+
+  if (!spans.length) return text;
+
+  // Collect all boundary positions
+  const positions = Array.from(new Set([0, text.length, ...spans.flatMap((s) => [s.from, s.to])]))
+    .filter((p) => p >= 0 && p <= text.length)
+    .sort((a, b) => a - b);
+
+  const parts: React.ReactNode[] = [];
+  for (let i = 0; i < positions.length - 1; i++) {
+    const from = positions[i];
+    const to = positions[i + 1];
+    const seg = text.slice(from, to);
+    if (!seg) continue;
+
+    // Find highest-priority span covering [from, to)
+    const covering = spans.filter((s) => s.from <= from && s.to >= to);
+    const commentSpan = covering.find((s) => s.kind === "comment");
+    const findingSpan = covering.find((s) => s.kind === "finding");
+    const active = commentSpan ?? findingSpan;
+
+    if (!active) {
+      parts.push(seg);
+      continue;
+    }
+
+    if (active.kind === "comment") {
+      const isActive = activeAnnotationId === active.id;
+      const isHov = hoveredAnnotationId === active.id;
+      parts.push(
+        <mark
+          key={`c-${i}`}
+          data-annotation-id={active.id}
+          style={{
+            background: isActive ? "rgba(37,99,235,0.28)" : isHov ? "rgba(37,99,235,0.18)" : "rgba(37,99,235,0.10)",
+            borderBottom: `2px solid ${isActive || isHov ? "#2563eb" : "rgba(37,99,235,0.35)"}`,
+            borderRadius: 1,
+            cursor: "pointer",
+          }}
+          onMouseEnter={() => onAnnotationHover(active.id)}
+          onMouseLeave={() => onAnnotationHover(null)}
+          onClick={() => onAnnotationActivate(activeAnnotationId === active.id ? null : active.id)}
+        >
+          {seg}
+        </mark>,
+      );
+    } else {
+      const isRedline = (active as { kind: "finding"; category: string }).category === "redline";
+      parts.push(
+        <mark
+          key={`f-${i}`}
+          data-finding-id={active.id}
+          style={{
+            background: isRedline ? "rgba(217,119,6,0.18)" : "transparent",
+            outline: isRedline ? "none" : "2px solid rgba(217,119,6,0.45)",
+            outlineOffset: -1,
+            borderBottom: `2px solid ${isRedline ? "#d97706" : "rgba(217,119,6,0.55)"}`,
+            borderRadius: 1,
+            cursor: "pointer",
+          }}
+          onClick={() => onFindingClick(active.id)}
+        >
+          {seg}
+        </mark>,
+      );
+    }
+  }
+  return <>{parts}</>;
+}
+
 function applyMarks(
   text: string,
   marks: Array<{ type: string; from_pos: number; to_pos: number }>,
@@ -120,50 +216,6 @@ function applyMarks(
   return <>{parts}</>;
 }
 
-function renderTextWithAnchors(
-  text: string,
-  anchors: CommentAnchor[],
-  activeAnnotationId: string | null,
-  hoveredAnnotationId: string | null,
-  onAnnotationActivate: (id: string | null) => void,
-  onAnnotationHover: (id: string | null) => void,
-): React.ReactNode {
-  if (!anchors.length) return text;
-  const sorted = [...anchors].sort((a, b) => a.from_pos - b.from_pos);
-  const parts: React.ReactNode[] = [];
-  let pos = 0;
-  for (const anchor of sorted) {
-    const from = Math.max(0, Math.min(anchor.from_pos, text.length));
-    const to = Math.max(from, Math.min(anchor.to_pos, text.length));
-    if (from > pos) parts.push(text.slice(pos, from));
-    const isActive = activeAnnotationId === anchor.annotation_id;
-    const isHov = hoveredAnnotationId === anchor.annotation_id;
-    parts.push(
-      <mark
-        key={anchor.annotation_id}
-        data-annotation-id={anchor.annotation_id}
-        style={{
-          background: isActive
-            ? "rgba(37,99,235,0.28)"
-            : isHov
-            ? "rgba(37,99,235,0.18)"
-            : "rgba(37,99,235,0.10)",
-          borderBottom: `2px solid ${isActive || isHov ? "#2563eb" : "rgba(37,99,235,0.35)"}`,
-          borderRadius: 1,
-          cursor: "pointer",
-        }}
-        onMouseEnter={() => onAnnotationHover(anchor.annotation_id)}
-        onMouseLeave={() => onAnnotationHover(null)}
-        onClick={() => onAnnotationActivate(isActive ? null : anchor.annotation_id)}
-      >
-        {text.slice(from, to)}
-      </mark>,
-    );
-    pos = to;
-  }
-  if (pos < text.length) parts.push(text.slice(pos));
-  return <>{parts}</>;
-}
 
 const BLOCK_STYLES: Record<string, React.CSSProperties> = {
   heading1: {
@@ -233,8 +285,10 @@ interface BlockProps {
   showRedlines: boolean;
   activeAnnotationId: string | null;
   hoveredAnnotationId: string | null;
+  findingMarks: FindingMark[];
   onAnnotationActivate: (id: string | null) => void;
   onAnnotationHover: (id: string | null) => void;
+  onFindingClick: (findingId: string) => void;
   onSave: (clauseUid: string, newText: string) => Promise<void>;
   onAccept: (findingId: string, replacementText: string) => void;
   onDismiss: (findingId: string) => void;
@@ -246,8 +300,10 @@ function DocumentBlock({
   showRedlines,
   activeAnnotationId,
   hoveredAnnotationId,
+  findingMarks,
   onAnnotationActivate,
   onAnnotationHover,
+  onFindingClick,
   onSave,
   onAccept,
   onDismiss,
@@ -312,15 +368,18 @@ function DocumentBlock({
     }
 
     const displayText = block.text;
-    if (block.comment_anchors.length > 0) {
-      // Anchors take priority; skip inline marks to avoid span overlap complexity
-      return renderTextWithAnchors(
+    const hasCommentAnchors = block.comment_anchors.length > 0;
+    const hasFindingMarks = showRedlines && findingMarks.length > 0;
+    if (hasCommentAnchors || hasFindingMarks) {
+      return renderTextWithAllAnchors(
         displayText,
         block.comment_anchors,
+        hasFindingMarks ? findingMarks : [],
         activeAnnotationId,
         hoveredAnnotationId,
         onAnnotationActivate,
         onAnnotationHover,
+        onFindingClick,
       );
     }
     if (block.marks && block.marks.length > 0) {
@@ -447,6 +506,7 @@ export interface DocumentEditorProps {
   onCommentDraft: (draft: CommentDraft | null) => void;
   onFindingAccept: (findingId: string, replacementText: string) => void;
   onFindingDismiss: (findingId: string) => void;
+  onFindingClick?: (findingId: string) => void;
 }
 
 const PRINT_STYLE = `
@@ -473,6 +533,7 @@ export default function DocumentEditor({
   onCommentDraft,
   onFindingAccept,
   onFindingDismiss,
+  onFindingClick,
 }: DocumentEditorProps) {
   const [draft, setDraft] = useState<DocumentDraft | null>(null);
   const [loadErr, setLoadErr] = useState(false);
@@ -604,6 +665,38 @@ export default function DocumentEditor({
     return <div className="py-10 text-center text-sm text-text-secondary/50">Loading document...</div>;
   }
 
+  // Build per-clause finding marks for inline highlighting
+  const findingMarksByClause: Record<string, FindingMark[]> = {};
+  for (const finding of _findings) {
+    if (!finding.clause_uid) continue;
+    const evidenceText =
+      finding.contract_evidence?.[0]?.text ||
+      finding.evidence?.[0]?.normalized_text ||
+      "";
+    const category: "redline" | "recommendation" =
+      finding.finding_category === "recommendation" ? "recommendation" : "redline";
+    // Locate the evidence text within the block(s) for this clause
+    const clauseBlocks = draft.blocks.filter((b) => b.clause_uid === finding.clause_uid);
+    for (const b of clauseBlocks) {
+      let from_pos = 0;
+      let to_pos = b.text.length;
+      if (evidenceText) {
+        const needle = evidenceText.replace(/\s+/g, " ").trim().slice(0, 120).toLowerCase();
+        const haystack = b.text.replace(/\s+/g, " ").toLowerCase();
+        const idx = haystack.indexOf(needle);
+        if (idx >= 0) {
+          from_pos = idx;
+          to_pos = idx + needle.length;
+        } else {
+          // No precise match — highlight whole block only if this is the first block for the clause
+          if (clauseBlocks.indexOf(b) !== 0) continue;
+        }
+      }
+      if (!findingMarksByClause[b.clause_uid]) findingMarksByClause[b.clause_uid] = [];
+      findingMarksByClause[b.clause_uid].push({ findingId: finding.finding_id, from_pos, to_pos, category });
+    }
+  }
+
   // Group blocks by page
   const pages: number[] = [];
   const blocksByPage: Record<number, DraftBlock[]> = {};
@@ -656,8 +749,10 @@ export default function DocumentEditor({
                   showRedlines={showRedlines}
                   activeAnnotationId={activeAnnotationId}
                   hoveredAnnotationId={hoveredAnnotationId}
+                  findingMarks={findingMarksByClause[block.clause_uid] ?? []}
                   onAnnotationActivate={onAnnotationActivate}
                   onAnnotationHover={onAnnotationHover}
+                  onFindingClick={onFindingClick ?? (() => {})}
                   onSave={handleSave}
                   onAccept={handleAccept}
                   onDismiss={handleDismiss}

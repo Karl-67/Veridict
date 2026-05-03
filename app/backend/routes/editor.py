@@ -1185,8 +1185,12 @@ async def accept_finding(
     )
     clause_uid = finding.clause_uid if finding else getattr(full_finding, "clause_uid", None)
 
+    finding_category = (
+        finding.finding_category if finding else getattr(full_finding, "finding_category", None)
+    ) or "redline"
+
     applied_text: str | None = None
-    if replacement_text and clause_uid:
+    if replacement_text and clause_uid and finding_category != "recommendation":
         run = (await db.execute(select(RunRecord).where(RunRecord.id == run_id))).scalar_one_or_none()
         if run:
             # Determine the correct UID to store the edit under.

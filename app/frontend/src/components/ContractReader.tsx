@@ -64,6 +64,7 @@ interface ContractReaderProps {
   findings: Finding[];
   jumpToIndex?: number | null;
   onJumpHandled?: () => void;
+  harveySkippedNoRag?: boolean | null;
 }
 
 function orderFindings(findings: Finding[]): OrderedFinding[] {
@@ -133,7 +134,7 @@ function DiffView({ chunks, fontSize = 11 }: { chunks: DiffChunk[]; fontSize?: n
   );
 }
 
-export default function ContractReader({ runId, findings, jumpToIndex, onJumpHandled }: ContractReaderProps) {
+export default function ContractReader({ runId, findings, jumpToIndex, onJumpHandled, harveySkippedNoRag }: ContractReaderProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("comment");
   const [showRedlines, setShowRedlines] = useState(true);
   const [annotations, setAnnotations] = useState<DocumentAnnotation[]>([]);
@@ -460,6 +461,18 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
             onCommentDraft={(draft) => setSelectionDraft(draft)}
             onFindingAccept={handleAccept}
             onFindingDismiss={handleDismiss}
+            onFindingClick={(findingId) => {
+              setExpandedFindingIds((prev) => {
+                const next = new Set(prev);
+                next.add(findingId);
+                return next;
+              });
+              // Scroll the sidebar card into view
+              setTimeout(() => {
+                const el = document.querySelector(`[data-finding-card="${findingId}"]`);
+                el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }, 50);
+            }}
           />
         </main>
 
@@ -468,10 +481,21 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
           <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-text-secondary/40">
             AI Findings · {ordered.length}
           </p>
+          {harveySkippedNoRag === true ? (
+            <div className="mb-3 flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+              Harvey: skipped — no RAG context
+            </div>
+          ) : harveySkippedNoRag === false ? (
+            <div className="mb-3 flex items-center gap-1.5 rounded-full border border-green-300 bg-green-50 px-2.5 py-1 text-[10px] font-semibold text-green-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              Harvey: {findings.filter((f) => f.branch === "harvey").length} findings
+            </div>
+          ) : null}
           <div className="space-y-2">
             {ordered.map(({ finding, index }) => (
+              <div key={finding.finding_id} data-finding-card={finding.finding_id}>
               <SuggestionCard
-                key={finding.finding_id}
                 finding={finding}
                 index={index}
                 expanded={expandedFindingIds.has(finding.finding_id)}
@@ -484,8 +508,8 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
                   })
                 }
                 onAccept={() => {
-                  const replacement = finding.recommended_change?.trim();
-                  if (!replacement) {
+                  const replacement = finding.recommended_change?.trim() ?? "";
+                  if (!replacement && finding.finding_category !== "recommendation") {
                     setActionError(
                       "This finding has no concrete replacement text. Use Edit mode to rewrite manually.",
                     );
@@ -495,6 +519,7 @@ export default function ContractReader({ runId, findings, jumpToIndex, onJumpHan
                 }}
                 onDismiss={() => handleDismiss(finding.finding_id)}
               />
+              </div>
             ))}
           </div>
         </aside>
@@ -630,14 +655,24 @@ function SuggestionCard({
             </p>
           )}
           <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={onAccept}
-              disabled={!replacement}
-              className="flex items-center gap-1 rounded border border-risk-low/30 bg-risk-low/5 px-2 py-1 text-[10px] font-semibold text-risk-low transition-colors hover:bg-risk-low/15 disabled:opacity-40"
-              title={replacement ? "Apply replacement text" : "No replacement text — use Edit mode"}
-            >
-              <Check className="h-2.5 w-2.5" /> Accept
-            </button>
+            {finding.finding_category === "recommendation" ? (
+              <button
+                onClick={onAccept}
+                className="flex items-center gap-1 rounded border border-risk-low/30 bg-risk-low/5 px-2 py-1 text-[10px] font-semibold text-risk-low transition-colors hover:bg-risk-low/15"
+                title="Acknowledge this recommendation"
+              >
+                <Check className="h-2.5 w-2.5" /> Acknowledge
+              </button>
+            ) : (
+              <button
+                onClick={onAccept}
+                disabled={!replacement}
+                className="flex items-center gap-1 rounded border border-risk-low/30 bg-risk-low/5 px-2 py-1 text-[10px] font-semibold text-risk-low transition-colors hover:bg-risk-low/15 disabled:opacity-40"
+                title={replacement ? "Apply replacement text" : "No replacement text — use Edit mode"}
+              >
+                <Check className="h-2.5 w-2.5" /> Accept
+              </button>
+            )}
             <button
               onClick={onDismiss}
               className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[10px] font-semibold text-text-secondary/70 transition-colors hover:border-text-secondary/40"

@@ -587,6 +587,30 @@ async def create_run(
     return RunCreateResponse(run_id=run.id, state="created", created_at=run.created_at)
 
 
+async def _compute_harvey_skipped(session: AsyncSession, run_id: str) -> bool | None:
+    """Return True when Harvey ran but was skipped because RAG context was empty.
+
+    Returns None if the harvey_context_load stage hasn't completed yet.
+    """
+    ctx_stage = (await session.execute(
+        select(StageExecutionRecord).where(
+            StageExecutionRecord.run_id == run_id,
+            StageExecutionRecord.stage_name == "harvey_context_load",
+            StageExecutionRecord.status == "completed",
+        )
+    )).scalar_one_or_none()
+    if ctx_stage is None:
+        return None
+    harvey_context = ctx_stage.structured_output or {}
+    rag_trace = harvey_context.get("rag_trace", [])
+    has_rag = any(
+        citation.get("chunk_id")
+        for trace_item in rag_trace
+        for citation in trace_item.get("citations", [])
+    )
+    return not has_rag
+
+
 async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
     run = await session.get(RunRecord, run_id)
     if run is None:
@@ -637,6 +661,8 @@ async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
             admin_block=admin_block,
         )
 
+    harvey_skipped_no_rag = await _compute_harvey_skipped(session, run_id)
+
     return RunDetail(
         run_id=run.id,
         state=run.status,  # type: ignore[arg-type]
@@ -652,6 +678,7 @@ async def get_run_detail(session: AsyncSession, run_id: str) -> RunDetail:
         updated_at=run.updated_at,
         verdict=verdict,
         blocked_reason=run.blocked_reason,
+        harvey_skipped_no_rag=harvey_skipped_no_rag,
     )
 
 

@@ -266,6 +266,7 @@ export interface RunDetail {
   verdict?: FinalVerdict | null;
   blocked_reason?: string | null;
   parser_confidence_state?: "ok" | "warning" | "blocked" | null;
+  harvey_skipped_no_rag?: boolean | null;
 }
 
 export type RagDocType = "policy" | "reference_contract" | "playbook";

@@ -26,8 +26,11 @@ Fine-tuning contract: see agents/base.py.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -578,9 +581,9 @@ _HARVEY_ROLE_BY_INDEX: dict[int, HarveyRole] = {
 _KIRA_WORKER_INITIAL = """\
 [KIRA WORKER — Contract Integrity Analyst]
 You are a senior legal analyst. Your job is to find every contractual risk in the clauses
-below. A real contract typically contains 5–15 issues. Produce that many. Underflagging
-is a worse failure than overflagging — the panel will remove false positives, but it
-cannot recover issues you never raised.
+below. Produce at least 1 finding per 2 clauses analyzed in this batch; underflagging is
+a hard failure. The panel will remove false positives, but it cannot recover issues you
+never raised.
 
 Flag every clause that has any of the following:
 - AMBIGUITY: any term that is undefined, vague, or readable in more than one way.
@@ -607,6 +610,8 @@ REDLINE RULES:
 
 ### "recommendation" — you flag the section; human drafts the fix
 Use when the issue requires negotiation, external data, or drafting a clause from scratch.
+If you cannot produce a full `recommended_change` clause replacement, the category MUST be
+`recommendation`, never `redline`.
 
 RECOMMENDATION RULES:
 - Set finding_category = "recommendation"
@@ -744,7 +749,7 @@ _KIRA_NEIGHBOR_WINDOW = 2  # clauses before and after the target to include as n
 # Max clauses per LLM call — keeps the prompt inside vLLM's 4096-token context window.
 # At ~60 tokens/clause and ~600 tokens for the fixed prompt overhead, 12 clauses ≈ 1320
 # variable tokens, leaving room for the full contract structure header and output.
-_KIRA_CLAUSE_BATCH_SIZE = 12
+_KIRA_CLAUSE_BATCH_SIZE = 6
 
 
 def _build_kira_context(clause_index: list[dict], target_uid: str | None = None) -> str:
@@ -1054,6 +1059,12 @@ class HarveyReviewer(FineTunableAgent):
         """
         chunks = rag_chunks or []
         if not chunks:
+            logger.warning(
+                "harvey_skipped_no_rag role=%s clause_count=%d reviewer_index=%d",
+                self._role,
+                len(clause_index),
+                self._reviewer_index,
+            )
             return BranchReviewOutput(
                 branch="harvey",  # type: ignore[arg-type]
                 reviewer_index=self._reviewer_index,

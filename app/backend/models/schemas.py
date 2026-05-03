@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Schema version sentinel — bump when fields are added/removed so persisted
@@ -241,6 +241,12 @@ class Finding(BaseModel):
         description="Legacy alias for consensus_state.",
         json_schema_extra={"legacy": True},
     )
+
+    @model_validator(mode="after")
+    def _enforce_redline_contract(self) -> "Finding":
+        if self.finding_category == "redline" and not (self.recommended_change or "").strip():
+            self.finding_category = "recommendation"
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -548,6 +554,7 @@ class RunDetail(BaseModel):
     updated_at: datetime
     verdict: Optional[FinalVerdict] = None
     blocked_reason: Optional[str] = None
+    harvey_skipped_no_rag: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------

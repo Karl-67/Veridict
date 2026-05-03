@@ -56,19 +56,48 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **Namespace:** `verdict`
 
 **LLM inference:** RunPod A100 SXM 80GB via HTTP proxy  
+- Pod ID: `wuvjzdhu16h7nx`
+- SSH: `ssh root@213.173.102.5 -p 15619 -i ~/.ssh/id_ed25519` (password: stored in memory)
 - Endpoint: `https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1`  
-- Base model: `google/gemma-4-26B-A4B-it`  
-- Kira LoRA: served from same endpoint with `model="kira"`  
-- Until GPU is available the app runs in degraded mode (DB, auth, editor work; LLM calls fail)
+- Base model: `unsloth/gemma-4-26B-A4B-it` — cached at `/workspace/hf_cache/hub/models--unsloth--gemma-4-26B-A4B-it/snapshots/cd98c13581a9d4ad061cb85d983232ca4edb1343`
+- Kira LoRA adapter: `/workspace/kira_gemma4_training/kira_adapter/` — **cannot be hot-served via vLLM LoRA**: vLLM 0.20.0 requires `get_expert_mapping` for MoE LoRA, not yet implemented for Gemma4. Adapter is merged offline into `/workspace/kira_merged/` (see LoRA merge section below).
+- vLLM venv: `/workspace/vllm_env` (install here, not system Python — root fs is only 5 GB)
+- pip cache: `/workspace/pip_cache` — delete after install to reclaim space
+- Workspace storage: 90 GB total, ~62 GB used by model + adapter + backups
+- Until vLLM is running the app operates in degraded mode (DB, auth, editor work; LLM calls fail)
 
-**To start vLLM on RunPod (when GPU available):**
+**To start vLLM on RunPod:**
 ```bash
-vllm serve google/gemma-4-26B-A4B-it \
-  --dtype auto --max-model-len 4096 --tensor-parallel-size 1 \
+# SSH in
+ssh root@213.173.102.5 -p 15619 -i ~/.ssh/id_ed25519
+
+# Start server with nohup (no tmux/screen available on this pod)
+nohup /workspace/vllm_env/bin/python3 -u /workspace/vllm_env/bin/vllm serve \
+  /workspace/hf_cache/hub/models--unsloth--gemma-4-26B-A4B-it/snapshots/cd98c13581a9d4ad061cb85d983232ca4edb1343 \
+  --served-model-name unsloth/gemma-4-26B-A4B-it \
+  --dtype auto --max-model-len 4096 \
+  --max-num-batched-tokens 4096 \
+  --tensor-parallel-size 1 \
+  --distributed-executor-backend mp \
   --port 8000 --host 0.0.0.0 \
-  --enable-lora --lora-modules kira=/workspace/verdict_training/kira_adapter \
-  --disable-log-requests
+  > /workspace/vllm.log 2>&1 &
+
+# NOTE: --enable-lora does NOT work — vLLM 0.20.0 requires get_expert_mapping for MoE LoRA
+# (Gemma4 is a 128-expert MoE). Merge the adapter offline instead (see LoRA merge section).
+
+# Tail logs
+tail -f /workspace/vllm.log
+
+# Test endpoint (from local machine)
+curl https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1/models
 ```
+
+**RunPod environment notes:**
+- No tmux or screen — use `nohup ... &` and log to `/workspace/vllm.log`
+- Root filesystem is only 5 GB — always install packages into `/workspace/vllm_env`
+- Use `TMPDIR=/workspace` and `--cache-dir /workspace/pip_cache` when running pip
+- GPU: A100 SXM4 80 GB, CUDA 12.4, torch 2.4.1+cu124 (system Python 3.11.10)
+- `/workspace` quota is 90 GB (MooseFS); logs go to local storage (ephemeral, deleted on pod pause)
 
 **CI/CD — `.github/workflows/build-push.yml`:**
 - 3 parallel build jobs: `build-api`, `build-worker`, `build-frontend` (each with its own GHA cache scope)
@@ -105,21 +134,24 @@ MLFLOW_TRACKING_URI — (optional, for eval-gate)
 
 **Known GHA cache behaviour:** First run after a new branch/commit builds cold (~15 min per image). Subsequent runs with cache hits take ~1 min per image. The 3 parallel jobs mean wall-clock build time equals the slowest single image.
 
-## Kira fine-tuning (updated 2026-04-29)
+## Kira fine-tuning (updated 2026-05-03)
 
-QLoRA SFT for the Kira reviewer agent runs on a runpod box (RTX A5000, 24 GB VRAM, 503 GB RAM). Full step-by-step in `KIRA_QLORA_RUNBOOK.md`.
+QLoRA SFT for the Kira reviewer agent — training is **complete**. Adapter is saved and backed up on RunPod. Full step-by-step in `KIRA_QLORA_RUNBOOK.md`.
 
-**Target model:** `unsloth/gemma-4-26B-A4B-it` (26B-param MoE, 4B active, 128 experts, multimodal). No pre-quantized bnb-4bit variant exists for this repo — only GGUF and MLX. We download the 51 GB bf16 source and quantize on the fly with CPU offload.
+**Target model:** `unsloth/gemma-4-26B-A4B-it` (26B-param MoE, 4B active, 128 experts, multimodal).
 
-**Stack on the box:** torch 2.10.0+cu128, transformers 5.5.0, accelerate 1.13.0, bitsandbytes 0.49.2, unsloth 2026.4.8. Venv lives at `/home/student1/kira_env`; model cache at `/workspace/hf_cache`.
+**Training was done on:** RTX A5000, 24 GB VRAM. **Inference now runs on:** A100 SXM4 80 GB (same pod, upgraded).
 
-**SSH from Windows git-bash:** no sshpass needed; use `SSH_ASKPASS_REQUIRE=force` with a helper script that echoes the password. See runbook §"SSH from Windows git-bash".
+**Adapter location (production):** `/workspace/kira_gemma4_training/kira_adapter/`  
+**Backup:** `/workspace/backups/kira_gemma4_20260430/`  
+**Training data:** `/workspace/kira_gemma4_training/data/` (22858 / 5327 / 5273 train/val/test examples)  
+**Training log:** `/workspace/kira_gemma4_training/train.log`
 
-**Non-obvious gotchas (any of these, individually, breaks the run):**
+**SSH from Windows (Claude Code automation):** use `SSH_ASKPASS_REQUIRE=force` with a helper script that echoes the password. See runbook §"SSH from Windows git-bash".
+
+**Non-obvious gotchas (training — kept for reference if retraining):**
 - `bnb_4bit_use_double_quant=True` triggers a meta-tensor crash in `QuantState.as_dict` during accelerate dispatch — must be `False`.
 - transformers 5.5/5.7 passes `_is_hf_initialized` to `Params4bit.__new__`, which bnb 0.49 rejects — monkey-patch `Params4bit.__new__` to drop the kwarg.
-- `device_map={"": 0}` OOMs at ~33% of weight load (bf16 weights pile up before quantization). Use `max_memory={0: "20GiB", "cpu": "300GiB"}` to stream through CPU.
+- `device_map={"": 0}` OOMs at ~33% of weight load. Use `max_memory={0: "20GiB", "cpu": "300GiB"}` to stream through CPU.
 - `llm_int8_enable_fp32_cpu_offload=True` is required in `BitsAndBytesConfig` once any module spills to CPU.
-- `/workspace` is MooseFS with a per-user quota ~60 GB (despite `df` showing 192 TB free). Keep venv on `/home`, not `/workspace`.
-
-**Training data:** chat-format JSONL at `/workspace/verdict_training/data/ft/{train,val,test}.jsonl` (22858 / 5327 / 5273 examples), `messages: [{role, content}]`. Output adapter lands at `/workspace/verdict_training/kira_adapter`.
+- Workspace quota is 90 GB. Keep venvs in `/workspace`, not `/home` (which is ephemeral on this pod config).
