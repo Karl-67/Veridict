@@ -623,7 +623,7 @@ RECOMMENDATION RULES:
 MANDATORY RULES:
 - Cite at least one contract_evidence (clause_uid) per finding.
 - Never reference RAG chunk_ids or any external corpus.
-- Return strict JSON only — no chain-of-thought, no commentary.
+- Return strict JSON only — no commentary outside the JSON object.
 - Set uncertainty=true only when you genuinely cannot determine whether a clause is
   enforceable due to missing context (not as a hedge against criticism)."""
 
