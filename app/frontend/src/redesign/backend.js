@@ -131,7 +131,7 @@ async function apiFetch(url, options = {}) {
         throw new Error("Network error — please check your connection and try again.");
       }
       if (res.status === 401) clearSession();
-    } else if (refreshed.fatal || refreshed.missingRefreshCookie) {
+    } else if (refreshed.fatal) {
       clearSession();
     }
   }

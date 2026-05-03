@@ -232,12 +232,37 @@ function AdminScreen() {
 
   function copy() {
     if (!inviteLink) return;
-    navigator.clipboard?.writeText(inviteLink).catch(() => {});
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(inviteLink).catch(() => fallbackCopy(inviteLink));
+    } else {
+      fallbackCopy(inviteLink);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand("copy"); } catch { /* ignore */ }
+    document.body.removeChild(ta);
+  }
+
   const isOrgAdmin = window.verdictApi.currentUser()?.org_role === "org_admin";
+
+  if (!isOrgAdmin) {
+    return (
+      <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80 }}>
+        <p style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-3)", marginBottom: 8 }}>Restricted</p>
+        <h1 style={{ fontFamily: "var(--h-font)", fontSize: 42, fontWeight: 700, letterSpacing: "-0.025em", color: "var(--text)", lineHeight: 1 }}>Admin only</h1>
+        <p style={{ marginTop: 14, fontSize: 13, color: "var(--text-2)" }}>Organisation settings are only available to organisation admins.</p>
+      </div>
+    );
+  }
 
   const tabs = [
     { key: "users",      label: "Users",          count: users.length },
@@ -246,7 +271,7 @@ function AdminScreen() {
     { key: "rag",        label: "Knowledge Base",   count: ragDocs.length },
   ];
 
-  const visibleTabs = isOrgAdmin ? tabs : tabs.filter(t => t.key === "users" || t.key === "workspaces");
+  const visibleTabs = tabs;
 
   // ── shared styles ──
   const colLabel = { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)" };

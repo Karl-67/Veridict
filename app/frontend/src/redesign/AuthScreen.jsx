@@ -64,6 +64,11 @@ function AuthScreen({ onLogin, sessionExpired = false }) {
           password,
         });
       }
+      // Remove ?invite= from URL so re-login doesn't re-enter invite mode
+      if (window.location.search.includes("invite")) {
+        const clean = window.location.pathname;
+        window.history.replaceState(null, "", clean);
+      }
       onLogin();
     } catch (err) {
       setError(err.message || "Authentication failed.");
