@@ -529,9 +529,18 @@ function SuggestionCard({
 
   const diffChunks = useMemo(() => {
     if (!replacement) return null;
-    const evidence = finding.contract_evidence?.[0]?.text || finding.evidence?.[0]?.normalized_text || "";
-    if (!evidence) return null;
-    return computeWordDiff(evidence, replacement);
+    // Use the full clause text (EvidenceRef) as the "before" side of the diff.
+    // contract_evidence[0].text may be a short quote, which produces a near-total
+    // replacement diff. EvidenceRef.normalized_text is the full stored clause text.
+    const clauseText =
+      finding.evidence?.[0]?.normalized_text ||
+      finding.contract_evidence?.[0]?.text ||
+      "";
+    if (!clauseText) return null;
+    // Strip the leading section heading from recommended_change (e.g. "2. Indemnification\n\n")
+    // so the diff compares clause body to clause body, not heading+body to body.
+    const cleanedReplacement = replacement.replace(/^\d[\d.]*\s+[^\n]+\n+/, "").trim() || replacement;
+    return computeWordDiff(clauseText, cleanedReplacement);
   }, [replacement, finding]);
 
   const hasMeaningfulDiff = diffChunks && diffChunks.some((c) => c.type !== "keep");

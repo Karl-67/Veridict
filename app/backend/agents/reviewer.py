@@ -577,59 +577,53 @@ _HARVEY_ROLE_BY_INDEX: dict[int, HarveyRole] = {
 
 _KIRA_WORKER_INITIAL = """\
 [KIRA WORKER — Contract Integrity Analyst]
-You are a legal contract integrity analyst. Review the contract clauses below for internal
-issues: problems within the four corners of this document.
+You are a senior legal analyst. Your job is to find every contractual risk in the clauses
+below. A real contract typically contains 5–15 issues. Produce that many. Underflagging
+is a worse failure than overflagging — the panel will remove false positives, but it
+cannot recover issues you never raised.
 
-Flag clauses that have:
-- AMBIGUITY: vague or undefined terms that could be interpreted against our interests.
-- MISSING PROTECTIONS: standard protections absent or insufficiently covered.
-- EXPLOITABLE GAPS: language a sophisticated counterparty could weaponise.
-- IMBALANCED TERMS: disproportionate obligations or risks loaded against us.
+Flag every clause that has any of the following:
+- AMBIGUITY: any term that is undefined, vague, or readable in more than one way.
+- MISSING PROTECTION: a standard right, cap, or remedy that is absent or watered down.
+- EXPLOITABLE GAP: language a hostile counterparty could use against us.
+- IMBALANCED OBLIGATION: risk or cost disproportionately loaded on our side.
+- UNDEFINED STANDARD: "reasonable", "industry standard", "best efforts" with no anchor.
+- ONE-SIDED RIGHT: a right or discretion the counterparty holds that we do not.
 
-## TWO FINDING CATEGORIES (aim for roughly equal numbers of each)
+When in doubt, flag. Do not self-censor.
 
-### "redline" — you provide a concrete inline replacement
-Use this when you can write a specific, complete rewrite of the clause that directly
-fixes the issue. The replacement text will be shown to the reviewer as an inline diff.
+## FINDING CATEGORIES — produce both types, split roughly 50 / 50
 
-REDLINE FORMATTING RULES (mandatory):
+### "redline" — you provide the fixed clause text
+Use when you can write a complete, specific replacement that resolves the issue.
+
+REDLINE RULES:
 - Set finding_category = "redline"
-- Populate recommended_change with the full replacement clause text.
-- Begin your replacement text with the original section number and title verbatim
-  (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
-  with "2. Indemnification").
-- Preserve paragraph structure and line breaks where present in the original clause.
-- Output ONLY the replacement clause text — do NOT prepend commentary, preambles, or
-  explanations such as "I recommend...", "The revised clause reads:", etc.
-- If the original clause is multi-paragraph, your replacement MUST keep the same number
-  of paragraphs (or more, if you are splitting an ambiguous paragraph for clarity).
-- Do NOT strip the section heading from your replacement.
+- Set recommended_change to the full replacement clause text.
+- Start recommended_change with the original section number and title verbatim
+  (e.g. "2. Indemnification\n\n<new text>").
+- Write only the replacement text — no commentary, preambles, or "I recommend...".
+- Preserve paragraph count; do not drop the section heading.
 
-### "recommendation" — you flag the section for human attention
-Use this when the issue requires broader context, legal judgment, or external input that
-prevents you from providing a specific inline rewrite (e.g. a missing clause that needs
-to be drafted from scratch, a commercial term requiring negotiation, a structural issue
-spanning multiple sections).
+### "recommendation" — you flag the section; human drafts the fix
+Use when the issue requires negotiation, external data, or drafting a clause from scratch.
 
 RECOMMENDATION RULES:
 - Set finding_category = "recommendation"
-- Leave recommended_change null / omit it entirely.
-- Write a precise description and recommendation_detail that tells the reviewer exactly
-  what needs to be addressed and why — the section will be highlighted for their attention.
+- Leave recommended_change null.
+- Write a precise description and recommendation_detail explaining exactly what the
+  reviewer must address and why it is a risk.
 
-CRITICAL RULES:
-- You MUST cite at least one contract_evidence (clause_uid) per finding.
-- You are STRICTLY FORBIDDEN from referencing RAG chunk_ids or any external corpus.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when confidence is below 0.7.
-- For redline findings, keep the full contract structure in mind: you are editing one
-  clause within a multi-section document. Your rewrite must remain coherent with the
-  surrounding sections listed in the Contract Structure above."""
+MANDATORY RULES:
+- Cite at least one contract_evidence (clause_uid) per finding.
+- Never reference RAG chunk_ids or any external corpus.
+- Return strict JSON only — no chain-of-thought, no commentary.
+- Set uncertainty=true only when you genuinely cannot determine whether a clause is
+  enforceable due to missing context (not as a hedge against criticism)."""
 
 _KIRA_WORKER_REVISION = """\
 [KIRA WORKER — Revision Pass]
-Your previous contract analysis was reviewed by the panel and requires changes.
-The panel's feedback is below. Revise your findings accordingly.
+The panel reviewed your findings and requires changes. Address every concern below.
 
 PANEL FEEDBACK:
 {feedback}
@@ -637,34 +631,28 @@ PANEL FEEDBACK:
 CURRENT FINDINGS (revise these):
 {current_findings}
 
-You must:
-- Address every specific concern raised.
-- Remove findings flagged as false positives.
-- Add material issues the panel says you missed.
-- Replace any recommended_change that was flagged as too generic with actual rewrite text,
-  OR reclassify the finding to "recommendation" if a concrete rewrite is not possible.
-- Keep findings the panel did not raise concerns about, preserving their finding_category.
-- Maintain roughly equal numbers of "redline" and "recommendation" findings.
+Instructions:
+1. Fix every concern the panel raised — be specific, not generic.
+2. Remove only findings explicitly flagged as false positives.
+3. Add any material issues the panel says you missed.
+4. For any redline flagged as too vague: write the actual replacement text, or
+   reclassify to "recommendation" with a precise description of what must be fixed.
+5. Preserve findings the panel did not raise concerns about, unchanged.
+6. Keep the split roughly 50 / 50 between redline and recommendation.
 
-REDLINE FORMATTING RULES (mandatory for finding_category="redline"):
-- Begin each replacement text with the original section number and title verbatim
-  (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
-  with "2. Indemnification").
-- Preserve paragraph structure and line breaks where present in the original clause.
-- Output ONLY the replacement clause text — do NOT prepend commentary, preambles, or
-  explanations such as "I recommend...", "The revised clause reads:", etc.
-- If the original clause is multi-paragraph, your replacement MUST keep the same number
-  of paragraphs (or more, if splitting an ambiguous paragraph for clarity).
-- Do NOT strip the section heading from your replacement.
+REDLINE RULES (finding_category="redline"):
+- recommended_change must begin with the original section number and title verbatim.
+- Write only the replacement text — no commentary or preambles.
+- Preserve paragraph count; never drop the section heading.
 
-RECOMMENDATION RULES (for finding_category="recommendation"):
-- Leave recommended_change null / omit it.
-- Provide a precise description and recommendation_detail instead.
+RECOMMENDATION RULES (finding_category="recommendation"):
+- recommended_change must be null.
+- description and recommendation_detail must be specific and actionable.
 
-CRITICAL RULES:
-- You MUST cite at least one contract_evidence (clause_uid) per finding.
-- Do NOT reference RAG chunk_ids or any external corpus.
-- Do NOT include chain-of-thought. Return strict JSON only."""
+MANDATORY:
+- Cite at least one contract_evidence (clause_uid) per finding.
+- No RAG chunk_ids or external corpus references.
+- Return strict JSON only."""
 
 _KIRA_PANEL_REVIEWER = """\
 [KIRA PANEL REVIEWER]
@@ -752,6 +740,11 @@ def _format_compliance_context(context: dict) -> str:
 
 
 _KIRA_NEIGHBOR_WINDOW = 2  # clauses before and after the target to include as neighbors
+
+# Max clauses per LLM call — keeps the prompt inside vLLM's 4096-token context window.
+# At ~60 tokens/clause and ~600 tokens for the fixed prompt overhead, 12 clauses ≈ 1320
+# variable tokens, leaving room for the full contract structure header and output.
+_KIRA_CLAUSE_BATCH_SIZE = 12
 
 
 def _build_kira_context(clause_index: list[dict], target_uid: str | None = None) -> str:
@@ -1193,20 +1186,25 @@ class KiraWorker(FineTunableAgent):
     def agent_role(self) -> str:
         return "kira_worker"
 
-    async def analyze(
+    async def _analyze_batch(
         self,
-        clause_index: list[dict],
+        batch: list[dict],
+        full_clause_index: list[dict],
         compliance_context: dict,
+        round_number: int,
+        batch_label: str = "",
     ) -> list[Finding]:
-        contract_context = _build_kira_context(clause_index)
+        """Analyze a single batch of clauses. Full structure header is always included."""
+        contract_context = _build_kira_context(full_clause_index)
+        batch_note = f" (clauses {batch_label})" if batch_label else ""
         prompt = (
             f"{_KIRA_WORKER_INITIAL}\n\n"
-            "## Contract Structure\n"
+            "## Contract Structure (all sections)\n"
             f"{contract_context}\n\n"
             "## Compliance Context\n"
             f"{_format_compliance_context(compliance_context)}\n\n"
-            "## Contract Clauses\n"
-            f"{_format_clauses(clause_index)}\n\n"
+            f"## Contract Clauses to Analyse{batch_note}\n"
+            f"{_format_clauses(batch)}\n\n"
             "Return ONLY a JSON object matching the schema."
         )
         raw = await self._provider.generate_structured_output(prompt, KIRA_WORKER_OUTPUT_SCHEMA)
@@ -1215,13 +1213,27 @@ class KiraWorker(FineTunableAgent):
             branch="kira",
             reviewer_index=1,
             agent_role=self.agent_role,
-            clause_index=clause_index,
-            round_number=1,
+            clause_index=full_clause_index,
+            round_number=round_number,
             require_rag_citations=False,
             require_contract_evidence=True,
             finding_scope="intra_contract",
         )
         return result.findings
+
+    async def analyze(
+        self,
+        clause_index: list[dict],
+        compliance_context: dict,
+    ) -> list[Finding]:
+        all_findings: list[Finding] = []
+        total = len(clause_index)
+        for start in range(0, total, _KIRA_CLAUSE_BATCH_SIZE):
+            batch = clause_index[start : start + _KIRA_CLAUSE_BATCH_SIZE]
+            label = f"{start + 1}–{min(start + _KIRA_CLAUSE_BATCH_SIZE, total)} of {total}"
+            findings = await self._analyze_batch(batch, clause_index, compliance_context, round_number=1, batch_label=label)
+            all_findings.extend(findings)
+        return all_findings
 
     async def revise(
         self,
@@ -1231,18 +1243,35 @@ class KiraWorker(FineTunableAgent):
         aggregated_feedback: str,
         iteration: int,
     ) -> list[Finding]:
+        # Build a targeted clause index: only clauses referenced by current findings
+        # plus their neighbours, so the revision prompt stays within the context window.
+        finding_uids = {f.clause_uid for f in current_findings}
+        uid_to_idx = {c["clause_uid"]: i for i, c in enumerate(clause_index)}
+        targeted_indices: set[int] = set()
+        for uid in finding_uids:
+            idx = uid_to_idx.get(uid)
+            if idx is not None:
+                lo = max(0, idx - _KIRA_NEIGHBOR_WINDOW)
+                hi = min(len(clause_index) - 1, idx + _KIRA_NEIGHBOR_WINDOW)
+                targeted_indices.update(range(lo, hi + 1))
+        targeted_clauses = (
+            [clause_index[i] for i in sorted(targeted_indices)]
+            if targeted_indices
+            else clause_index[:_KIRA_CLAUSE_BATCH_SIZE]
+        )
+
         contract_context = _build_kira_context(clause_index)
         prompt = (
             _KIRA_WORKER_REVISION.format(
                 feedback=aggregated_feedback,
                 current_findings=_format_findings_for_panel(current_findings),
             ) + "\n\n"
-            "## Contract Structure\n"
+            "## Contract Structure (all sections)\n"
             f"{contract_context}\n\n"
             "## Compliance Context\n"
             f"{_format_compliance_context(compliance_context)}\n\n"
-            "## Contract Clauses\n"
-            f"{_format_clauses(clause_index)}\n\n"
+            "## Referenced Clauses\n"
+            f"{_format_clauses(targeted_clauses)}\n\n"
             "Return ONLY a JSON object matching the schema."
         )
         raw = await self._provider.generate_structured_output(prompt, KIRA_WORKER_OUTPUT_SCHEMA)
