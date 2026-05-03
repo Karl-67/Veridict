@@ -116,6 +116,8 @@ metadata:
   namespace: verdict
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: verdict-prometheus
@@ -125,6 +127,11 @@ spec:
         app: verdict-prometheus
     spec:
       serviceAccountName: verdict-prometheus
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: prometheus
           image: prom/prometheus:v2.51.2
@@ -448,6 +455,8 @@ metadata:
   namespace: verdict
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: verdict-grafana
@@ -456,6 +465,11 @@ spec:
       labels:
         app: verdict-grafana
     spec:
+      securityContext:
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: grafana
           image: grafana/grafana:10.4.2
