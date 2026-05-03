@@ -1567,13 +1567,29 @@ def _split_contract_blob(text: str, base_uid: str, page_number: int) -> list[tup
 
 def _compute_comment_anchors(original_text: str, anns: list) -> list[CommentAnchorOut]:
     result = []
-    norm_orig = " ".join(original_text.lower().split())
+    lower_orig = original_text.lower()
     for ann in anns:
         if not ann.selected_text:
             continue
-        if ann.span_start is not None and ann.span_end is not None:
-            result.append(CommentAnchorOut(annotation_id=ann.id, from_pos=ann.span_start, to_pos=ann.span_end))
+        span_start = getattr(ann, "span_start", None)
+        span_end = getattr(ann, "span_end", None)
+        # Validate stored positions against selected_text before trusting them
+        if span_start is not None and span_end is not None and span_end <= len(original_text):
+            sliced = original_text[span_start:span_end]
+            norm_sliced = " ".join(sliced.lower().split())
+            norm_sel_chk = " ".join(ann.selected_text.lower().split())
+            if norm_sliced == norm_sel_chk:
+                result.append(CommentAnchorOut(annotation_id=ann.id, from_pos=span_start, to_pos=span_end))
+                continue
+        # Fallback: case-insensitive substring search in original text
+        sel_stripped = ann.selected_text.strip()
+        lower_sel = sel_stripped.lower()
+        idx = lower_orig.find(lower_sel)
+        if idx >= 0:
+            result.append(CommentAnchorOut(annotation_id=ann.id, from_pos=idx, to_pos=idx + len(sel_stripped)))
             continue
+        # Last resort: normalized text search (positions in normalized space)
+        norm_orig = " ".join(original_text.lower().split())
         norm_sel = " ".join(ann.selected_text.lower().split())
         idx = norm_orig.find(norm_sel)
         if idx >= 0:
@@ -1749,7 +1765,10 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
                 else:
                     display_text = sub_text
 
-                # Filter comment anchors to those within this sub-block's offset range
+                # Filter comment anchors to those within this sub-block's offset range.
+                # Also include annotations stored under the sub-block's own UID (span coords
+                # are already relative to sub_text so need no offset adjustment).
+                sub_uid_anns = ann_by_clause.get(sub_uid, [])
                 sub_offset = original_text.find(sub_text)
                 if sub_offset >= 0:
                     sub_end = sub_offset + len(sub_text)
@@ -1768,9 +1787,11 @@ async def get_document_draft(run_id: str, db: DbSession) -> DocumentDraftOut:
                         adj.span_start = ann.span_start - sub_offset
                         adj.span_end = ann.span_end - sub_offset
                         adjusted_anns.append(adj)
+                    # Annotations saved directly under sub_uid need no offset adjustment
+                    adjusted_anns.extend(sub_uid_anns)
                     comment_anchors = _compute_comment_anchors(sub_text, adjusted_anns)
                 else:
-                    comment_anchors = []
+                    comment_anchors = _compute_comment_anchors(sub_text, sub_uid_anns)
 
                 # Show pending suggestion only on the evidence-matched sub-block
                 pending_out: Optional[PendingSuggestionOut] = None

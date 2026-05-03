@@ -12,6 +12,7 @@ const verdictRiskConfig = {
   high:   { label: "High Risk Exposure",   color: "var(--risk-high)",   bg: "rgba(196,67,43,0.06)"  },
   medium: { label: "Medium Risk Exposure", color: "var(--risk-medium)", bg: "rgba(200,151,62,0.06)" },
   low:    { label: "Low Risk Exposure",    color: "var(--risk-low)",    bg: "rgba(61,139,94,0.06)"  },
+  failed: { label: "Review Failed",        color: "var(--risk-high)",   bg: "rgba(196,67,43,0.06)"  },
 };
 
 function SectionLabel({ children, style = {} }) {
@@ -246,9 +247,13 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
       if (active) setRawFindings(findings);
       const localCounts = { critical: 0, high: 0, medium: 0, low: 0 };
       findings.forEach(f => { if (f.severity in localCounts) localCounts[f.severity]++; });
+      const isFailed = run.state === "failed" || run.state === "blocked";
       const mapped = {
-        riskLevel: run.verdict?.overall_risk_level === "critical" ? "high" : (run.verdict?.overall_risk_level ?? "medium"),
-        summary: buildExecutiveSummary(run, findings, localCounts),
+        runState: run.state,
+        riskLevel: isFailed ? "failed" : (run.verdict?.overall_risk_level === "critical" ? "high" : (run.verdict?.overall_risk_level ?? "medium")),
+        summary: isFailed
+          ? "The AI review pipeline encountered an error and could not complete the analysis. Please retry the review from the contract page."
+          : buildExecutiveSummary(run, findings, localCounts),
         findings: findings.map((f, index) => ({
           id: f.finding_id ?? String(index),
           severity: f.severity,

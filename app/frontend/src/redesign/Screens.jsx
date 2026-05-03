@@ -191,10 +191,12 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
 // ── Contract Detail Screen ────────────────────────────────────────────────────
 
 function ContractDetailScreen({ navigate, selectedContractId, onViewRun, onAddVersion }) {
-  const [detail, setDetail]   = React.useState(null);
-  const [loadErr, setLoadErr] = React.useState(false);
+  const [detail, setDetail]     = React.useState(null);
+  const [loadErr, setLoadErr]   = React.useState(false);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [versionFile, setVersionFile] = React.useState(null);
+  const [retryingId, setRetryingId] = React.useState(null);
+  const [retryError, setRetryError] = React.useState(null);
 
   React.useEffect(() => {
     if (!selectedContractId) return;
@@ -300,14 +302,34 @@ function ContractDetailScreen({ navigate, selectedContractId, onViewRun, onAddVe
               </div>
               <span style={{ fontSize: 13, color: "var(--text-2)" }}>{v.findingCount} finding{v.findingCount !== 1 ? "s" : ""}</span>
               <div style={{ textAlign: "right" }}>
-                {v.runId && (
+                {v.runId && (v.runState === "failed" || v.runState === "blocked") ? (
+                  <button
+                    onClick={async () => {
+                      setRetryingId(v.runId); setRetryError(null);
+                      try {
+                        await window.verdictApi.retryRun(v.runId);
+                        navigate("contract_detail", selectedContractId);
+                      } catch (e) {
+                        setRetryError(e.message || "Retry failed. Please try again.");
+                        setRetryingId(null);
+                      }
+                    }}
+                    disabled={retryingId === v.runId}
+                    style={{ fontSize: 12, fontWeight: 600, color: "var(--risk-medium)", border: "1px solid rgba(200,151,62,0.35)", borderRadius: 5, padding: "4px 12px", background: "rgba(200,151,62,0.06)", cursor: retryingId === v.runId ? "default" : "pointer", opacity: retryingId === v.runId ? 0.55 : 1, transition: "opacity 0.15s" }}
+                  >
+                    {retryingId === v.runId ? "Retrying…" : "Retry ↺"}
+                  </button>
+                ) : v.runId ? (
                   <button onClick={() => onViewRun(v.runId)} style={{ fontSize: 12, fontWeight: 500, color: "var(--accent)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer" }}>View Report →</button>
-                )}
+                ) : null}
               </div>
             </div>
           );
         })}
       </div>
+      {retryError && (
+        <p style={{ marginTop: 14, fontSize: 12, color: "var(--risk-high)" }}>{retryError}</p>
+      )}
     </div>
   );
 }
