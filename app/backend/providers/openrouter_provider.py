@@ -269,6 +269,17 @@ class OpenRouterProvider(StructuredLLMProvider):
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
     """Parse JSON from the model response, stripping markdown fences and repairing if needed."""
     cleaned = raw_text.strip()
+    # Detect an HTML error page (e.g. nginx 405 when a POST hits the wrong backend).
+    # Raise immediately with a human-readable message instead of storing raw HTML as failure text.
+    if cleaned.startswith("<"):
+        import re as _re
+        title_match = _re.search(r"<title>([^<]{1,80})</title>", cleaned, _re.IGNORECASE)
+        title = title_match.group(1).strip() if title_match else "HTML response"
+        raise NonRetryableProviderError(
+            f"Model endpoint returned an HTML error page ({title}). "
+            "Check that VLLM_BASE_URL / KIRA_MODEL_URL point to the OpenAI-compatible "
+            "/v1 API base, not a browser UI or root URL.",
+        )
     if cleaned.startswith("```"):
         first_newline = cleaned.find("\n")
         if first_newline != -1:

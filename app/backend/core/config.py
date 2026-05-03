@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +87,29 @@ class Settings(BaseSettings):
     # Example: KIRA_MODEL_URL=http://kira-service:8080/v1
     kira_model_url: str = Field("", alias="KIRA_MODEL_URL")
     kira_model_name: str = Field("kira-gemma4-26b", alias="KIRA_MODEL_NAME")
+
+
+    @model_validator(mode="after")
+    def _validate_llm_urls(self) -> "Settings":
+        if self.llm_provider != "vllm":
+            return self
+        for field_name, url in (
+            ("VLLM_BASE_URL", self.vllm_base_url),
+            ("KIRA_MODEL_URL", self.kira_model_url),
+        ):
+            if not url:
+                continue
+            if "#" in url:
+                raise ValueError(
+                    f"{field_name}={url!r} contains a URL fragment (#). "
+                    "Use the RunPod API base ending in /v1, not the browser chat link."
+                )
+            if "proxy.runpod.net" in url and not url.rstrip("/").endswith("/v1"):
+                raise ValueError(
+                    f"{field_name}={url!r} does not end in /v1. "
+                    "Use the RunPod API base (e.g. https://<pod>-8000.proxy.runpod.net/v1)."
+                )
+        return self
 
 
 @lru_cache(maxsize=1)
