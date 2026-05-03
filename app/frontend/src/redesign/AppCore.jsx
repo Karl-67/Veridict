@@ -56,7 +56,10 @@ const MOCK_PIPELINE_STAGES = [
 // ── Shared utilities ──────────────────────────────────────────────────────────
 
 function timeAgo(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
+  const value = typeof iso === "string" && !/[zZ]|[+-]\d{2}:\d{2}$/.test(iso)
+    ? `${iso}Z`
+    : iso;
+  const diff = Date.now() - new Date(value).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return "just now";
   if (m < 60) return `${m}m ago`;
