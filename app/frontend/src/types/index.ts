@@ -87,6 +87,7 @@ export interface Finding {
   description: string;
   recommendation: string;
   recommendation_detail: string;
+  finding_category?: "redline" | "recommendation";
   recommended_change?: string | null;
   evidence: EvidenceRef[];
   contract_evidence?: ContractEvidence[];

@@ -88,6 +88,8 @@ IngestionJobState = Literal["pending", "running", "done", "failed"]
 
 ModelType = Literal["fine_tuned", "baseline"]
 
+FindingCategory = Literal["redline", "recommendation"]
+
 ModelStatus = Literal["available", "pending"]
 
 SearchStrategy = Literal["vector", "text", "hybrid"]
@@ -209,7 +211,10 @@ class Finding(BaseModel):
         description="intra_contract = problem within this contract (Kira); cross_contract = conflict with policy/knowledge base (Harvey).",
     )
 
-    # Kira-only: concrete suggested rewrite for the problematic clause text
+    # Kira-only: "redline" = inline replacement text provided; "recommendation" = section flagged only
+    finding_category: FindingCategory = "redline"
+
+    # Kira-only: concrete suggested rewrite — present only for "redline" category findings
     recommended_change: Optional[str] = None
 
     # Provenance

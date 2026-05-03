@@ -132,6 +132,15 @@ export default function HumanReviewPanel({
                     <span className={cn("shrink-0 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", cfg.style)}>
                       {cfg.label}
                     </span>
+                    {f.finding_category === "recommendation" ? (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+                        Recommendation
+                      </span>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
+                        Redline
+                      </span>
+                    )}
                     <span className="text-sm font-semibold text-text-primary truncate">
                       {f.description.split(/[.\n]/)[0]?.slice(0, 80) || f.clause_uid}
                     </span>
@@ -154,10 +163,17 @@ export default function HumanReviewPanel({
                         {f.recommendation_detail && (
                           <p className="text-xs text-text-primary/70">{f.recommendation_detail}</p>
                         )}
-                        {f.recommended_change && (
+                        {f.finding_category !== "recommendation" && f.recommended_change && (
                           <div className="rounded-lg border border-risk-low/20 bg-risk-low/5 px-3 py-2">
                             <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-risk-low">Suggested replacement</p>
                             <p className="text-xs text-text-primary/80">{f.recommended_change}</p>
+                          </div>
+                        )}
+                        {f.finding_category === "recommendation" && (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+                              Section requires attention — no inline replacement available
+                            </p>
                           </div>
                         )}
                       </div>

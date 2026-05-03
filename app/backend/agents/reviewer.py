@@ -32,7 +32,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.backend.agents.base import BaselineAgent, FineTunableAgent
-from app.backend.models.schemas import BranchReviewOutput, ContractEvidence, EvidenceRef, Finding, RagCitation, ReviewerVote
+from app.backend.models.schemas import BranchReviewOutput, ContractEvidence, EvidenceRef, Finding, FindingCategory, RagCitation, ReviewerVote
 from app.backend.providers.base import StructuredLLMProvider
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,12 @@ def _normalize_finding_item(item: dict) -> dict:
     if not isinstance(item.get("rationale"), str):
         item["rationale"] = ""
     item["unresolved_by_consensus"] = bool(item.get("unresolved_by_consensus") or False)
+    raw_category = item.get("finding_category", "redline")
+    item["finding_category"] = raw_category if raw_category in ("redline", "recommendation") else "redline"
     if not isinstance(item.get("recommended_change"), str):
+        item["recommended_change"] = None
+    # Recommendations must never carry a rewrite — keep them clean
+    if item["finding_category"] == "recommendation":
         item["recommended_change"] = None
     return item
 
@@ -319,12 +324,23 @@ HARVEY_REVIEWER_OUTPUT_SCHEMA: dict = {
 
 KIRA_FINDING_ITEM_SCHEMA: dict = {
     **_FINDING_ITEM_SCHEMA_BASE,
-    "required": [*_FINDING_ITEM_SCHEMA_BASE["required"], "recommended_change"],
+    "required": [*_FINDING_ITEM_SCHEMA_BASE["required"], "finding_category"],
     "properties": {
         **_FINDING_ITEM_SCHEMA_BASE["properties"],
+        "finding_category": {
+            "type": "string",
+            "enum": ["redline", "recommendation"],
+            "description": (
+                "'redline' = you are providing a concrete inline rewrite in recommended_change. "
+                "'recommendation' = you are flagging the section for human attention, no rewrite provided."
+            ),
+        },
         "recommended_change": {
             "type": "string",
-            "description": "Concrete suggested rewrite that fixes this issue.",
+            "description": (
+                "Required for 'redline' findings: the full replacement clause text. "
+                "Must be null or omitted for 'recommendation' findings."
+            ),
         },
     },
 }
@@ -415,9 +431,11 @@ that achieves equivalent legal effect with different wording.
 ## Instructions
 - Flag every plausible contradiction — err toward inclusion
 - Cite the chunk_id from the RAG Context for EVERY finding (mandatory — skip if no citation exists)
+- If the RAG Context is empty or shows "(no RAG context retrieved)", return {"findings": []}
 - Do NOT flag internal contract issues (vague terms, missing protections) — that is Kira's job
 - Set uncertainty=true when you cannot confirm the conflict with certainty
 - Do NOT fabricate chunk_ids — only cite IDs present in the RAG Context above
+- If none of the available chunk_ids support a finding, omit that finding entirely
 - Return strict JSON only, no chain-of-thought"""
 
 _HARVEY_REGRESSION_CHALLENGER = """\
@@ -455,6 +473,8 @@ equivalent protection through different mechanisms.
 ## Instructions
 - Only flag genuine downgrades — not every difference from prior policy
 - Every finding must cite a RAG chunk_id showing the prior higher standard
+- If the RAG Context is empty or shows "(no RAG context retrieved)", return {"findings": []}
+- If none of the available chunk_ids support a finding, omit that finding entirely
 - Analyze from the raw contract directly — do NOT depend on any other agent's output
 - Set uncertainty=true if the regression is ambiguous
 - Return strict JSON only, no chain-of-thought"""
@@ -494,6 +514,8 @@ there is no enforceable mechanism. Jurisdiction would be contested in any litiga
 ## Instructions
 - Assess what happens when this contract is actually invoked, not just whether it reads well
 - Every finding must cite a RAG chunk_id showing the relevant prior policy or standard
+- If the RAG Context is empty or shows "(no RAG context retrieved)", return {"findings": []}
+- If none of the available chunk_ids support a finding, omit that finding entirely
 - Focus on worst-case interpretations — sophisticated counterparty, adversarial reading
 - Analyze from the raw contract directly — do NOT depend on any other agent's output
 - Return strict JSON only, no chain-of-thought"""
@@ -564,10 +586,15 @@ Flag clauses that have:
 - EXPLOITABLE GAPS: language a sophisticated counterparty could weaponise.
 - IMBALANCED TERMS: disproportionate obligations or risks loaded against us.
 
-For EVERY finding you MUST provide a recommended_change: a specific, concrete suggested
-rewrite. Generic advice ("clarify this term") is not acceptable — write the actual text.
+## TWO FINDING CATEGORIES (aim for roughly equal numbers of each)
 
-RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
+### "redline" — you provide a concrete inline replacement
+Use this when you can write a specific, complete rewrite of the clause that directly
+fixes the issue. The replacement text will be shown to the reviewer as an inline diff.
+
+REDLINE FORMATTING RULES (mandatory):
+- Set finding_category = "redline"
+- Populate recommended_change with the full replacement clause text.
 - Begin your replacement text with the original section number and title verbatim
   (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
   with "2. Indemnification").
@@ -578,14 +605,26 @@ RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
   of paragraphs (or more, if you are splitting an ambiguous paragraph for clarity).
 - Do NOT strip the section heading from your replacement.
 
+### "recommendation" — you flag the section for human attention
+Use this when the issue requires broader context, legal judgment, or external input that
+prevents you from providing a specific inline rewrite (e.g. a missing clause that needs
+to be drafted from scratch, a commercial term requiring negotiation, a structural issue
+spanning multiple sections).
+
+RECOMMENDATION RULES:
+- Set finding_category = "recommendation"
+- Leave recommended_change null / omit it entirely.
+- Write a precise description and recommendation_detail that tells the reviewer exactly
+  what needs to be addressed and why — the section will be highlighted for their attention.
+
 CRITICAL RULES:
 - You MUST cite at least one contract_evidence (clause_uid) per finding.
 - You are STRICTLY FORBIDDEN from referencing RAG chunk_ids or any external corpus.
 - Do NOT include chain-of-thought. Return strict JSON only.
 - Set uncertainty=true when confidence is below 0.7.
-- When writing recommended_change, keep the full contract structure in mind: you are
-  editing one clause within a multi-section document. Your rewrite must remain coherent
-  with the surrounding sections listed in the Contract Structure above."""
+- For redline findings, keep the full contract structure in mind: you are editing one
+  clause within a multi-section document. Your rewrite must remain coherent with the
+  surrounding sections listed in the Contract Structure above."""
 
 _KIRA_WORKER_REVISION = """\
 [KIRA WORKER — Revision Pass]
@@ -602,10 +641,12 @@ You must:
 - Address every specific concern raised.
 - Remove findings flagged as false positives.
 - Add material issues the panel says you missed.
-- Replace any recommended_change that was flagged as too generic with actual rewrite text.
-- Keep findings the panel did not raise concerns about.
+- Replace any recommended_change that was flagged as too generic with actual rewrite text,
+  OR reclassify the finding to "recommendation" if a concrete rewrite is not possible.
+- Keep findings the panel did not raise concerns about, preserving their finding_category.
+- Maintain roughly equal numbers of "redline" and "recommendation" findings.
 
-RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
+REDLINE FORMATTING RULES (mandatory for finding_category="redline"):
 - Begin each replacement text with the original section number and title verbatim
   (e.g. if the clause starts with "2. Indemnification", your recommended_change MUST start
   with "2. Indemnification").
@@ -615,6 +656,10 @@ RECOMMENDED_CHANGE FORMATTING RULES (mandatory):
 - If the original clause is multi-paragraph, your replacement MUST keep the same number
   of paragraphs (or more, if splitting an ambiguous paragraph for clarity).
 - Do NOT strip the section heading from your replacement.
+
+RECOMMENDATION RULES (for finding_category="recommendation"):
+- Leave recommended_change null / omit it.
+- Provide a precise description and recommendation_detail instead.
 
 CRITICAL RULES:
 - You MUST cite at least one contract_evidence (clause_uid) per finding.
@@ -629,9 +674,16 @@ contract findings. Decide whether these are ready to pass to the admin reviewer.
 Assess against:
 1. COMPLETENESS — Are obvious material issues missing?
 2. ACCURACY — Are findings real issues, or boilerplate that is not a problem?
-3. ACTIONABILITY — Is each recommended_change a concrete rewrite, not vague advice?
-4. SEVERITY CALIBRATION — Are severities appropriate for a senior lawyer's bar?
-5. SECTION HEADING PRESERVATION — For EVERY finding, verify that the worker's
+3. CATEGORY CORRECTNESS — Is finding_category set appropriately?
+   - "redline": must have a concrete recommended_change (not vague advice). If the
+     recommended_change is generic ("clarify this", "negotiate X"), REJECT and ask the
+     worker to either write the actual replacement text or reclassify as "recommendation".
+   - "recommendation": must NOT have recommended_change. If recommended_change is present
+     on a recommendation finding, REJECT and ask the worker to remove it.
+4. BALANCE — Are redline and recommendation findings roughly equal in number? If one
+   category is more than 2× the other, ask the worker to rebalance.
+5. SEVERITY CALIBRATION — Are severities appropriate for a senior lawyer's bar?
+6. SECTION HEADING PRESERVATION — For EVERY "redline" finding, verify that the worker's
    recommended_change begins with the same section number and title as the original
    clause (e.g. "2. Indemnification\n\n..."). If a recommended_change omits or strips
    the section heading, you MUST REJECT the finding and state in your feedback:
@@ -868,6 +920,7 @@ def _assemble_branch_output(
     require_rag_citations: bool = False,
     require_contract_evidence: bool = True,
     finding_scope: str = "intra_contract",
+    valid_chunk_ids: set[str] | None = None,
 ) -> BranchReviewOutput:
     clauses_by_uid = {c["clause_uid"]: c for c in clause_index}
     findings: list[Finding] = []
@@ -905,6 +958,10 @@ def _assemble_branch_output(
         if require_contract_evidence and not contract_evidence:
             continue
         rag_citations = _rag_citations_from_raw(item.get("rag_citations", []))
+        # Strip citations whose chunk_ids are not in the provided RAG context —
+        # prevents hallucinated chunk_ids from passing through.
+        if valid_chunk_ids is not None:
+            rag_citations = [c for c in rag_citations if c.chunk_id in valid_chunk_ids]
         if require_rag_citations and not rag_citations:
             continue
 
@@ -936,6 +993,7 @@ def _assemble_branch_output(
                 agent_role=agent_role,
                 round_number=round_number,
                 finding_scope=finding_scope,  # type: ignore[arg-type]
+                finding_category=item.get("finding_category", "redline"),  # type: ignore[arg-type]
                 recommended_change=item.get("recommended_change"),
                 unresolved_by_consensus=item.get("unresolved_by_consensus", False),
             )
@@ -996,13 +1054,27 @@ class HarveyReviewer(FineTunableAgent):
         rag_chunks: list[dict] | None = None,
         round_number: int = 1,
     ) -> BranchReviewOutput:
-        """Independent analysis — each Harvey analyzes the raw contract without prior-stage input."""
+        """Independent analysis — each Harvey analyzes the raw contract without prior-stage input.
+
+        Returns empty findings when no RAG context is available — Harvey's purpose is
+        cross-contract comparison against prior policy/knowledge, which requires RAG.
+        """
+        chunks = rag_chunks or []
+        if not chunks:
+            return BranchReviewOutput(
+                branch="harvey",  # type: ignore[arg-type]
+                reviewer_index=self._reviewer_index,
+                findings=[],
+                raw_response_id=None,
+            )
+
+        valid_chunk_ids = {c["chunk_id"] for c in chunks if c.get("chunk_id")}
         prompt = (
             f"{self._role_prompt()}\n\n"
             "## Policy Context\n"
             f"{_format_policy_context(policy_context)}\n\n"
             "## RAG Context\n"
-            f"{_format_rag_context(rag_chunks or [])}\n\n"
+            f"{_format_rag_context(chunks)}\n\n"
             "## Contract Clauses\n"
             f"{_format_clauses(clause_index)}\n\n"
             "Return ONLY a JSON object matching the schema."
@@ -1015,9 +1087,10 @@ class HarveyReviewer(FineTunableAgent):
             agent_role=self.agent_role,
             clause_index=clause_index,
             round_number=round_number,
-            require_rag_citations=bool(rag_chunks),
+            require_rag_citations=True,
             require_contract_evidence=True,
             finding_scope="cross_contract",
+            valid_chunk_ids=valid_chunk_ids,
         )
 
     async def evaluate_peers(

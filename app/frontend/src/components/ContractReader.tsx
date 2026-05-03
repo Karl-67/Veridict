@@ -549,6 +549,15 @@ function SuggestionCard({
           <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color }}>
             {finding.severity}
           </span>
+          {finding.finding_category === "recommendation" ? (
+            <span className="ml-auto rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+              Recommendation
+            </span>
+          ) : (
+            <span className="ml-auto rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
+              Redline
+            </span>
+          )}
         </div>
         <p className="line-clamp-3 text-xs leading-snug text-text-primary">{finding.description}</p>
       </button>
