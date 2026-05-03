@@ -130,6 +130,7 @@ class OpenRouterProvider(StructuredLLMProvider):
         max_retries: int = 3,
         base_backoff_seconds: float = 2.0,
         max_backoff_seconds: float = 90.0,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         extra_headers = (
             {"HTTP-Referer": "https://verdict.app", "X-Title": "Verdict Legal AI"}
@@ -147,6 +148,7 @@ class OpenRouterProvider(StructuredLLMProvider):
         self._max_retries = max_retries
         self._base_backoff = base_backoff_seconds
         self._max_backoff = max_backoff_seconds
+        self._extra_body = extra_body or {}
 
     async def generate_structured_output(
         self,
@@ -193,6 +195,7 @@ class OpenRouterProvider(StructuredLLMProvider):
                     temperature=self._temperature,
                     max_tokens=self._max_output_tokens,
                     response_format={"type": "json_object"},
+                    extra_body=self._extra_body if self._extra_body else None,
                 )
                 latency = time.monotonic() - t_start
                 raw_text = response.choices[0].message.content or ""
@@ -347,7 +350,8 @@ def build_vllm_provider(
     """Build a provider pointing at a cluster-internal vLLM server (OpenAI-compatible API).
 
     vLLM requires a non-empty api_key but ignores its value for unauthenticated
-    cluster-internal endpoints.
+    cluster-internal endpoints. Thinking mode is disabled so responses arrive
+    immediately without a long reasoning trace.
     """
     return OpenRouterProvider(
         api_key="vllm",
@@ -358,4 +362,5 @@ def build_vllm_provider(
         max_retries=max_retries,
         base_backoff_seconds=2.0,
         max_backoff_seconds=30.0,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
