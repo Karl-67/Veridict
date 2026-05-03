@@ -166,8 +166,8 @@ def _provider(settings: Settings):
 def _kira_provider(settings: Settings):
     """Returns a provider for Kira. Uses the fine-tuned cloud endpoint when configured."""
     if settings.kira_model_url:
-        from app.backend.providers.openrouter_provider import build_ollama_provider
-        return build_ollama_provider(
+        from app.backend.providers.openrouter_provider import build_vllm_provider
+        return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
             max_retries=settings.max_stage_retries,
@@ -289,6 +289,9 @@ def _load_rag_chunks_from_trace(session: Session, harvey_context: dict) -> list[
     ]
 
 
+_HARVEY_MAX_ITERATIONS = 3
+
+
 async def _run_harvey_review_block(
     clause_index: list[dict],
     policy_context: dict,
@@ -296,40 +299,84 @@ async def _run_harvey_review_block(
     settings: Settings,
     round_number: int,
 ) -> dict:
-    """Sequential 3-stage Harvey pipeline.
+    """Parallel Harvey panel: 3 agents analyze independently, cross-evaluate, vote 2-of-3.
 
-    Stage 1 (contradiction_finder)  — exhaustive discovery on contract + RAG.
-    Stage 2 (regression_challenger) — receives stage-1 findings, filters to material regressions.
-    Stage 3 (downstream_risk)       — receives stage-2 findings, enriches with downstream consequences.
-
-    Each stage sees the prior stage's output, not the raw contract independently.
+    Phase 1: All 3 Harvey agents analyze the raw contract in parallel (no prior-stage input).
+    Phase 2: Each agent evaluates the other two's findings in parallel (cross-evaluation).
+    Phase 3: Vote — 2-of-3 approve → merge findings → admin. Else retry from scratch.
     """
     provider = _provider(settings)
+    # Use secondary Harvey endpoint for one of the 3 parallel agents when configured,
+    # so the two servers share the load.
+    provider2 = None
+    if settings.llm_provider == "vllm" and settings.vllm_base_url_2:
+        from app.backend.providers.openrouter_provider import build_vllm_provider as _bvp
+        provider2 = _bvp(
+            base_url=settings.vllm_base_url_2,
+            model_name=settings.vllm_base_model,
+            max_retries=settings.max_stage_retries,
+        )
     try:
-        r1 = HarveyReviewer(provider, 1)
-        r2 = HarveyReviewer(provider, 2)
-        r3 = HarveyReviewer(provider, 3)
+        out1 = out2 = out3 = None
+        vote_result: dict = {"passed": False, "attempts": 0, "approvals": 0}
 
-        # Stage 1: exhaustive contradiction discovery
-        initial_output = await r1.review(clause_index, policy_context, rag_chunks)
-        initial_findings = initial_output.findings
+        for attempt in range(1, _HARVEY_MAX_ITERATIONS + 1):
+            r1 = HarveyReviewer(provider, 1)
+            r2 = HarveyReviewer(provider, 2)
+            # Agent 3 uses the secondary server when available
+            r3 = HarveyReviewer(provider2 if provider2 else provider, 3)
 
-        # Stage 2: challenge — filters stage-1 findings to genuine regressions
-        challenged_findings = await r2.challenge(initial_findings, clause_index, policy_context, rag_chunks)
+            # Phase 1: independent parallel analysis
+            out1, out2, out3 = await asyncio.gather(
+                r1.analyze(clause_index, policy_context, rag_chunks, round_number=round_number),
+                r2.analyze(clause_index, policy_context, rag_chunks, round_number=round_number),
+                r3.analyze(clause_index, policy_context, rag_chunks, round_number=round_number),
+            )
 
-        # Stage 3: downstream risk enrichment of validated findings
-        final_findings = await r3.assess_risk(challenged_findings, clause_index, policy_context, rag_chunks)
+            # Phase 2: cross-evaluation — each reviews the other two's findings in parallel
+            peer_roles_for_1 = ["regression_challenger", "downstream_risk"]
+            peer_roles_for_2 = ["contradiction_finder", "downstream_risk"]
+            peer_roles_for_3 = ["contradiction_finder", "regression_challenger"]
 
+            vote1, vote2, vote3 = await asyncio.gather(
+                r1.evaluate_peers(
+                    out2.findings + out3.findings, clause_index, policy_context, rag_chunks, peer_roles_for_1
+                ),
+                r2.evaluate_peers(
+                    out1.findings + out3.findings, clause_index, policy_context, rag_chunks, peer_roles_for_2
+                ),
+                r3.evaluate_peers(
+                    out1.findings + out2.findings, clause_index, policy_context, rag_chunks, peer_roles_for_3
+                ),
+            )
+
+            # Phase 3: vote — 2-of-3 required
+            approvals = sum(1 for v in [vote1, vote2, vote3] if v.decision == "approve")
+            vote_result = {"passed": approvals >= 2, "attempts": attempt, "approvals": approvals}
+
+            if approvals >= 2:
+                break
+            # else: retry all 3 from scratch
+
+        # Merge all findings from all 3 agents
+        all_findings = (
+            (out1.findings if out1 else [])
+            + (out2.findings if out2 else [])
+            + (out3.findings if out3 else [])
+        )
         return {
-            "aggregated_findings": [f.model_dump(mode="json") for f in final_findings],
-            "pipeline": {
-                "stage1_initial_count": len(initial_findings),
-                "stage2_challenged_count": len(challenged_findings),
-                "stage3_final_count": len(final_findings),
+            "aggregated_findings": [f.model_dump(mode="json") for f in all_findings],
+            "vote": vote_result,
+            "agent_counts": {
+                "contradiction_finder": len(out1.findings) if out1 else 0,
+                "regression_challenger": len(out2.findings) if out2 else 0,
+                "downstream_risk": len(out3.findings) if out3 else 0,
             },
         }
     finally:
         await provider.aclose()
+        if provider2:
+            await provider2.aclose()
 
 
 async def _run_admin_merge(

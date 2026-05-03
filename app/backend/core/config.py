@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     openrouter_model: str = Field("google/gemma-4-31b-it:free", alias="OPENROUTER_MODEL")
 
     # vLLM (cluster-internal inference server — used when LLM_PROVIDER=vllm)
-    # Points to the base Gemma 4 26B vLLM pod (Harvey, admin, validators)
+    # Primary Harvey endpoint; secondary is optional for load-balancing the 3 parallel Harvey calls.
     vllm_base_url: str = Field("", alias="VLLM_BASE_URL")
+    vllm_base_url_2: str = Field("", alias="VLLM_BASE_URL_2")
     vllm_base_model: str = Field("google/gemma-4-26B-A4B-it", alias="VLLM_BASE_MODEL")
 
     # Gemini / LLM provider (kept for backwards compat — no longer used)

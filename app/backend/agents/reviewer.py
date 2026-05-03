@@ -1,16 +1,14 @@
 """
 Verdict reviewer agents.
 
-Harvey — sequential 3-stage pipeline (not parallel independent passes):
-  Stage 1  HarveyReviewer(1) contradiction_finder   — exhaustive discovery on contract + RAG
-  Stage 2  HarveyReviewer(2) regression_challenger  — receives stage-1 findings, filters to
-                                                       material regressions only
-  Stage 3  HarveyReviewer(3) downstream_risk        — receives stage-2 findings, enriches each
-                                                       with downstream enforcement gap / liability
+Harvey — parallel independent analysis + peer cross-evaluation + 2-of-3 vote:
+  HarveyReviewer(1) contradiction_finder  — finds contradictions between contract and prior policy/RAG
+  HarveyReviewer(2) regression_challenger — finds material regressions vs established standards
+  HarveyReviewer(3) downstream_risk       — finds liability exposure and enforcement gaps
 
-  The sequential dependency is intentional: regression_challenger only makes sense if it
-  sees what contradiction_finder found. Running them independently wastes the role
-  differentiation. The filtered output from stage 3 goes directly to admin.
+  All 3 run independently on the raw contract (parallel). Then each evaluates the other two's
+  findings (cross-evaluation). Vote: 2-of-3 approve → merge findings → admin.
+  2+ reject → retry all 3 from scratch (max 3 iterations).
 
 Kira — worker + panel loop:
   KiraWorker (1 instance)        — analyses the contract, must provide recommended_change
@@ -386,72 +384,163 @@ class KiraReviewerDecision(BaseModel):
 # ---------------------------------------------------------------------------
 
 _HARVEY_CONTRADICTION_FINDER = """\
-[HARVEY STAGE 1 — Contradiction Finder]
-You are a legal policy continuity analyst performing an exhaustive first-pass discovery.
-Compare every contract clause against the prior policy versions and knowledge-base documents
-in the RAG Context below.
+## Task
+Find every clause in this contract that directly conflicts with the organization's prior \
+policy versions or knowledge-base documents in the RAG Context.
 
-Flag clauses that:
-- Directly contradict a rule, obligation, or term in a prior policy version.
-- Remove or substantially weaken a protection established in a prior version.
-- Conflict with another contract or regulatory standard in the knowledge base.
-- Introduce language inconsistent with the organisation's established policy history.
+A contradiction exists when:
+- A prior policy explicitly permits X, but this contract restricts or prohibits X
+- A prior policy requires X, but this contract omits or weakens that requirement
+- This contract introduces a term that cannot coexist with an existing commitment
 
-Err on the side of inclusion — your output will be reviewed by the Regression Challenger
-in the next stage, so flag every plausible contradiction.
+## Examples
 
-CRITICAL RULES:
-- You MUST cite at least one rag_citation (chunk_id from the RAG Context) for EVERY finding.
-- Do NOT flag internal contract problems — that is Kira's job.
-- Do NOT include chain-of-thought. Return strict JSON only.
-- Set uncertainty=true when confidence is below 0.7.
-- Do not fabricate chunk_ids. Only cite IDs present in the RAG Context."""
+EXAMPLE 1 — Direct conflict:
+Prior policy (chunk_id: corp-policy-2023-04): "All vendor indemnification is capped at \
+2× annual contract value."
+Contract clause [C-14]: "Vendor shall indemnify Client for all losses without limitation."
+→ Flag: C-14 removes the 2× cap from corp-policy-2023-04. Creates unlimited indemnification \
+exposure that directly contradicts the standard policy ceiling.
+
+EXAMPLE 2 — Weakened protection:
+Prior policy (chunk_id: master-terms-v3): "Payment terms shall not exceed Net-30 without \
+CFO approval."
+Contract clause [C-22]: "Payment due within 90 days of invoice."
+→ Flag: C-22 sets Net-90 without CFO approval, violating master-terms-v3's 30-day ceiling.
+
+EXAMPLE 3 — Not a contradiction (do NOT flag):
+Prior policy allows "standard commercial terms." Contract uses industry-standard language \
+that achieves equivalent legal effect with different wording.
+→ Skip: stylistic variation, no substantive conflict.
+
+## Instructions
+- Flag every plausible contradiction — err toward inclusion
+- Cite the chunk_id from the RAG Context for EVERY finding (mandatory — skip if no citation exists)
+- Do NOT flag internal contract issues (vague terms, missing protections) — that is Kira's job
+- Set uncertainty=true when you cannot confirm the conflict with certainty
+- Do NOT fabricate chunk_ids — only cite IDs present in the RAG Context above
+- Return strict JSON only, no chain-of-thought"""
 
 _HARVEY_REGRESSION_CHALLENGER = """\
-[HARVEY STAGE 2 — Regression Challenger]
-You are a legal policy continuity analyst. The Contradiction Finder has identified the
-following potential issues in the contract. Your job is to filter this list down to only
-the findings that represent genuine, material regressions from prior policy.
+## Task
+Find clauses where this contract is materially worse than the organization's established \
+standards — genuine downgrades that a senior lawyer would flag for negotiation.
 
-CONTRADICTION FINDER FINDINGS:
-{prior_findings}
+A material regression is:
+- A protection that existed in prior agreements or policy that is weakened or absent here
+- A term that shifts risk or obligation to our organization beyond the established baseline
+- A clause that removes a right or remedy available under the prior standard
 
-For each finding above, decide:
-- KEEP if it represents a real regression a senior legal counsel would act on.
-- DISCARD if it is a legitimate documented policy update, a restatement in different words
-  with equivalent effect, or a minor structural/formatting change with no substantive impact.
-- ADJUST severity downward if the issue is real but less severe than flagged.
+This is NOT about stylistic changes or documented policy updates.
 
-Return only the findings you are keeping (with any adjustments). A finding missing from
-your response is treated as discarded.
+## Examples
 
-CRITICAL RULES:
-- Every finding you keep MUST retain at least one rag_citation.
-- Do NOT add new findings — only filter and adjust what the Contradiction Finder produced.
-- Do NOT include chain-of-thought. Return strict JSON only."""
+EXAMPLE 1 — Material regression:
+Prior standard (chunk_id: std-vendor-terms-2022): "Either party may terminate for \
+convenience with 30 days notice."
+Contract clause [C-8]: "Client may only terminate for cause."
+→ Flag: C-8 removes the for-convenience termination right. Prior standard guaranteed this \
+exit right — its removal locks us in without recourse.
+
+EXAMPLE 2 — Regression in liability allocation:
+Prior template (chunk_id: msa-template-v5): "Each party excludes consequential damages."
+Contract clause [C-31]: "Client bears all consequential damages from vendor performance."
+→ Flag: C-31 shifts all consequential damages to Client. The prior MSA template had mutual \
+exclusions — this is a one-sided downgrade.
+
+EXAMPLE 3 — Not a regression (do NOT flag):
+Contract omits a provision that was optional in prior agreements. Both versions achieve \
+equivalent protection through different mechanisms.
+→ Skip: equivalent protection exists, no material downgrade.
+
+## Instructions
+- Only flag genuine downgrades — not every difference from prior policy
+- Every finding must cite a RAG chunk_id showing the prior higher standard
+- Analyze from the raw contract directly — do NOT depend on any other agent's output
+- Set uncertainty=true if the regression is ambiguous
+- Return strict JSON only, no chain-of-thought"""
 
 _HARVEY_DOWNSTREAM_RISK = """\
-[HARVEY STAGE 3 — Downstream Risk Analyst]
-You are a legal policy continuity analyst specialising in downstream consequences.
-The following contradictions have been validated by the Regression Challenger:
+## Task
+Identify enforcement gaps, liability exposure, and exploitable loopholes in this \
+contract's language — issues that may not surface until the contract is invoked in a \
+dispute or audit.
 
-VALIDATED CONTRADICTION FINDINGS:
-{prior_findings}
+A downstream risk is:
+- Language a sophisticated counterparty could interpret against our interests
+- A missing mechanism that leaves us without a remedy in a plausible dispute scenario
+- An obligation that becomes unenforceable due to vague or conflicting definitions
+- Language that could be used as evidence of policy waiver in litigation
 
-For each finding, enrich it by assessing what downstream enforcement gap, loophole, or
-liability this contradiction creates:
-- Can the counterparty exploit the inconsistency between this clause and prior policy?
-- Does it create an unenforceable obligation because it conflicts with a prior commitment?
-- Could it be weaponised in a dispute as evidence of waiver or policy regression?
-- What is the worst-case downstream consequence if this is not corrected?
+## Examples
 
-Update each finding's description, severity, and recommendation_detail to reflect the
-downstream risk. Do not discard findings — enrich all of them.
+EXAMPLE 1 — Exploitable definition gap:
+Contract clause [C-5]: "Vendor shall provide services at industry standard quality."
+→ Flag: "Industry standard" is undefined and unanchored. In a dispute the vendor can argue \
+any minimal effort qualifies. Worst case: no SLA breach is provable. Severity: HIGH. \
+Cite RAG chunk showing prior contracts defined specific, measurable benchmarks.
 
-CRITICAL RULES:
-- Preserve all rag_citations from the validated findings.
-- You may increase severity but not decrease it.
-- Do NOT include chain-of-thought. Return strict JSON only."""
+EXAMPLE 2 — Waiver risk:
+Prior policy (chunk_id: legal-ops-memo-2024): "Our standard allows 30 days breach notice."
+Contract clause [C-19]: "Client shall provide written notice of any breach within 10 days."
+→ Flag: C-19 cuts our breach response window to 10 days. If Client misses this deadline \
+even once, the counterparty gains a waiver argument. The inconsistency with our 30-day \
+standard creates litigation risk.
+
+EXAMPLE 3 — Enforcement gap:
+Contract clause [C-27]: "Disputes shall be resolved by mutual agreement."
+→ Flag: No arbitration, mediation, or jurisdiction clause. If mutual agreement fails, \
+there is no enforceable mechanism. Jurisdiction would be contested in any litigation.
+
+## Instructions
+- Assess what happens when this contract is actually invoked, not just whether it reads well
+- Every finding must cite a RAG chunk_id showing the relevant prior policy or standard
+- Focus on worst-case interpretations — sophisticated counterparty, adversarial reading
+- Analyze from the raw contract directly — do NOT depend on any other agent's output
+- Return strict JSON only, no chain-of-thought"""
+
+_HARVEY_PEER_EVALUATOR = """\
+## Task
+Review the findings submitted by two other Harvey agents and vote on whether their \
+analysis is ready to pass to the Admin reviewer.
+
+## Agents you are reviewing
+{peer_roles}
+
+## Their findings
+{peer_findings}
+
+## What to check
+
+1. GROUNDEDNESS — Is each finding supported by actual contract text (clause_uid) and RAG \
+evidence (chunk_id)? If a finding cites a chunk_id or clause_uid that does not match the \
+claim in its description, flag it.
+
+2. MATERIALITY — Is each finding a real issue a senior lawyer would act on? Flag anything \
+trivial, already resolved in the contract text, or based on a misreading.
+
+3. COMPLETENESS — Based on the contract clauses and RAG context you have access to, did \
+these agents miss any significant issue within their respective domains?
+
+## How to vote
+
+APPROVE if:
+- Findings are grounded in evidence you can verify
+- Issues are material and non-trivial
+- Analysis is substantially complete (minor gaps are acceptable)
+
+REJECT if:
+- One or more findings cite evidence that does not support the claim
+- Material issues within the agents' scope were missed
+- A finding is based on a clear misreading of the contract
+
+## Feedback format (required if rejecting)
+Be specific. Name the finding_id and what exactly is wrong.
+  WRONG: "Findings need improvement"
+  RIGHT: "Finding F-3 cites chunk_id 'corp-policy-2023-04' but that chunk addresses \
+payment terms, not indemnification — the citation does not support the claim."
+
+Return strict JSON only, no chain-of-thought."""
 
 HarveyRole = Literal["contradiction_finder", "regression_challenger", "downstream_risk"]
 
@@ -828,14 +917,13 @@ def _assemble_branch_output(
 
 
 class HarveyReviewer(FineTunableAgent):
-    """Harvey branch reviewer.
+    """Harvey branch reviewer — parallel independent analysis + peer cross-evaluation.
 
-    Run in sequence: reviewer_index 1 → 2 → 3.
-    Each stage receives the prior stage's findings as input.
+    All 3 instances run independently on the raw contract (no prior-stage input).
+    After analysis, each evaluates the other two's findings and votes approve/reject.
+    2-of-3 approvals → findings pass to admin; else all 3 retry from scratch.
 
     Fine-tuning: CUAD dataset (clause annotation, conflict detection), priority 2.
-    fine_tune_checkpoint should be set once a checkpoint is available; the provider
-    factory will route to the fine-tuned endpoint automatically.
     """
 
     fine_tune_dataset = "CUAD"
@@ -855,16 +943,23 @@ class HarveyReviewer(FineTunableAgent):
     def agent_role(self) -> str:
         return f"harvey_{self._role}"
 
-    async def review(
+    def _role_prompt(self) -> str:
+        return {
+            "contradiction_finder": _HARVEY_CONTRADICTION_FINDER,
+            "regression_challenger": _HARVEY_REGRESSION_CHALLENGER,
+            "downstream_risk": _HARVEY_DOWNSTREAM_RISK,
+        }[self._role]
+
+    async def analyze(
         self,
         clause_index: list[dict],
         policy_context: dict,
         rag_chunks: list[dict] | None = None,
+        round_number: int = 1,
     ) -> BranchReviewOutput:
-        """Stage 1 only — contradiction_finder initial discovery pass."""
-        assert self._reviewer_index == 1, "review() is only for stage 1 (contradiction_finder)"
+        """Independent analysis — each Harvey analyzes the raw contract without prior-stage input."""
         prompt = (
-            f"{_HARVEY_CONTRADICTION_FINDER}\n\n"
+            f"{self._role_prompt()}\n\n"
             "## Policy Context\n"
             f"{_format_policy_context(policy_context)}\n\n"
             "## RAG Context\n"
@@ -877,14 +972,63 @@ class HarveyReviewer(FineTunableAgent):
         return _assemble_branch_output(
             raw,
             branch="harvey",
-            reviewer_index=1,
+            reviewer_index=self._reviewer_index,
             agent_role=self.agent_role,
             clause_index=clause_index,
-            round_number=1,
+            round_number=round_number,
             require_rag_citations=True,
             require_contract_evidence=True,
             finding_scope="cross_contract",
         )
+
+    async def evaluate_peers(
+        self,
+        peer_findings: list[Finding],
+        clause_index: list[dict],
+        policy_context: dict,
+        rag_chunks: list[dict] | None = None,
+        peer_roles: list[str] | None = None,
+    ) -> KiraReviewerDecision:
+        """Cross-evaluation: review the other two Harveys' findings and vote approve/reject."""
+        roles_block = (
+            "\n".join(f"- {r}" for r in (peer_roles or ["unknown", "unknown"]))
+        )
+        findings_block = _format_findings_for_stage(peer_findings)
+        prompt = (
+            _HARVEY_PEER_EVALUATOR.format(
+                peer_roles=roles_block,
+                peer_findings=findings_block,
+            ) + "\n\n"
+            "## Policy Context\n"
+            f"{_format_policy_context(policy_context)}\n\n"
+            "## RAG Context\n"
+            f"{_format_rag_context(rag_chunks or [])}\n\n"
+            "## Contract Clauses\n"
+            f"{_format_clauses(clause_index)}\n\n"
+            "Return ONLY a JSON object matching the schema."
+        )
+        raw = await self._provider.generate_structured_output(prompt, KIRA_PANEL_DECISION_SCHEMA)
+        decision_str = str(raw.get("decision", "reject")).lower().strip()
+        decision: Literal["approve", "reject"] = "approve" if decision_str == "approve" else "reject"
+        return KiraReviewerDecision(
+            reviewer_index=self._reviewer_index,
+            decision=decision,
+            feedback=raw.get("feedback"),
+            finding_concerns=raw.get("finding_concerns", []),
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy sequential methods — kept for backward compatibility only.
+    # The new pipeline calls analyze() + evaluate_peers() instead.
+    # ------------------------------------------------------------------
+
+    async def review(
+        self,
+        clause_index: list[dict],
+        policy_context: dict,
+        rag_chunks: list[dict] | None = None,
+    ) -> BranchReviewOutput:
+        return await self.analyze(clause_index, policy_context, rag_chunks)
 
     async def challenge(
         self,
@@ -893,32 +1037,8 @@ class HarveyReviewer(FineTunableAgent):
         policy_context: dict,
         rag_chunks: list[dict] | None = None,
     ) -> list[Finding]:
-        """Stage 2 — regression_challenger filters contradiction_finder's output."""
-        assert self._reviewer_index == 2, "challenge() is only for stage 2 (regression_challenger)"
-        prior_block = _format_findings_for_stage(prior_findings)
-        prompt = (
-            _HARVEY_REGRESSION_CHALLENGER.format(prior_findings=prior_block) + "\n\n"
-            "## Policy Context\n"
-            f"{_format_policy_context(policy_context)}\n\n"
-            "## RAG Context\n"
-            f"{_format_rag_context(rag_chunks or [])}\n\n"
-            "## Contract Clauses (for reference)\n"
-            f"{_format_clauses(clause_index)}\n\n"
-            "Return ONLY a JSON object matching the schema."
-        )
-        raw = await self._provider.generate_structured_output(prompt, HARVEY_REVIEWER_OUTPUT_SCHEMA)
-        output = _assemble_branch_output(
-            raw,
-            branch="harvey",
-            reviewer_index=2,
-            agent_role=self.agent_role,
-            clause_index=clause_index,
-            round_number=1,
-            require_rag_citations=True,
-            require_contract_evidence=True,
-            finding_scope="cross_contract",
-        )
-        return output.findings
+        out = await self.analyze(clause_index, policy_context, rag_chunks)
+        return out.findings
 
     async def assess_risk(
         self,
@@ -927,32 +1047,8 @@ class HarveyReviewer(FineTunableAgent):
         policy_context: dict,
         rag_chunks: list[dict] | None = None,
     ) -> list[Finding]:
-        """Stage 3 — downstream_risk enriches the validated findings."""
-        assert self._reviewer_index == 3, "assess_risk() is only for stage 3 (downstream_risk)"
-        prior_block = _format_findings_for_stage(prior_findings)
-        prompt = (
-            _HARVEY_DOWNSTREAM_RISK.format(prior_findings=prior_block) + "\n\n"
-            "## Policy Context\n"
-            f"{_format_policy_context(policy_context)}\n\n"
-            "## RAG Context\n"
-            f"{_format_rag_context(rag_chunks or [])}\n\n"
-            "## Contract Clauses (for reference)\n"
-            f"{_format_clauses(clause_index)}\n\n"
-            "Return ONLY a JSON object matching the schema."
-        )
-        raw = await self._provider.generate_structured_output(prompt, HARVEY_REVIEWER_OUTPUT_SCHEMA)
-        output = _assemble_branch_output(
-            raw,
-            branch="harvey",
-            reviewer_index=3,
-            agent_role=self.agent_role,
-            clause_index=clause_index,
-            round_number=1,
-            require_rag_citations=True,
-            require_contract_evidence=True,
-            finding_scope="cross_contract",
-        )
-        return output.findings
+        out = await self.analyze(clause_index, policy_context, rag_chunks)
+        return out.findings
 
 
 # ---------------------------------------------------------------------------
