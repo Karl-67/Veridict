@@ -179,6 +179,91 @@ function CommentsPanel({ runId }) {
 
 // ── Executive summary builder ─────────────────────────────────────────────────
 
+function HarveyConflictPanel({ findings, loading }) {
+  const [expandedId, setExpandedId] = React.useState(null);
+
+  function citationLabel(citation) {
+    return [
+      citation.source_path || citation.document_id || "RAG source",
+      citation.version ? `v${citation.version}` : null,
+      citation.page ? `p. ${citation.page}` : null,
+    ].filter(Boolean).join(" - ");
+  }
+
+  return (
+    <div>
+      <SectionLabel style={{ marginBottom: 12 }}>Policy / Precedent Conflicts</SectionLabel>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", background: "var(--surface)" }}>
+        {loading && (
+          <div style={{ padding: "16px 14px", color: "var(--text-3)", fontSize: 12.5 }}>Loading Harvey context...</div>
+        )}
+        {!loading && findings.length === 0 && (
+          <div style={{ padding: "16px 14px" }}>
+            <p style={{ fontSize: 12.5, color: "var(--text)", lineHeight: 1.55 }}>No separate Harvey policy conflicts were found.</p>
+            <p style={{ fontSize: 11.5, color: "var(--text-3)", marginTop: 5, lineHeight: 1.5 }}>Lawyer review is still required for final judgment.</p>
+          </div>
+        )}
+        {!loading && findings.map((finding, index) => {
+          const id = finding.finding_id ?? `${finding.clause_uid}-${index}`;
+          const open = expandedId === id;
+          const citations = finding.rag_citations ?? [];
+          const evidence = finding.contract_evidence?.[0]?.text || finding.evidence?.[0]?.normalized_text || "";
+          return (
+            <div key={id} style={{ borderBottom: index < findings.length - 1 ? "1px solid var(--border-light)" : "none" }}>
+              <button
+                onClick={() => setExpandedId(open ? null : id)}
+                style={{ width: "100%", border: "none", background: "none", cursor: "pointer", textAlign: "left", padding: "13px 14px", display: "flex", gap: 10, alignItems: "flex-start" }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: 2, background: riskColor(finding.severity), marginTop: 6, flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: "var(--text)", lineHeight: 1.45 }}>
+                    {finding.description || "Potential conflict"}
+                  </span>
+                  <span style={{ display: "block", fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>
+                    {citations.length} source citation{citations.length !== 1 ? "s" : ""}
+                  </span>
+                </span>
+                <span style={{ color: "var(--text-3)", transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.15s", marginTop: 1 }}>
+                  <IconChevronDown size={12} />
+                </span>
+              </button>
+              {open && (
+                <div style={{ padding: "0 14px 14px 31px", animation: "fadeIn 0.18s ease" }}>
+                  {evidence && (
+                    <>
+                      <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)", marginBottom: 6 }}>Contract clause</p>
+                      <p style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.6, marginBottom: 12 }}>{evidence}</p>
+                    </>
+                  )}
+                  {finding.recommendation_detail && (
+                    <>
+                      <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)", marginBottom: 6 }}>Why it may conflict</p>
+                      <p style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.6, marginBottom: 12 }}>{finding.recommendation_detail}</p>
+                    </>
+                  )}
+                  {citations.length > 0 && (
+                    <>
+                      <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-3)", marginBottom: 6 }}>Sources</p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {citations.slice(0, 3).map((citation, i) => (
+                          <div key={`${citation.chunk_id || citation.document_id}-${i}`} style={{ fontSize: 11.5, color: "var(--text-2)", lineHeight: 1.45, padding: "7px 9px", background: "var(--hover-bg)", borderRadius: 6 }}>
+                            {citationLabel(citation)}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <p style={{ fontSize: 11, color: "var(--text-3)", marginTop: 12, lineHeight: 1.5 }}>Treat as evidence context, not a final legal conclusion.</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function buildExecutiveSummary(run, findings, counts) {
   // Use the AI-generated summary if it's substantive and not the generic fallback
   const aiSummary = run?.verdict?.summary ?? "";
@@ -224,6 +309,8 @@ function buildExecutiveSummary(run, findings, counts) {
 function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove, onReject }) {
   const [verdict, setVerdict]         = React.useState(null);
   const [rawFindings, setRawFindings] = React.useState([]);
+  const [harveyFindings, setHarveyFindings] = React.useState([]);
+  const [harveyLoading, setHarveyLoading] = React.useState(false);
   const [loadErr, setLoadErr]         = React.useState(false);
   const [fileName, setFileName]       = React.useState("Contract analysis report.pdf");
   const [expandedIdx, setExpandedIdx] = React.useState(null);
@@ -239,7 +326,7 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
   React.useEffect(() => {
     if (!selectedRunId) { setVerdict(null); return; }
     let active = true;
-    setVerdict(null); setLoadErr(false); setRawFindings([]);
+    setVerdict(null); setLoadErr(false); setRawFindings([]); setHarveyFindings([]); setHarveyLoading(true);
     window.verdictApi.getRun(selectedRunId).then(async run => {
       if (!active) return;
       setFileName(run.filename || "Contract analysis report.pdf");
@@ -268,7 +355,11 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
         blockedReason: run.blocked_reason ?? null,
       };
       if (active) setVerdict(mapped);
-    }).catch(() => { if (active) setLoadErr(true); });
+      window.verdictApi.getHarveyFindings(selectedRunId)
+        .then(items => { if (active) setHarveyFindings(Array.isArray(items) ? items : []); })
+        .catch(() => { if (active) setHarveyFindings([]); })
+        .finally(() => { if (active) setHarveyLoading(false); });
+    }).catch(() => { if (active) { setLoadErr(true); setHarveyLoading(false); } });
     return () => { active = false; };
   }, [selectedRunId]);
 
@@ -437,6 +528,8 @@ function VerdictScreen({ navigate, selectedContractId, selectedRunId, onApprove,
 
           {/* ── RIGHT (sticky) ── */}
           <div style={{ position: "sticky", top: 72, display: "flex", flexDirection: "column", gap: 40 }}>
+
+            <HarveyConflictPanel findings={harveyFindings} loading={harveyLoading} />
 
             {/* Sign-off panel */}
             {!approved && (

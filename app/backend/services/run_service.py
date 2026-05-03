@@ -358,6 +358,43 @@ async def _load_full_findings(session: AsyncSession, run_id: str) -> list[Findin
     return merged_findings
 
 
+async def load_harvey_findings(session: AsyncSession, run_id: str) -> list[Finding]:
+    """Load Harvey-origin findings as a separate policy/precedent conflict lane."""
+    clause_result = await session.execute(
+        select(
+            ParsedClauseRecord.clause_uid,
+            ParsedClauseRecord.page_number,
+            ParsedClauseRecord.normalized_text,
+        ).where(ParsedClauseRecord.run_id == run_id)
+    )
+    clause_lookup: dict[str, tuple[int, str]] = {
+        row.clause_uid: (row.page_number, row.normalized_text)
+        for row in clause_result.all()
+    }
+
+    result = await session.execute(
+        select(FindingRecord)
+        .where(
+            FindingRecord.run_id == run_id,
+            FindingRecord.source_agent.like("harvey%"),
+            FindingRecord.dismissed_at.is_(None),
+        )
+        .order_by(FindingRecord.created_at.asc())
+    )
+    findings: list[Finding] = []
+    seen: set[tuple[str, str]] = set()
+    for record in result.scalars().all():
+        finding = _finding_record_to_finding(record, clause_lookup=clause_lookup)
+        if finding is None:
+            continue
+        key = (finding.clause_uid, " ".join(finding.description.lower().split())[:200])
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(finding)
+    return findings
+
+
 def _annotate_consensus(
     findings: list[Finding],
     harvey_block: ReviewBlockResult | None,

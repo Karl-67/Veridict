@@ -15,7 +15,7 @@ from app.backend.db.session import DbSession, get_session_factory
 from app.backend.models.schemas import HumanReviewPayload, HumanReviewResult, RunCreateResponse, RunDetail
 from app.backend.services.event_stream import list_run_events, stream_run_events
 from app.backend.db.models import ParsedClauseRecord, RunRecord
-from app.backend.services.run_service import create_run, get_run_detail, submit_human_review, _load_full_findings
+from app.backend.services.run_service import create_run, get_run_detail, load_harvey_findings, submit_human_review, _load_full_findings
 from app.backend.services.auth_service import require_auth
 from app.backend.services.workspace_access import assert_run_access
 from sqlalchemy import select
@@ -149,6 +149,13 @@ async def retry_run(run_id: str, db: DbSession, token: dict = Depends(require_au
 async def get_run_findings(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
     await assert_run_access(db, run_id, token)
     findings = await _load_full_findings(db, run_id)
+    return [f.model_dump(mode="json") for f in findings]
+
+
+@router.get("/runs/{run_id}/harvey-findings")
+async def get_run_harvey_findings(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
+    await assert_run_access(db, run_id, token)
+    findings = await load_harvey_findings(db, run_id)
     return [f.model_dump(mode="json") for f in findings]
 
 

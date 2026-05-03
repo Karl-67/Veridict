@@ -306,6 +306,11 @@ async function getRunFindings(runId) {
   return readJson(res, "Failed to load findings");
 }
 
+async function getHarveyFindings(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/harvey-findings`, { headers: authHeaders() });
+  return readJson(res, "Failed to load Harvey findings");
+}
+
 async function retryRun(runId) {
   const res = await apiFetch(`${API_BASE}/runs/${runId}/retry`, {
     method: "POST",
@@ -515,6 +520,7 @@ window.verdictApi = {
   listHistory,
   getRun,
   getRunFindings,
+  getHarveyFindings,
   retryRun,
   submitHumanReview,
   updateProfile,
