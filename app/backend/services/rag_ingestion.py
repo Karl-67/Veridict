@@ -23,6 +23,20 @@ from app.backend.services.parser import ParsedDoc, parse_document
 
 VALID_DOC_TYPES = {"policy", "reference_contract", "playbook"}
 
+# Magic-byte signatures for supported formats
+_PDF_MAGIC = b"%PDF"
+_DOCX_MAGIC = b"PK\x03\x04"  # ZIP-based (DOCX/XLSX/PPTX)
+_SUPPORTED_MAGIC = (_PDF_MAGIC, _DOCX_MAGIC)
+
+
+def _detect_file_format(data: bytes) -> str | None:
+    """Return 'pdf', 'docx', or None if unsupported."""
+    if data[:4] == _PDF_MAGIC:
+        return "pdf"
+    if data[:4] == _DOCX_MAGIC:
+        return "docx"
+    return None
+
 
 @dataclass
 class RagChunkInput:
@@ -60,6 +74,12 @@ class RagIngestionService:
         max_bytes = self.settings.rag_max_file_mb * 1024 * 1024
         if len(data) > max_bytes:
             raise HTTPException(status_code=413, detail=f"RAG documents are limited to {self.settings.rag_max_file_mb}MB")
+        fmt = _detect_file_format(data)
+        if fmt is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file format. Upload a PDF or DOCX file.",
+            )
         file_hash = self.compute_file_hash(data)
         existing = await self.session.execute(
             select(RagSourceDocument).where(

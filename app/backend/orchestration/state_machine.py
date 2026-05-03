@@ -177,7 +177,7 @@ def _kira_provider(settings: Settings):
 
 def _load_clause_index(session: Session, run_id: str) -> list[dict]:
     clause_records = session.scalars(
-        select(ParsedClauseRecord).where(ParsedClauseRecord.run_id == run_id).order_by(ParsedClauseRecord.page_number.asc())
+        select(ParsedClauseRecord).where(ParsedClauseRecord.run_id == run_id).order_by(ParsedClauseRecord.page_number.asc(), ParsedClauseRecord.bbox_y0.asc())
     ).all()
     return build_clause_index(
         type(

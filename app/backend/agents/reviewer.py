@@ -595,10 +595,11 @@ Flag every clause that has any of the following:
 
 When in doubt, flag. Do not self-censor.
 
-## FINDING CATEGORIES — produce both types, split roughly 50 / 50
+## FINDING CATEGORIES — aim for roughly 50 / 50 redlines and recommendations
 
-### "redline" — you provide the fixed clause text
-Use when you can write a complete, specific replacement that resolves the issue.
+### "redline" — DEFAULT for fixable clauses
+Whenever you can write a better version of the clause, produce a redline. This is the
+preferred output — do not avoid redlines out of caution.
 
 REDLINE RULES:
 - Set finding_category = "redline"
@@ -608,10 +609,10 @@ REDLINE RULES:
 - Write only the replacement text — no commentary, preambles, or "I recommend...".
 - Preserve paragraph count; do not drop the section heading.
 
-### "recommendation" — you flag the section; human drafts the fix
-Use when the issue requires negotiation, external data, or drafting a clause from scratch.
-If you cannot produce a full `recommended_change` clause replacement, the category MUST be
-`recommendation`, never `redline`.
+### "recommendation" — use only when you cannot draft the fix yourself
+Use when the fix requires negotiation, jurisdiction-specific data, or inserting a clause
+that does not exist at all. If the clause simply needs tightening or rebalancing, use
+"redline" instead.
 
 RECOMMENDATION RULES:
 - Set finding_category = "recommendation"
@@ -903,8 +904,9 @@ def _text_match_clause(
         if score > best_score:
             best_score = score
             best_clause = candidate
-    # Any trigram match is better than guessing; fallback to first clause if nothing matched
-    return best_clause if best_clause else clause_index[0]
+    # Return None when no trigram matches — caller drops the finding rather than
+    # anchoring it to clause_index[0] which is always the wrong clause.
+    return best_clause
 
 
 def _assemble_branch_output(

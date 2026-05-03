@@ -382,5 +382,4 @@ def build_vllm_provider(
         max_retries=max_retries,
         base_backoff_seconds=5.0,
         max_backoff_seconds=90.0,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
