@@ -149,11 +149,10 @@ def _normalize_finding_item(item: dict) -> dict:
         item["contract_evidence"] = []
     if not isinstance(item.get("rag_citations"), list):
         item["rag_citations"] = []
-    item["uncertainty"] = bool(item.get("uncertainty", False))
+    item["uncertainty"] = bool(item.get("uncertainty") or False)
     if not isinstance(item.get("rationale"), str):
         item["rationale"] = ""
-    if "unresolved_by_consensus" not in item:
-        item["unresolved_by_consensus"] = False
+    item["unresolved_by_consensus"] = bool(item.get("unresolved_by_consensus") or False)
     if not isinstance(item.get("recommended_change"), str):
         item["recommended_change"] = None
     return item
