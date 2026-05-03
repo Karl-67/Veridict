@@ -78,7 +78,9 @@ class HarveyRagRetriever:
 
     def text_search(self, query: str, scope: RagScope, k: int) -> list[RagCitation]:
         terms = {term.lower().strip(".,;:()[]{}") for term in query.split() if len(term) > 3}
-        stmt = (
+
+        # Build base query — always scoped to tenant and active versions only.
+        base_stmt = (
             select(RagChunk, RagDocumentVersion, RagSourceDocument)
             .join(RagDocumentVersion, RagDocumentVersion.id == RagChunk.version_id)
             .join(RagSourceDocument, RagSourceDocument.id == RagDocumentVersion.document_id)
@@ -87,22 +89,48 @@ class HarveyRagRetriever:
                 RagSourceDocument.is_deleted.is_(False),
                 RagDocumentVersion.is_active.is_(True),
             )
-            .limit(max(k * 4, k))
+            .limit(max(k * 8, 64))
         )
-        if scope.workspace_id:
-            stmt = stmt.where(RagSourceDocument.workspace_id == scope.workspace_id)
         if scope.policy_family_id:
-            stmt = stmt.where(RagSourceDocument.policy_family_id == scope.policy_family_id)
+            base_stmt = base_stmt.where(RagSourceDocument.policy_family_id == scope.policy_family_id)
+
+        # Try progressively looser scopes so metadata mismatches don't silently
+        # hide documents that were legitimately uploaded to the corpus.
+        # Pass 1: workspace + jurisdiction (strictest)
+        # Pass 2: workspace only
+        # Pass 3: tenant-wide (loosest — always finds something if docs exist)
+        scopes_to_try: list[object] = []
+        stmt_strict = base_stmt
+        if scope.workspace_id:
+            stmt_strict = stmt_strict.where(RagSourceDocument.workspace_id == scope.workspace_id)
         if scope.jurisdiction:
-            stmt = stmt.where(RagSourceDocument.jurisdiction == scope.jurisdiction)
-        rows = self.session.execute(stmt).all()
-        citations: list[RagCitation] = []
-        for chunk, version, document in rows:
+            stmt_strict = stmt_strict.where(RagSourceDocument.jurisdiction == scope.jurisdiction)
+        scopes_to_try.append(stmt_strict)
+
+        if scope.jurisdiction:
+            stmt_no_jur = base_stmt
+            if scope.workspace_id:
+                stmt_no_jur = stmt_no_jur.where(RagSourceDocument.workspace_id == scope.workspace_id)
+            scopes_to_try.append(stmt_no_jur)
+
+        scopes_to_try.append(base_stmt)  # tenant-wide fallback
+
+        rows = []
+        for stmt in scopes_to_try:
+            rows = self.session.execute(stmt).all()
+            if rows:
+                break
+
+        def _score_row(chunk, _version, _document) -> float:
+            if not terms:
+                return 0.1
             chunk_terms = {term.lower().strip(".,;:()[]{}") for term in chunk.text.split()}
             overlap = len(terms & chunk_terms)
-            if terms and overlap == 0:
-                continue
-            score = min(1.0, overlap / max(1, len(terms))) if terms else 0.1
+            return min(1.0, overlap / max(1, len(terms)))
+
+        citations: list[RagCitation] = []
+        for chunk, version, document in rows:
+            score = _score_row(chunk, version, document)
             citations.append(
                 RagCitation(
                     chunk_id=chunk.id,
@@ -114,6 +142,9 @@ class HarveyRagRetriever:
                     score=score,
                 )
             )
+
+        # Sort by score descending; if everything scored 0 (no term overlap), keep top-k
+        # by DB order so Harvey still gets policy context rather than an empty corpus.
         return sorted(citations, key=lambda item: item.score, reverse=True)[:k]
 
     def rerank_results(self, results: list[RagCitation]) -> list[RagCitation]:
