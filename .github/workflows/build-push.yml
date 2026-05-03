@@ -214,7 +214,20 @@ jobs:
           kubectl logs -n verdict -l app=verdict-api --container api --previous --tail=50 || true
 
       - name: Wait for Worker rollout
-        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=5m
+        id: worker_rollout
+        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=10m
+
+      - name: Diagnose Worker pod on rollout failure
+        if: failure() && steps.worker_rollout.conclusion == 'failure'
+        run: |
+          echo "=== Pod list ==="
+          kubectl get pods -n verdict -l app=verdict-worker -o wide
+          echo "=== Pod description ==="
+          kubectl describe pods -n verdict -l app=verdict-worker
+          echo "=== Worker logs ==="
+          kubectl logs -n verdict -l app=verdict-worker --tail=100 || true
+          echo "=== Previous worker logs ==="
+          kubectl logs -n verdict -l app=verdict-worker --previous --tail=50 || true
 
       - name: Wait for Frontend rollout
         run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=5m
