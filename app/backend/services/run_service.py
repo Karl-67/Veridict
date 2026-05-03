@@ -41,6 +41,8 @@ STAGE_SEQUENCE: list[str] = [
     "parse_ocr_normalize",
     "clause_index",
     "harvey_context_load",
+    "kira_context_load",
+    "harvey_review_block",
     "kira_review_block",
     "admin_merge",
     "awaiting_human_review",
@@ -50,7 +52,7 @@ STAGE_SEQUENCE: list[str] = [
 _STAGE_ORDER: dict[str, int] = {stage_name: index for index, stage_name in enumerate(STAGE_SEQUENCE, start=1)}
 
 # Stages that exist only in legacy runs and must never be re-enqueued.
-_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
+_LEGACY_STAGES = frozenset({"final_review_block"})
 
 
 def _parse_effective_date(value: str | None):

@@ -657,27 +657,9 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             return
 
         if stage.stage_name == "final_review_block":
-            clause_index = _load_clause_index(session, run.id)
-            merged = _stage_output(session, run.id, "admin_merge").get("merged_findings", [])
-            result = asyncio.run(_run_final_review_block(clause_index, merged, settings, stage.round_number))
-            if result.rerun_required:
-                session.add(
-                    StageExecutionRecord(
-                        run_id=run.id,
-                        stage_name=stage.stage_name,
-                        stage_order=stage.stage_order,
-                        round_number=stage.round_number + 1,
-                        attempt_number=1,
-                        status="pending",
-                        max_retries=5,
-                    )
-                )
-                append_run_event(session, run.id, "consensus_unresolved", {"stage_name": stage.stage_name, "round_number": stage.round_number})
-                advance_stage(session, stage, result.model_dump(mode="json"))
-                return
-            for finding in result.aggregated_findings:
-                session.add(_to_finding_record(stage, finding))
-            advance_stage(session, stage, result.model_dump(mode="json"))
+            # Legacy stage removed from STAGE_SEQUENCE — skip gracefully for any
+            # in-flight runs that still have this stage record.
+            advance_stage(session, stage, {"skipped": True, "reason": "legacy_stage"})
             return
 
         if stage.stage_name == "awaiting_human_review":
