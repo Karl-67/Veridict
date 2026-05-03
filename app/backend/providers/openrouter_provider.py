@@ -99,7 +99,9 @@ def _classify_openai_error(exc: Exception) -> ProviderError:
                     status_code=429,
                 )
             return RateLimitError(msg, retry_after_seconds=retry_after)
-        if code in (500, 502, 503, 504):
+        if code in (405, 500, 502, 503, 504):
+            # 405 from llama.cpp/RunPod proxy indicates the server crashed and is restarting.
+            # Treat as transient so the retry loop can wait for recovery.
             return TransientProviderError(msg, status_code=code)
         if 400 <= code < 500:
             return NonRetryableProviderError(msg, status_code=code)
@@ -275,6 +277,13 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
         import re as _re
         title_match = _re.search(r"<title>([^<]{1,80})</title>", cleaned, _re.IGNORECASE)
         title = title_match.group(1).strip() if title_match else "HTML response"
+        # 405/502/503 HTML pages from RunPod proxy mean llama.cpp crashed and is restarting.
+        # Raise TransientProviderError so the retry loop waits and tries again.
+        is_server_error = bool(_re.search(r"405|502|503|Not Allowed|Bad Gateway|unavailable", title, _re.I))
+        if is_server_error:
+            raise TransientProviderError(
+                f"Model server temporarily unavailable ({title}) — will retry.",
+            )
         raise NonRetryableProviderError(
             f"Model endpoint returned an HTML error page ({title}). "
             "Check that VLLM_BASE_URL / KIRA_MODEL_URL point to the OpenAI-compatible "
@@ -356,7 +365,7 @@ def build_vllm_provider(
     model_name: str = "google/gemma-4-26B-A4B-it",
     temperature: float = 0.3,
     max_output_tokens: int = 8192,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> OpenRouterProvider:
     """Build a provider pointing at a cluster-internal vLLM server (OpenAI-compatible API).
 
@@ -371,7 +380,7 @@ def build_vllm_provider(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         max_retries=max_retries,
-        base_backoff_seconds=2.0,
-        max_backoff_seconds=30.0,
+        base_backoff_seconds=5.0,
+        max_backoff_seconds=90.0,
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
