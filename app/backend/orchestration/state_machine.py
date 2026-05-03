@@ -58,7 +58,7 @@ from app.backend.services.policy_repository import MissingLineageError, load_pri
 from app.backend.services.rag_retrieval import HarveyRagRetriever
 
 # Stages from retired topology that must never be re-enqueued or claimed.
-_LEGACY_STAGES = frozenset({"final_review_block", "harvey_review_block", "kira_context_load"})
+_LEGACY_STAGES = frozenset({"final_review_block"})
 
 
 def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> StageExecutionRecord | None:
