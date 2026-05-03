@@ -46,6 +46,14 @@ spec:
                 name: verdict-config
             - secretRef:
                 name: verdict-secrets
+          lifecycle:
+            preStop:
+              exec:
+                # Give GCE L7 load balancer time to drain existing connections and
+                # stop routing new traffic to this pod before it is terminated.
+                # Without this, in-flight requests arrive during SIGTERM → 502/504.
+                # terminationGracePeriodSeconds (default 30s) starts after preStop completes.
+                command: ["/bin/sh", "-c", "sleep 15"]
           volumeMounts:
             - name: documents
               mountPath: /data/documents
