@@ -171,7 +171,9 @@ def _kira_provider(settings: Settings):
         return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
-            # Do not cap to max_stage_retries — see _provider() for rationale.
+            # Enable chain-of-thought reasoning via Gemma-4's jinja chat template.
+            # Requires llama.cpp started with --jinja; ignored gracefully if unsupported.
+            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
         )
     return _provider(settings)
 

@@ -276,6 +276,11 @@ class OpenRouterProvider(StructuredLLMProvider):
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
     """Parse JSON from the model response, stripping markdown fences and repairing if needed."""
     cleaned = raw_text.strip()
+    # Strip Gemma-4 chain-of-thought thinking block (<think>...</think>) before parsing.
+    # When enable_thinking=True the model prepends a reasoning trace; we only want the JSON part.
+    if cleaned.startswith("<think>"):
+        import re as _re
+        cleaned = _re.sub(r"<think>.*?</think>", "", cleaned, flags=_re.DOTALL).strip()
     # Detect an HTML error page (e.g. nginx 405 when a POST hits the wrong backend).
     # Raise immediately with a human-readable message instead of storing raw HTML as failure text.
     if cleaned.startswith("<"):
@@ -371,6 +376,7 @@ def build_vllm_provider(
     temperature: float = 0.3,
     max_output_tokens: int = 8192,
     max_retries: int = 8,
+    extra_body: dict[str, Any] | None = None,
 ) -> OpenRouterProvider:
     """Build a provider pointing at a cluster-internal vLLM/llama.cpp server (OpenAI-compatible API).
 
@@ -387,4 +393,5 @@ def build_vllm_provider(
         max_retries=max_retries,
         base_backoff_seconds=5.0,
         max_backoff_seconds=120.0,
+        extra_body=extra_body,
     )
