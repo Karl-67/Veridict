@@ -976,7 +976,7 @@ class HarveyReviewer(FineTunableAgent):
             agent_role=self.agent_role,
             clause_index=clause_index,
             round_number=round_number,
-            require_rag_citations=True,
+            require_rag_citations=bool(rag_chunks),
             require_contract_evidence=True,
             finding_scope="cross_contract",
         )
