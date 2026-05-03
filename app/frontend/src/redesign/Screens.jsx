@@ -301,8 +301,8 @@ function ContractDetailScreen({ navigate, selectedContractId, onViewRun, onAddVe
                 {v.risk ? <><span style={{ width: 7, height: 7, borderRadius: 1.5, background: riskColor(v.risk), flexShrink: 0 }} /><span style={{ fontSize: 13, color: riskColor(v.risk) }}>{riskLabel(v.risk)}</span></> : <span style={{ color: "var(--text-3)" }}>—</span>}
               </div>
               <span style={{ fontSize: 13, color: "var(--text-2)" }}>{v.findingCount} finding{v.findingCount !== 1 ? "s" : ""}</span>
-              <div style={{ textAlign: "right" }}>
-                {v.runId && (v.runState === "failed" || v.runState === "blocked") ? (
+              <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                {v.runId && (v.runState === "failed" || v.runState === "blocked") && (
                   <button
                     onClick={async () => {
                       setRetryingId(v.runId); setRetryError(null);
@@ -319,9 +319,10 @@ function ContractDetailScreen({ navigate, selectedContractId, onViewRun, onAddVe
                   >
                     {retryingId === v.runId ? "Retrying…" : "Retry ↺"}
                   </button>
-                ) : v.runId ? (
+                )}
+                {v.runId && (
                   <button onClick={() => onViewRun(v.runId)} style={{ fontSize: 12, fontWeight: 500, color: "var(--accent)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer" }}>View Report →</button>
-                ) : null}
+                )}
               </div>
             </div>
           );
