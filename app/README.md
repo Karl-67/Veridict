@@ -10,7 +10,7 @@ AI-powered legal contract review using a multi-agent LLM pipeline with full auth
 | LLM | Local Ollama (`LLM_PROVIDER=ollama`) — swap model via `OLLAMA_MODEL` in `.env` |
 | Database | PostgreSQL (`veridict` DB), SQLAlchemy 2.0, Alembic |
 | PDF Parsing | Docling + OCR fallback |
-| Auth | JWT (15min) + httpOnly refresh tokens (30 days), bcrypt, account lockout |
+| Auth | JWT (12h) + httpOnly refresh tokens (30 days), bcrypt, account lockout |
 | Frontend | React 19, TypeScript, Vite 6, Tailwind CSS 4, Framer Motion, TanStack Query |
 
 ## Running

@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import type { AuthUser } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
-const ACCESS_TOKEN_TTL_MS = 14 * 60 * 1000; // refresh 1 min before 15-min expiry
+const ACCESS_TOKEN_TTL_MS = (12 * 60 - 5) * 60 * 1000; // refresh 5 min before 12-hour expiry
 
 interface AuthContextValue {
   user: AuthUser | null;

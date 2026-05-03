@@ -1,6 +1,6 @@
 // Default `/api` = same origin as the Vite dev server (see vite.config proxy) or production host; required for refresh cookies (SameSite=Lax, path=/api/auth).
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
-const ACCESS_TOKEN_REFRESH_MS = 14 * 60 * 1000; // refresh 1 min before typical 15-min access expiry
+const ACCESS_TOKEN_REFRESH_MS = (12 * 60 - 5) * 60 * 1000; // refresh 5 min before 12-hour access expiry
 
 export const VERDICT_SESSION_EXPIRED = "verdict-session-expired";
 

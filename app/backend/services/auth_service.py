@@ -17,7 +17,7 @@ from app.backend.db.session import DbSession
 
 SECRET_KEY = "veridict-jwt-secret-change-in-prod"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
+ACCESS_TOKEN_EXPIRE_MINUTES = 12 * 60
 REFRESH_TOKEN_EXPIRE_DAYS = 30
 MAX_FAILED_ATTEMPTS = 5
 
