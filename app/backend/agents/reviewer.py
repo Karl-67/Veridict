@@ -828,6 +828,36 @@ def _fuzzy_match_clause(
     return None, None
 
 
+def _text_match_clause(
+    evidence_strings: list[str],
+    clause_index: list[dict],
+) -> dict | None:
+    """Find the clause whose normalized_text best overlaps with the evidence quotes.
+
+    Used as a last resort when clause_uid lookup fails entirely so findings are
+    anchored to a real clause rather than silently dropped.
+    """
+    if not clause_index:
+        return None
+    best_clause = None
+    best_score = 0
+    for candidate in clause_index:
+        candidate_text = " ".join(str(candidate.get("normalized_text", "")).lower().split())
+        score = 0
+        for ev in evidence_strings:
+            words = ev.lower().split()
+            if len(words) >= 3:
+                for i in range(len(words) - 2):
+                    trigram = " ".join(words[i:i+3])
+                    if trigram in candidate_text:
+                        score += 1
+        if score > best_score:
+            best_score = score
+            best_clause = candidate
+    # Any trigram match is better than guessing; fallback to first clause if nothing matched
+    return best_clause if best_clause else clause_index[0]
+
+
 def _assemble_branch_output(
     raw: dict,
     *,
@@ -853,6 +883,13 @@ def _assemble_branch_output(
                 clause_uid = resolved_uid
                 item["clause_uid"] = clause_uid
         if not clause:
+            # Last resort: anchor to the clause whose text best matches the evidence quotes,
+            # rather than silently dropping a valid finding over a bad UID.
+            clause = _text_match_clause(item.get("contract_evidence") or [], clause_index)
+            if clause:
+                clause_uid = clause["clause_uid"]
+                item["clause_uid"] = clause_uid
+        if not clause:
             continue
         if require_contract_evidence and not item.get("contract_evidence"):
             # Small local models often omit contract_evidence but include clause_uid — use it.
@@ -863,6 +900,9 @@ def _assemble_branch_output(
         if require_rag_citations and not item.get("rag_citations"):
             continue
         contract_evidence = _contract_evidence_from_raw(item.get("contract_evidence", []), clause)
+        if require_contract_evidence and not contract_evidence:
+            # Model omitted usable evidence quotes — anchor to the full clause text instead.
+            contract_evidence = _contract_evidence_from_raw([clause.get("normalized_text", "")], clause)
         if require_contract_evidence and not contract_evidence:
             continue
         rag_citations = _rag_citations_from_raw(item.get("rag_citations", []))
