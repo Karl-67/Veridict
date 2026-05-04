@@ -2,9 +2,9 @@
 # Start Harvey (primary :8000), Kira (:8002, proxied via nginx to :8001),
 # and Harvey secondary (:8080) on RunPod using llama.cpp llama-server.
 #
-# Thinking is disabled at the server level via --chat-template-kwargs so it
-# cannot be overridden per-request. This is the only reliable way to stop
-# Gemma-4 from emitting reasoning tokens with llama.cpp.
+# Thinking is disabled by passing a custom jinja template (no_think.jinja)
+# that never emits <think> tokens. This overrides the GGUF-embedded template
+# and works on all llama.cpp versions.
 #
 # Usage (from /workspace after SSH'ing in):
 #   nohup bash scripts/start_models.sh > /workspace/startup.log 2>&1 &
@@ -15,8 +15,30 @@ set -euo pipefail
 LLAMA=/workspace/llama.cpp/build/bin/llama-server
 HARVEY=/workspace/harvey_q4km.gguf
 KIRA=/workspace/kira_q4km.gguf
-NO_THINK='{"enable_thinking": false}'
+TEMPLATE=/workspace/no_think.jinja
 
+# ── write the no-think chat template ─────────────────────────────────────────
+# Standard Gemma-4 template with thinking tokens removed entirely.
+# The GGUF-embedded template enables thinking by default; this file overrides it.
+cat > "$TEMPLATE" << 'JINJA'
+{{ bos_token }}
+{%- for message in messages %}
+    {%- if message['role'] == 'system' %}
+        {{- '<start_of_turn>user\n' + message['content'] | trim + '<end_of_turn>\n' }}
+    {%- elif message['role'] == 'user' %}
+        {{- '<start_of_turn>user\n' + message['content'] | trim + '<end_of_turn>\n' }}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<start_of_turn>model\n' + message['content'] | trim + '<end_of_turn>\n' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<start_of_turn>model\n' }}
+{%- endif %}
+JINJA
+
+echo "[start_models] wrote no-think template to $TEMPLATE"
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 wait_ready() {
   local port=$1 label=$2
   echo "[start_models] waiting for $label on :$port ..."
@@ -31,6 +53,7 @@ wait_ready() {
   return 1
 }
 
+# ── start servers ─────────────────────────────────────────────────────────────
 echo "[start_models] starting Harvey primary on :8000"
 nohup "$LLAMA" \
   --model "$HARVEY" \
@@ -38,7 +61,7 @@ nohup "$LLAMA" \
   --host 0.0.0.0 \
   --ctx-size 8192 \
   --n-predict -1 \
-  --chat-template-kwargs "$NO_THINK" \
+  --chat-template-file "$TEMPLATE" \
   > /workspace/harvey_server.log 2>&1 &
 
 wait_ready 8000 "Harvey primary"
@@ -50,7 +73,7 @@ nohup "$LLAMA" \
   --host 0.0.0.0 \
   --ctx-size 8192 \
   --n-predict -1 \
-  --chat-template-kwargs "$NO_THINK" \
+  --chat-template-file "$TEMPLATE" \
   > /workspace/kira_server.log 2>&1 &
 
 wait_ready 8002 "Kira"
@@ -62,9 +85,9 @@ nohup "$LLAMA" \
   --host 0.0.0.0 \
   --ctx-size 8192 \
   --n-predict -1 \
-  --chat-template-kwargs "$NO_THINK" \
+  --chat-template-file "$TEMPLATE" \
   > /workspace/harvey_secondary_server.log 2>&1 &
 
 wait_ready 8080 "Harvey secondary"
 
-echo "[start_models] all three servers are up and thinking is disabled"
+echo "[start_models] all three servers are up — thinking disabled via $TEMPLATE"
