@@ -44,7 +44,12 @@ def get_sync_session_factory():
 
 async def _get_db() -> AsyncGenerator[AsyncSession, None]:
     async with get_session_factory()() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 DbSession = Annotated[AsyncSession, Depends(_get_db)]
