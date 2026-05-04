@@ -12,13 +12,52 @@ env:
   GCP_PROJECT: verdict-ai-prod
 
 jobs:
+  # ── Detect which parts of the repo changed ──────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api:      ${{ steps.filter.outputs.api }}
+      worker:   ${{ steps.filter.outputs.worker }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      tests:    ${{ steps.filter.outputs.tests }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api:
+              - 'app/backend/**'
+              - 'Dockerfile.api'
+              - 'k8s/api.yaml'
+            worker:
+              - 'app/backend/**'
+              - 'Dockerfile.worker'
+              - 'k8s/worker.yaml'
+            frontend:
+              - 'app/frontend/**'
+              - 'Dockerfile.frontend'
+              - 'k8s/frontend.yaml'
+            tests:
+              - 'app/backend/**'
+
+  # ── Tests (only when backend changes) ───────────────────────────────────
   test:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-test-${{ hashFiles('app/backend/requirements-test.txt') }}
+          restore-keys: pip-test-
 
       - name: Install test dependencies
         run: pip install -r app/backend/requirements-test.txt
@@ -26,35 +65,25 @@ jobs:
       - name: Run tests
         run: pytest app/backend/tests -q
 
+  # ── Build jobs (skip if nothing changed) ────────────────────────────────
   build-api:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
     permissions:
       contents: read
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set image tag
-        id: meta
+      - id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push API image
-        uses: docker/build-push-action@v5
+      - uses: google-github-actions/auth@v2
+        with: {credentials_json: "${{ secrets.GCP_SA_KEY }}"}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.api
@@ -67,31 +96,22 @@ jobs:
 
   build-worker:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
     permissions:
       contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set image tag
-        id: meta
+      - id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Worker image
-        uses: docker/build-push-action@v5
+      - uses: google-github-actions/auth@v2
+        with: {credentials_json: "${{ secrets.GCP_SA_KEY }}"}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.worker
@@ -104,31 +124,22 @@ jobs:
 
   build-frontend:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     permissions:
       contents: read
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set image tag
-        id: meta
+      - id: meta
         run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Frontend image
-        uses: docker/build-push-action@v5
+      - uses: google-github-actions/auth@v2
+        with: {credentials_json: "${{ secrets.GCP_SA_KEY }}"}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker ${{ env.GAR_REGISTRY }} --quiet
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.frontend
@@ -139,19 +150,20 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
+  # ── Eval gate (non-blocking, runs after builds) ──────────────────────────
   eval-gate:
     runs-on: ubuntu-latest
     needs: [build-api, build-worker, build-frontend]
+    if: |
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
-
-      - name: Install eval dependencies
-        run: pip install mlflow httpx pydantic PyYAML
-
+      - run: pip install mlflow httpx pydantic PyYAML
       - name: Run eval gate
         run: python scripts/eval_gate.py
         env:
@@ -161,22 +173,26 @@ jobs:
           EVAL_ENDPOINT: ${{ secrets.EVAL_ENDPOINT }}
           EVAL_MODEL: ${{ secrets.EVAL_MODEL }}
 
+  # ── Deploy (only runs if changed jobs succeeded; skipped jobs are OK) ────
   deploy:
     runs-on: ubuntu-latest
-    needs: [test, build-api, build-worker, build-frontend]
-    if: needs.test.result == 'success' && needs.build-api.result == 'success' && needs.build-worker.result == 'success' && needs.build-frontend.result == 'success'
+    needs: [changes, test, build-api, build-worker, build-frontend]
+    if: |
+      always() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
+      (needs.build-worker.result == 'success' || needs.build-worker.result == 'skipped') &&
+      (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
+      (needs.build-api.result == 'success' || needs.build-worker.result == 'success' || needs.build-frontend.result == 'success')
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/auth@v2
+        with: {credentials_json: "${{ secrets.GCP_SA_KEY }}"}
 
-      - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v2
+      - uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ env.GKE_CLUSTER }}
           location: ${{ env.GKE_REGION }}
@@ -184,53 +200,53 @@ jobs:
 
       - name: Pin image tags in manifests
         run: |
-          TAG=${{ needs.build-api.outputs.image_tag }}
+          TAG=${{ github.sha }}
           REGISTRY=${{ env.GAR_REGISTRY }}/${{ env.GAR_REPO }}
-          sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/api.yaml  # pins both initContainer and main container
-          sed -i "s|${REGISTRY}/verdict-worker:latest|${REGISTRY}/verdict-worker:${TAG}|g" k8s/worker.yaml
-          sed -i "s|${REGISTRY}/verdict-frontend:latest|${REGISTRY}/verdict-frontend:${TAG}|g" k8s/frontend.yaml
+          if [ "${{ needs.changes.outputs.api }}" == "true" ]; then
+            sed -i "s|${REGISTRY}/verdict-api:latest|${REGISTRY}/verdict-api:${TAG}|g" k8s/api.yaml
+          fi
+          if [ "${{ needs.changes.outputs.worker }}" == "true" ]; then
+            sed -i "s|${REGISTRY}/verdict-worker:latest|${REGISTRY}/verdict-worker:${TAG}|g" k8s/worker.yaml
+          fi
+          if [ "${{ needs.changes.outputs.frontend }}" == "true" ]; then
+            sed -i "s|${REGISTRY}/verdict-frontend:latest|${REGISTRY}/verdict-frontend:${TAG}|g" k8s/frontend.yaml
+          fi
+
       - name: Clean up evicted and failed pods
         run: kubectl delete pods --field-selector=status.phase=Failed -n verdict --ignore-not-found
 
       - name: Apply Kubernetes manifests
         run: kubectl apply -k k8s/
 
-      - name: Wait for API rollout
-        id: api_rollout
-        run: kubectl rollout status deployment/verdict-api -n verdict --timeout=10m
-
-      - name: Diagnose API pod on rollout failure
-        if: failure() && steps.api_rollout.conclusion == 'failure'
+      - name: Wait for rollouts in parallel
         run: |
-          echo "=== Pod list ==="
-          kubectl get pods -n verdict -l app=verdict-api -o wide
-          echo "=== Pod description ==="
-          kubectl describe pods -n verdict -l app=verdict-api
-          echo "=== initContainer (migrate) logs ==="
-          kubectl logs -n verdict -l app=verdict-api --container migrate --tail=100 || true
-          echo "=== API container logs ==="
-          kubectl logs -n verdict -l app=verdict-api --container api --tail=100 || true
-          echo "=== Previous container logs ==="
-          kubectl logs -n verdict -l app=verdict-api --container api --previous --tail=50 || true
+          pids=()
+          if [ "${{ needs.changes.outputs.api }}" == "true" ]; then
+            kubectl rollout status deployment/verdict-api -n verdict --timeout=10m &
+            pids+=($!)
+          fi
+          if [ "${{ needs.changes.outputs.worker }}" == "true" ]; then
+            kubectl rollout status deployment/verdict-worker -n verdict --timeout=10m &
+            pids+=($!)
+          fi
+          if [ "${{ needs.changes.outputs.frontend }}" == "true" ]; then
+            kubectl rollout status deployment/verdict-frontend -n verdict --timeout=5m &
+            pids+=($!)
+          fi
+          failed=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || failed=1
+          done
+          exit $failed
 
-      - name: Wait for Worker rollout
-        id: worker_rollout
-        run: kubectl rollout status deployment/verdict-worker -n verdict --timeout=10m
-
-      - name: Diagnose Worker pod on rollout failure
-        if: failure() && steps.worker_rollout.conclusion == 'failure'
+      - name: Diagnose failed pods
+        if: failure()
         run: |
-          echo "=== Pod list ==="
-          kubectl get pods -n verdict -l app=verdict-worker -o wide
-          echo "=== Pod description ==="
-          kubectl describe pods -n verdict -l app=verdict-worker
-          echo "=== Worker logs ==="
-          kubectl logs -n verdict -l app=verdict-worker --tail=100 || true
-          echo "=== Previous worker logs ==="
-          kubectl logs -n verdict -l app=verdict-worker --previous --tail=50 || true
-
-      - name: Wait for Frontend rollout
-        run: kubectl rollout status deployment/verdict-frontend -n verdict --timeout=5m
+          for label in verdict-api verdict-worker verdict-frontend; do
+            echo "=== $label pods ==="
+            kubectl get pods -n verdict -l app=$label -o wide || true
+            kubectl logs -n verdict -l app=$label --tail=50 || true
+          done
 
       - name: Smoke test — API health check
         id: smoke
@@ -246,8 +262,6 @@ jobs:
 
       - name: Auto-rollback on failure
         if: failure() && steps.smoke.conclusion == 'failure'
-        run: |
-          echo "Smoke test failed — rolling back"
-          python scripts/rollback.py --scope api worker frontend
+        run: python scripts/rollback.py --scope api worker frontend
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
