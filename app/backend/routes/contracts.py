@@ -80,16 +80,38 @@ async def post_run(
 
 @router.get("/runs/active", response_model=RunDetail | None)
 async def get_active_run(db: DbSession, token: dict = Depends(require_auth)) -> RunDetail | None:
-    """Return the most recent in-progress run for the current user, or null if none."""
+    """Return the most recent actionable run for the current user.
+
+    Returns runs in created/processing state first; falls back to the most recent
+    failed/blocked run from the last 24 hours so the frontend can show a retry button
+    instead of a permanent grey spinner.
+    """
     from sqlalchemy import select, desc
+    from datetime import timedelta
     from app.backend.db.models import RunRecord
     tenant_id = str(token.get("org_id") or token.get("sub"))
+
     run = (await db.execute(
         select(RunRecord)
         .where(RunRecord.tenant_id == tenant_id, RunRecord.status.in_(["created", "processing"]))
         .order_by(desc(RunRecord.created_at))
         .limit(1)
     )).scalar_one_or_none()
+
+    if run is None:
+        from datetime import datetime
+        cutoff = datetime.utcnow() - timedelta(hours=24)
+        run = (await db.execute(
+            select(RunRecord)
+            .where(
+                RunRecord.tenant_id == tenant_id,
+                RunRecord.status.in_(["failed", "blocked"]),
+                RunRecord.created_at >= cutoff,
+            )
+            .order_by(desc(RunRecord.created_at))
+            .limit(1)
+        )).scalar_one_or_none()
+
     if run is None:
         return None
     from app.backend.services.run_service import get_run_detail

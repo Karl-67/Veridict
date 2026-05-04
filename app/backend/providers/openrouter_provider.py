@@ -385,7 +385,14 @@ def build_vllm_provider(
     max_retries defaults to 8 — higher than stage-level retries because llama.cpp on RunPod
     can take 2-5 minutes to reload weights after a crash, and we want to absorb that
     within a single stage attempt rather than failing the whole run.
+
+    thinking is disabled via chat_template_kwargs — llama.cpp serves Gemma-4 with the jinja
+    thinking template enabled by default, which causes reasoning_content to consume the entire
+    completion token budget leaving content empty on any non-trivial prompt.
     """
+    body = {"chat_template_kwargs": {"enable_thinking": False}}
+    if extra_body:
+        body.update(extra_body)
     return OpenRouterProvider(
         api_key="vllm",
         base_url=base_url,
@@ -395,5 +402,5 @@ def build_vllm_provider(
         max_retries=max_retries,
         base_backoff_seconds=5.0,
         max_backoff_seconds=120.0,
-        extra_body=extra_body,
+        extra_body=body,
     )

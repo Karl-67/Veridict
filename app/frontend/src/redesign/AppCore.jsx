@@ -513,11 +513,19 @@ function App() {
     if (screen !== "processing" || processingRunId) return;
     let cancelled = false;
     window.verdictApi.getActiveRun().then(run => {
-      if (!cancelled && run?.id) {
+      if (cancelled) return;
+      if (run?.id) {
         setProcessingRunId(run.id);
         localStorage.setItem("verdict_processing_run_id", run.id);
+      } else {
+        // No active or recoverable run — go to dashboard to avoid permanent grey screen.
+        localStorage.removeItem("verdict_processing_run_id");
+        navigate("dashboard");
       }
-    }).catch(() => {});
+    }).catch(() => {
+      localStorage.removeItem("verdict_processing_run_id");
+      navigate("dashboard");
+    });
     return () => { cancelled = true; };
   }, [screen, processingRunId]);
 
