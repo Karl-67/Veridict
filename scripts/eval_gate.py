@@ -151,12 +151,15 @@ def _call_endpoint(clause_text: str) -> dict | None:
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
                 "max_tokens": 1024,
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             timeout=60,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
-        # Strip markdown fences if present
+        # Strip thinking blocks and markdown fences if present
+        import re as _re
+        content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL).strip()
         if "```" in content:
             content = content.split("```")[1].lstrip("json").strip()
         return json.loads(content)

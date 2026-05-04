@@ -102,17 +102,21 @@ def _call_model(endpoint: str, model: str, user_msg: str) -> str:
         ],
         temperature=0.1,
         max_tokens=2048,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
     return resp.choices[0].message.content or ""
 
 
 def _parse_response(raw: str) -> list[dict]:
+    import re as _re
+    cleaned = raw.strip()
+    cleaned = _re.sub(r"<think>.*?</think>", "", cleaned, flags=_re.DOTALL).strip()
     try:
         import json_repair
-        obj = json.loads(json_repair.repair_json(raw))
+        obj = json.loads(json_repair.repair_json(cleaned))
     except Exception:
         try:
-            obj = json.loads(raw)
+            obj = json.loads(cleaned)
         except Exception:
             return []
     if isinstance(obj, dict):
