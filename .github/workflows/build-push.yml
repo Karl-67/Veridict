@@ -253,8 +253,13 @@ jobs:
         run: |
           kubectl port-forward service/verdict-api 8080:8000 -n verdict &
           PF_PID=$!
-          sleep 5
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
+          STATUS="000"
+          for i in $(seq 1 12); do
+            sleep 5
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            [ "$STATUS" = "200" ] && break
+          done
           kill $PF_PID 2>/dev/null || true
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP $STATUS from /api/health"
