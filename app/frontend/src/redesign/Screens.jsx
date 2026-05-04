@@ -619,12 +619,14 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
               onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>
               Run in background — go to dashboard
             </button>
-            <button
-              onClick={handleCancel}
-              disabled={cancelling}
-              style={{ fontSize: 12, color: cancelling ? "var(--text-3)" : "var(--risk-high)", background: "none", border: "none", cursor: cancelling ? "not-allowed" : "pointer", opacity: cancelling ? 0.5 : 1, transition: "opacity 0.15s" }}>
-              {cancelling ? "Cancelling…" : "Cancel review"}
-            </button>
+            {processingRunId && (
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                style={{ fontSize: 12, color: cancelling ? "var(--text-3)" : "var(--risk-high)", background: "none", border: "none", cursor: cancelling ? "not-allowed" : "pointer", opacity: cancelling ? 0.5 : 1, transition: "opacity 0.15s" }}>
+                {cancelling ? "Cancelling…" : "Cancel review"}
+              </button>
+            )}
           </div>
         )}
       </div>

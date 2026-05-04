@@ -509,8 +509,10 @@ function App() {
 
   // On refresh while on /processing, recover the active run from the API
   // if localStorage didn't have it (e.g. different browser / cleared storage).
+  // Skip recovery when pendingError is set — the upload already failed and the user
+  // should see the error message rather than being immediately bounced to dashboard.
   React.useEffect(() => {
-    if (screen !== "processing" || processingRunId) return;
+    if (screen !== "processing" || processingRunId || pendingError) return;
     let cancelled = false;
     window.verdictApi.getActiveRun().then(run => {
       if (cancelled) return;
@@ -527,7 +529,7 @@ function App() {
       navigate("dashboard");
     });
     return () => { cancelled = true; };
-  }, [screen, processingRunId]);
+  }, [screen, processingRunId, pendingError]);
 
   function navigate(s, id = null, runId = null) {
     if (s === "admin" && !isOrgAdmin) {
