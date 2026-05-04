@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI, APIStatusError, APITimeoutError, APIConnectionError
 
+from app.backend.services.metrics import record_provider_call
 from app.backend.providers.base import (
     InvalidSchemaOutputError,
     NonRetryableProviderError,
@@ -147,6 +148,12 @@ class OpenRouterProvider(StructuredLLMProvider):
             timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0),
         )
         self._model_name = model_name
+        if "openrouter" in base_url:
+            self._provider_name = "openrouter"
+        elif "ollama" in base_url or "11434" in base_url:
+            self._provider_name = "ollama"
+        else:
+            self._provider_name = "vllm"
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
         self._max_retries = max_retries
@@ -190,17 +197,18 @@ class OpenRouterProvider(StructuredLLMProvider):
             usage = None
 
             try:
-                response = await self._client.chat.completions.create(
-                    model=self._model_name,
-                    messages=[
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=self._temperature,
-                    max_tokens=self._max_output_tokens,
-                    response_format={"type": "json_object"},
-                    extra_body=self._extra_body if self._extra_body else None,
-                )
+                with record_provider_call(self._provider_name, self._model_name):
+                    response = await self._client.chat.completions.create(
+                        model=self._model_name,
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=self._temperature,
+                        max_tokens=self._max_output_tokens,
+                        response_format={"type": "json_object"},
+                        extra_body=self._extra_body if self._extra_body else None,
+                    )
                 latency = time.monotonic() - t_start
                 msg = response.choices[0].message
                 raw_text = msg.content or ""
@@ -386,7 +394,6 @@ def build_ollama_provider(
         max_retries=max_retries,
         base_backoff_seconds=1.0,
         max_backoff_seconds=10.0,  # Local — no real rate limits
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
 

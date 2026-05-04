@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.core.config import Settings
+from app.backend.services.metrics import runs_total
 from app.backend.db.models import FindingRecord, HumanReviewRecord, ParsedClauseRecord, RunRecord, StageExecutionRecord
 from app.backend.models.schemas import (
     AdminMergeOutput,
@@ -777,6 +778,7 @@ async def finalize_run_if_approved(session: AsyncSession, run_id: str, human_act
     from app.backend.services.event_stream import async_append_run_event as append_run_event
 
     run.status = "finalized"
+    runs_total.labels(status="finalized").inc()
     run.verdict_payload = verdict.model_dump(mode="json")
     finalized_stage = (
         await session.execute(

@@ -1,21 +1,20 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+
+const STORAGE_KEY = "verdict-theme";
 
 export function useTheme() {
-  const [dark, setDark] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("veridict-theme") === "dark";
+  const [dark, setDark] = useState<boolean>(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored !== null) return stored === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (dark) {
-      root.classList.add("dark");
-      localStorage.setItem("veridict-theme", "dark");
-    } else {
-      root.classList.remove("dark");
-      localStorage.setItem("veridict-theme", "light");
-    }
+    document.documentElement.classList.toggle("dark", dark);
+    localStorage.setItem(STORAGE_KEY, dark ? "dark" : "light");
   }, [dark]);
 
-  return { dark, toggle: () => setDark((d) => !d) };
+  const toggle = () => setDark(d => !d);
+
+  return { dark, toggle };
 }

@@ -11,6 +11,7 @@ from typing import Any
 from app.backend.models.schemas import BranchReviewOutput, Finding, ValidatorOutput
 from app.backend.providers.base import StructuredLLMProvider
 from app.backend.agents.reviewer import _coerce_issue_type, _coerce_level, _VALID_SEVERITIES
+from app.backend.services.metrics import citation_validation_failures_total
 
 # Validators must run at low temperature for deterministic structural checks.
 _VALIDATOR_TEMPERATURE = 0.1
@@ -280,6 +281,10 @@ class KiraValidatorAgent:
         # Small models frequently (incorrectly) flag real UIDs as hallucinated.
         hallucinated = {uid for uid in raw.get("hallucinated_clause_uids", []) if uid not in known_set}
         all_findings = _normalize_reviewer_outputs(branch_outputs)
+        for finding in all_findings:
+            err = validate_kira_finding(finding)
+            if err:
+                citation_validation_failures_total.labels(code=err.code).inc()
         eligible = [f for f in all_findings if f.clause_uid not in hallucinated]
         validated = _deduplicate_overlapping_findings(eligible, raw.get("finding_verdicts", []))
         # Last-resort: if the validator zeroed out a non-empty input, pass findings through unmodified.

@@ -55,49 +55,38 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **Cluster:** `verdict-gke` — GKE Standard, single node `e2-standard-2`, zone `us-central1-a`  
 **Namespace:** `verdict`
 
-**LLM inference:** RunPod A100 SXM 80GB via HTTP proxy  
-- Pod ID: `wuvjzdhu16h7nx`
-- SSH: `ssh root@213.173.102.5 -p 15619 -i ~/.ssh/id_ed25519` (password: stored in memory)
-- Endpoint: `https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1`  
-- Base model: `unsloth/gemma-4-26B-A4B-it` — cached at `/workspace/hf_cache/hub/models--unsloth--gemma-4-26B-A4B-it/snapshots/cd98c13581a9d4ad061cb85d983232ca4edb1343`
-- Kira LoRA adapter: `/workspace/kira_gemma4_training/kira_adapter/` — **cannot be hot-served via vLLM LoRA**: vLLM 0.20.0 requires `get_expert_mapping` for MoE LoRA, not yet implemented for Gemma4. Adapter is merged offline into `/workspace/kira_merged/` (see LoRA merge section below).
-- vLLM venv: `/workspace/vllm_env` (install here, not system Python — root fs is only 5 GB)
-- pip cache: `/workspace/pip_cache` — delete after install to reclaim space
-- Workspace storage: 90 GB total, ~62 GB used by model + adapter + backups
-- Until vLLM is running the app operates in degraded mode (DB, auth, editor work; LLM calls fail)
+**LLM inference:** RunPod via llama.cpp + GGUF models (NOT vLLM)
+- Pod ID: `eya7qusi8yuns7`
+- SSH (direct TCP): `ssh root@213.173.102.6 -p 26619 -i ~/.ssh/id_ed25519` — key passphrase: `student1`
+- SSH (RunPod gateway): `ssh eya7qusi8yuns7-64410d5a@ssh.runpod.io -i ~/.ssh/id_ed25519`
+- Harvey endpoint: `https://eya7qusi8yuns7-8000.proxy.runpod.net/v1`
+- Kira endpoint: `https://eya7qusi8yuns7-8001.proxy.runpod.net/v1` (nginx 8001→8002)
+- Harvey secondary: `https://eya7qusi8yuns7-8080.proxy.runpod.net/v1`
+- Models: `/workspace/harvey_q4km.gguf` (Harvey), `/workspace/kira_q4km.gguf` (Kira) — Q4_K_M GGUF
+- llama.cpp binary: `/workspace/llama.cpp/build/bin/llama-server`
+- Kira training data still at: `/workspace/kira_gemma4_training/`
 
-**To start vLLM on RunPod:**
+**To start all servers on RunPod:**
 ```bash
-# SSH in
-ssh root@213.173.102.5 -p 15619 -i ~/.ssh/id_ed25519
+# SSH in via gateway (direct TCP may refuse banner exchange)
+ssh eya7qusi8yuns7-64410d5a@ssh.runpod.io -i ~/.ssh/id_ed25519
 
-# Start server with nohup (no tmux/screen available on this pod)
-nohup /workspace/vllm_env/bin/python3 -u /workspace/vllm_env/bin/vllm serve \
-  /workspace/hf_cache/hub/models--unsloth--gemma-4-26B-A4B-it/snapshots/cd98c13581a9d4ad061cb85d983232ca4edb1343 \
-  --served-model-name unsloth/gemma-4-26B-A4B-it \
-  --dtype auto --max-model-len 4096 \
-  --max-num-batched-tokens 4096 \
-  --tensor-parallel-size 1 \
-  --distributed-executor-backend mp \
-  --port 8000 --host 0.0.0.0 \
-  > /workspace/vllm.log 2>&1 &
+# Run startup script (starts Harvey primary, waits, then Kira, then Harvey secondary)
+nohup bash /workspace/start_models.sh > /workspace/startup.log 2>&1 &
 
-# NOTE: --enable-lora does NOT work — vLLM 0.20.0 requires get_expert_mapping for MoE LoRA
-# (Gemma4 is a 128-expert MoE). Merge the adapter offline instead (see LoRA merge section).
+# Monitor progress (~5-10 min per model)
+tail -f /workspace/startup.log
+tail -f /workspace/harvey_server.log
+tail -f /workspace/kira_server.log
 
-# Tail logs
-tail -f /workspace/vllm.log
-
-# Test endpoint (from local machine)
-curl https://wuvjzdhu16h7nx-8000.proxy.runpod.net/v1/models
+# Test
+curl https://eya7qusi8yuns7-8000.proxy.runpod.net/v1/models
 ```
 
 **RunPod environment notes:**
-- No tmux or screen — use `nohup ... &` and log to `/workspace/vllm.log`
-- Root filesystem is only 5 GB — always install packages into `/workspace/vllm_env`
-- Use `TMPDIR=/workspace` and `--cache-dir /workspace/pip_cache` when running pip
-- GPU: A100 SXM4 80 GB, CUDA 12.4, torch 2.4.1+cu124 (system Python 3.11.10)
-- `/workspace` quota is 90 GB (MooseFS); logs go to local storage (ephemeral, deleted on pod pause)
+- No tmux or screen — use `nohup ... &`
+- `/workspace` is persistent across restarts; root fs is ephemeral
+- Direct TCP SSH (port 26619) may fail with banner exchange error — use gateway instead
 
 **CI/CD — `.github/workflows/build-push.yml`:**
 - 3 parallel build jobs: `build-api`, `build-worker`, `build-frontend` (each with its own GHA cache scope)

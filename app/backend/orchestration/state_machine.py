@@ -38,6 +38,9 @@ from app.backend.services.metrics import (
     findings_per_run,
     kira_iterations_per_run,
     kira_panel_votes_total,
+    retry_total,
+    runs_total,
+    stage_duration_seconds,
 )
 from app.backend.agents.admin import AdminMergeAgent, ReviewBlockAggregator
 from app.backend.agents.reviewer import (
@@ -95,6 +98,7 @@ def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> St
     if stage.status == "running":
         # Worker died without releasing the lease — treat as an implicit retry.
         stage.retry_count += 1
+        retry_total.labels(stage=stage.stage_name).inc()
         logger.warning(
             "Reclaiming stale running stage %s for run %s (lease expired, retry %d)",
             stage.stage_name, stage.run_id, stage.retry_count,
@@ -114,6 +118,9 @@ def advance_stage(session: Session, stage: StageExecutionRecord, structured_outp
     stage.status = "completed"
     stage.finished_at = datetime.utcnow()
     stage.structured_output = structured_output
+    if stage.started_at:
+        duration = (stage.finished_at - stage.started_at).total_seconds()
+        stage_duration_seconds.labels(stage=stage.stage_name).observe(duration)
     append_run_event(session, stage.run_id, "stage_completed", {"stage_name": stage.stage_name})
     if stage.stage_name == "awaiting_human_review":
         stage.run.status = "awaiting_human_review"
@@ -123,6 +130,7 @@ def advance_stage(session: Session, stage: StageExecutionRecord, structured_outp
 
 def retry_stage(session: Session, stage: StageExecutionRecord, error_detail: str) -> None:
     stage.retry_count += 1
+    retry_total.labels(stage=stage.stage_name).inc()
     if stage.retry_count >= stage.max_retries:
         mark_stage_failed(session, stage, error_detail)
         return
@@ -138,6 +146,7 @@ def mark_stage_failed(session: Session, stage: StageExecutionRecord, error_detai
     stage.failure_reason = error_detail
     stage.finished_at = datetime.utcnow()
     stage.run.status = "failed"
+    runs_total.labels(status="failed").inc()
     append_run_event(session, stage.run_id, "stage_failed", {"stage_name": stage.stage_name, "error": error_detail})
     _write_failure_log(stage.run_id, stage.stage_name, error_detail, stage.retry_count)
     session.commit()

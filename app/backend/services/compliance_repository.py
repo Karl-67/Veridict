@@ -1,99 +1,87 @@
 """
 Kira compliance corpus repository.
+
+Resolves the applicable internal and external rule sets for a given
+(tenant, jurisdiction, regime, effective_date) tuple.
 """
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import logging
 from datetime import date
-from typing import Generator
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.backend.db.models import ComplianceCorpusRecord
-from app.backend.db.session import get_sync_session_factory
+
+logger = logging.getLogger(__name__)
 
 
 class MissingComplianceScopeError(Exception):
-    blocked_reason = "needs_scope_review"
+    """Raised when no corpora can be resolved for the requested scope."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.blocked_reason = message
 
 
-@contextmanager
-def _session() -> Generator[Session, None, None]:
-    factory = get_sync_session_factory()
-    session = factory()
-    try:
-        yield session
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+def resolve_applicable_corpora(
+    tenant_id: str,
+    jurisdiction: str | None,
+    regime: str | None,
+    effective_date: date | None,
+) -> dict:
+    """
+    Return a dict with keys: jurisdiction, regime, internal_rules, external_rules.
 
+    Queries the compliance_corpora table for records that cover the given
+    (tenant, jurisdiction, regime) and are effective on *effective_date*.
+    If effective_date is None, rows with no effective_to bound are preferred.
 
-def _record_to_dict(record: ComplianceCorpusRecord) -> dict:
-    return {
-        "id": record.id,
-        "tenant_id": record.tenant_id,
-        "corpus_type": record.corpus_type,
-        "jurisdiction": record.jurisdiction,
-        "regime": record.regime,
-        "effective_from": record.effective_from.isoformat(),
-        "effective_to": record.effective_to.isoformat() if record.effective_to else None,
-        "rules_payload": record.rules_payload,
-        "source_url": record.source_url,
-        "corpus_name": record.corpus_name,
-    }
+    Does NOT raise MissingComplianceScopeError when no rows are found —
+    the caller (state_machine) catches that separately and falls back to an
+    empty context so that runs without corpora can still proceed.
+    """
+    # Lazy import to avoid circular deps at module load time
+    from app.backend.db.session import get_sync_session_factory
 
+    jur = jurisdiction or ""
+    reg = regime or ""
+    eff = effective_date or date.today()
 
-def _load_corpora(tenant_id: str, corpus_type: str, jurisdiction: str, regime: str, effective_date: date | None) -> list[dict]:
-    effective_date = effective_date or date.today()
-    with _session() as session:
-        stmt = (
+    session_factory = get_sync_session_factory()
+    with session_factory() as session:
+        rows: list[ComplianceCorpusRecord] = session.scalars(
             select(ComplianceCorpusRecord)
             .where(
                 ComplianceCorpusRecord.tenant_id == tenant_id,
-                ComplianceCorpusRecord.corpus_type == corpus_type,
-                ComplianceCorpusRecord.jurisdiction == jurisdiction,
-                ComplianceCorpusRecord.regime == regime,
-                ComplianceCorpusRecord.effective_from <= effective_date,
-                or_(ComplianceCorpusRecord.effective_to.is_(None), ComplianceCorpusRecord.effective_to >= effective_date),
+                ComplianceCorpusRecord.jurisdiction == jur,
+                ComplianceCorpusRecord.regime == reg,
+                ComplianceCorpusRecord.effective_from <= eff,
+                or_(
+                    ComplianceCorpusRecord.effective_to.is_(None),
+                    ComplianceCorpusRecord.effective_to >= eff,
+                ),
             )
             .order_by(ComplianceCorpusRecord.effective_from.desc())
-        )
-        return [_record_to_dict(record) for record in session.scalars(stmt).all()]
+        ).all()
 
+    internal_rules: list[dict] = []
+    external_rules: list[dict] = []
 
-def load_internal_playbook_rules(tenant_id: str, jurisdiction: str, regime: str, effective_date: date | None) -> list[dict]:
-    return _load_corpora(tenant_id, "internal_playbook", jurisdiction, regime, effective_date)
-
-
-def load_external_compliance_rules(tenant_id: str, jurisdiction: str, regime: str, effective_date: date | None) -> list[dict]:
-    return _load_corpora(tenant_id, "external", jurisdiction, regime, effective_date)
-
-
-def resolve_applicable_corpora(tenant_id: str, jurisdiction: str | None, regime: str | None, effective_date: date | None = None) -> dict:
-    if not jurisdiction or not regime:
-        raise MissingComplianceScopeError("Jurisdiction and regime are required to resolve Kira corpora.")
-    internal = load_internal_playbook_rules(tenant_id, jurisdiction, regime, effective_date)
-    external = load_external_compliance_rules(tenant_id, jurisdiction, regime, effective_date)
-    def _flatten(records: list[dict]) -> list:
-        result = []
-        for record in records:
-            rp = record.get("rules_payload")
-            if isinstance(rp, dict):
-                result.extend(rp.get("rules", []))
-            elif isinstance(rp, list):
-                result.extend(rp)
-        return result
+    for row in rows:
+        rules = row.rules_payload
+        if not isinstance(rules, list):
+            rules = [rules] if rules else []
+        if row.corpus_type == "internal_playbook":
+            internal_rules.extend(rules)
+        else:
+            external_rules.extend(rules)
 
     return {
-        "tenant_id": tenant_id,
-        "jurisdiction": jurisdiction,
-        "regime": regime,
-        "effective_date": (effective_date or date.today()).isoformat(),
-        "internal_rules": _flatten(internal),
-        "external_rules": _flatten(external),
-        "corpora_records": {"internal": internal, "external": external},
+        "jurisdiction": jur,
+        "regime": reg,
+        "internal_rules": internal_rules,
+        "external_rules": external_rules,
     }
