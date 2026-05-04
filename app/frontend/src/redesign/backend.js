@@ -301,6 +301,12 @@ async function getRun(runId) {
   return readJson(res, "Failed to load run");
 }
 
+async function getActiveRun() {
+  const res = await apiFetch(`${API_BASE}/runs/active`, { headers: authHeaders() });
+  if (res.status === 404) return null;
+  return readJson(res, "Failed to load active run");
+}
+
 async function getRunFindings(runId) {
   const res = await apiFetch(`${API_BASE}/runs/${runId}/findings`, { headers: authHeaders() });
   return readJson(res, "Failed to load findings");
@@ -519,6 +525,7 @@ window.verdictApi = {
   addContractVersion,
   listHistory,
   getRun,
+  getActiveRun,
   getRunFindings,
   getHarveyFindings,
   retryRun,

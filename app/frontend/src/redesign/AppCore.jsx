@@ -462,7 +462,9 @@ function App() {
   const [selectedRunId, setSelectedRunId] = React.useState(() => urlToScreen(window.location.pathname).runId);
   const [pendingError, setPendingError] = React.useState(null);
   const [fileName, setFileName] = React.useState("");
-  const [processingRunId, setProcessingRunId] = React.useState(null);
+  const [processingRunId, setProcessingRunId] = React.useState(
+    () => localStorage.getItem("verdict_processing_run_id") || null
+  );
   const [tweakPanelVisible, setTweakPanelVisible] = React.useState(false);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [workspaceFilter, setWorkspaceFilter] = React.useState(null);
@@ -499,8 +501,25 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (screen !== "processing") setProcessingRunId(null);
+    if (screen !== "processing") {
+      setProcessingRunId(null);
+      localStorage.removeItem("verdict_processing_run_id");
+    }
   }, [screen]);
+
+  // On refresh while on /processing, recover the active run from the API
+  // if localStorage didn't have it (e.g. different browser / cleared storage).
+  React.useEffect(() => {
+    if (screen !== "processing" || processingRunId) return;
+    let cancelled = false;
+    window.verdictApi.getActiveRun().then(run => {
+      if (!cancelled && run?.id) {
+        setProcessingRunId(run.id);
+        localStorage.setItem("verdict_processing_run_id", run.id);
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [screen, processingRunId]);
 
   function navigate(s, id = null, runId = null) {
     if (s === "admin" && !isOrgAdmin) {
@@ -586,6 +605,7 @@ function App() {
           try {
             const result = await window.verdictApi.addContractVersion(selectedContractId, file);
             setProcessingRunId(result.run_id ?? null);
+            if (result.run_id) localStorage.setItem("verdict_processing_run_id", result.run_id);
             setSelectedContractId(result.contract_id ?? selectedContractId);
           } catch (err) {
             setPendingError(err.message || "Upload failed");
@@ -603,6 +623,7 @@ function App() {
             const result = await window.verdictApi.addContractVersion(contract.id, file);
             setSelectedContractId(contract.id);
             setProcessingRunId(result.run_id ?? null);
+            if (result.run_id) localStorage.setItem("verdict_processing_run_id", result.run_id);
           } catch (err) {
             setPendingError(err.message || "Upload failed");
           }

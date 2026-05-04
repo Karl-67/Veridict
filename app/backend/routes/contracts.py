@@ -78,6 +78,24 @@ async def post_run(
     )
 
 
+@router.get("/runs/active", response_model=RunDetail | None)
+async def get_active_run(db: DbSession, token: dict = Depends(require_auth)) -> RunDetail | None:
+    """Return the most recent in-progress run for the current user, or null if none."""
+    from sqlalchemy import select, desc
+    from app.backend.db.models import RunRecord
+    tenant_id = str(token.get("org_id") or token.get("sub"))
+    run = (await db.execute(
+        select(RunRecord)
+        .where(RunRecord.tenant_id == tenant_id, RunRecord.status.in_(["created", "processing"]))
+        .order_by(desc(RunRecord.created_at))
+        .limit(1)
+    )).scalar_one_or_none()
+    if run is None:
+        return None
+    from app.backend.services.run_service import get_run_detail
+    return await get_run_detail(db, run.id)
+
+
 @router.get("/runs/{run_id}", response_model=RunDetail)
 async def get_run(run_id: str, db: DbSession, token: dict = Depends(require_auth)) -> RunDetail:
     await assert_run_access(db, run_id, token)
