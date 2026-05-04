@@ -202,7 +202,24 @@ class OpenRouterProvider(StructuredLLMProvider):
                     extra_body=self._extra_body if self._extra_body else None,
                 )
                 latency = time.monotonic() - t_start
-                raw_text = response.choices[0].message.content or ""
+                msg = response.choices[0].message
+                raw_text = msg.content or ""
+                # vLLM thinking models may return reasoning tokens in a separate
+                # reasoning_content field. Log it so we can confirm thinking is
+                # disabled; if content is empty and only reasoning arrived the
+                # model burned its full token budget on thinking.
+                reasoning_content = (
+                    getattr(msg, "reasoning_content", None)
+                    or (msg.model_extra or {}).get("reasoning_content")
+                )
+                if reasoning_content:
+                    logger.warning(
+                        "Model returned reasoning_content (%d chars) — "
+                        "enable_thinking=False is NOT being respected by vLLM. "
+                        "Fix: restart vLLM with a no-think chat template "
+                        "(--chat-template /workspace/no_think.jinja).",
+                        len(reasoning_content),
+                    )
                 finish_reason = response.choices[0].finish_reason
                 if response.usage:
                     usage = {
@@ -347,6 +364,7 @@ def build_openrouter_provider(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         max_retries=max_retries,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
 
@@ -368,6 +386,7 @@ def build_ollama_provider(
         max_retries=max_retries,
         base_backoff_seconds=1.0,
         max_backoff_seconds=10.0,  # Local — no real rate limits
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     )
 
 
@@ -390,7 +409,14 @@ def build_vllm_provider(
     thinking template enabled by default, which causes reasoning_content to consume the entire
     completion token budget leaving content empty on any non-trivial prompt.
     """
-    body = {"chat_template_kwargs": {"enable_thinking": False}}
+    # Disable thinking via every mechanism vLLM exposes.
+    # chat_template_kwargs is the documented approach but vLLM does not always
+    # honour it (depends on model template).  reasoning_effort="none" is
+    # accepted by vLLM 0.17+ for thinking-capable models as an alternative.
+    body: dict[str, Any] = {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "reasoning_effort": "none",
+    }
     if extra_body:
         body.update(extra_body)
     return OpenRouterProvider(

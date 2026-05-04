@@ -174,6 +174,7 @@ class GeminiProvider(StructuredLLMProvider):
                     response_schema=response_schema,
                     temperature=self._temperature,
                     max_output_tokens=self._max_output_tokens,
+                    thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
                 )
                 response = await self._client.aio.models.generate_content(
                     model=self._model_name,
