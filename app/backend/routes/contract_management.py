@@ -9,6 +9,7 @@ POST /api/contracts/{id}/versions     — upload a new version
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -20,6 +21,8 @@ from app.backend.db.models import ContractRecord, ContractVersionRecord, Finding
 from app.backend.db.session import DbSession
 from app.backend.services.auth_service import require_auth
 from app.backend.services.run_service import create_run
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/contracts", tags=["contracts"])
 history_router = APIRouter(prefix="/api/history", tags=["history"])
@@ -120,6 +123,7 @@ async def _assert_workspace_access(db: DbSession, workspace_id: str, token: dict
     """Raise 403 if the caller is not an org_admin and not a member of the workspace."""
     ws = await db.get(WorkspaceRecord, workspace_id)
     if not ws:
+        log.warning("workspace_not_found user=%s org=%s workspace_id=%s", token.get("sub"), token.get("org_id"), workspace_id)
         raise HTTPException(status_code=404, detail="Workspace not found")
     if token.get("org_role") == "org_admin":
         return ws
@@ -130,6 +134,7 @@ async def _assert_workspace_access(db: DbSession, workspace_id: str, token: dict
         )
     )).scalar_one_or_none()
     if not member:
+        log.warning("workspace_access_denied user=%s org=%s workspace_id=%s", token.get("sub"), token.get("org_id"), workspace_id)
         raise HTTPException(status_code=403, detail="Not a member of this workspace")
     return ws
 
@@ -244,6 +249,10 @@ async def get_contract(
     result = await db.execute(select(ContractRecord).where(ContractRecord.id == contract_id))
     contract = result.scalar_one_or_none()
     if not contract:
+        log.warning(
+            "contract_not_found route=GET user=%s org=%s contract_id=%s",
+            token.get("sub"), token.get("org_id"), contract_id,
+        )
         raise HTTPException(status_code=404, detail="Contract not found")
 
     if contract.workspace_id:
@@ -302,6 +311,10 @@ async def add_version(
     result = await db.execute(select(ContractRecord).where(ContractRecord.id == contract_id))
     contract = result.scalar_one_or_none()
     if not contract:
+        log.warning(
+            "contract_not_found route=POST_version user=%s org=%s contract_id=%s file=%s",
+            token.get("sub"), token.get("org_id"), contract_id, file.filename,
+        )
         raise HTTPException(status_code=404, detail="Contract not found")
 
     if contract.workspace_id:
