@@ -152,6 +152,8 @@ def _call_endpoint(clause_text: str) -> dict | None:
                 "temperature": 0.1,
                 "max_tokens": 1024,
                 "chat_template_kwargs": {"enable_thinking": False},
+                "reasoning_effort": "none",
+                "thinking_budget": 0,
             },
             timeout=60,
         )

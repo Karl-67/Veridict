@@ -102,7 +102,11 @@ def _call_model(endpoint: str, model: str, user_msg: str) -> str:
         ],
         temperature=0.1,
         max_tokens=2048,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        extra_body={
+            "chat_template_kwargs": {"enable_thinking": False},
+            "reasoning_effort": "none",
+            "thinking_budget": 0,
+        },
     )
     return resp.choices[0].message.content or ""
 

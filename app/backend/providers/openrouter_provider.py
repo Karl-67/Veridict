@@ -372,7 +372,11 @@ def build_openrouter_provider(
         temperature=temperature,
         max_output_tokens=max_output_tokens,
         max_retries=max_retries,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        extra_body={
+            "chat_template_kwargs": {"enable_thinking": False},
+            "reasoning_effort": "none",
+            "thinking_budget": 0,
+        },
     )
 
 
@@ -416,13 +420,14 @@ def build_vllm_provider(
     thinking template enabled by default, which causes reasoning_content to consume the entire
     completion token budget leaving content empty on any non-trivial prompt.
     """
-    # Disable thinking via every mechanism vLLM exposes.
-    # chat_template_kwargs is the documented approach but vLLM does not always
-    # honour it (depends on model template).  reasoning_effort="none" is
-    # accepted by vLLM 0.17+ for thinking-capable models as an alternative.
+    # Disable thinking via every mechanism vLLM/llama.cpp expose.
+    # chat_template_kwargs is the vLLM approach; reasoning_effort="none" is
+    # accepted by vLLM 0.17+; thinking_budget=0 is the llama.cpp per-request
+    # control for Gemma-4 thinking models (ignored silently by other servers).
     body: dict[str, Any] = {
         "chat_template_kwargs": {"enable_thinking": False},
         "reasoning_effort": "none",
+        "thinking_budget": 0,
     }
     if extra_body:
         body.update(extra_body)
