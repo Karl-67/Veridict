@@ -30,7 +30,7 @@ def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_co
     except Exception as exc:
         logger.warning("Failed to write failure log: %s", exc)
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.backend.services.metrics import (
@@ -71,8 +71,14 @@ def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> St
             StageExecutionRecord.stage_name != "finalized",
             StageExecutionRecord.stage_name.not_in(_LEGACY_STAGES),
             RunRecord.status.in_(["created", "processing"]),
-            StageExecutionRecord.status.in_(["pending", "retrying"]),
-            or_(StageExecutionRecord.lease_expires_at.is_(None), StageExecutionRecord.lease_expires_at < now),
+            or_(
+                and_(
+                    StageExecutionRecord.status.in_(["pending", "retrying"]),
+                    or_(StageExecutionRecord.lease_expires_at.is_(None), StageExecutionRecord.lease_expires_at < now),
+                ),
+                # Reclaim stages where the worker died without releasing the lease.
+                and_(StageExecutionRecord.status == "running", StageExecutionRecord.lease_expires_at < now),
+            ),
             ~exists(
                 select(predecessor.id).where(
                     predecessor.run_id == StageExecutionRecord.run_id,
@@ -86,6 +92,13 @@ def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> St
     ).first()
     if stage is None:
         return None
+    if stage.status == "running":
+        # Worker died without releasing the lease — treat as an implicit retry.
+        stage.retry_count += 1
+        logger.warning(
+            "Reclaiming stale running stage %s for run %s (lease expired, retry %d)",
+            stage.stage_name, stage.run_id, stage.retry_count,
+        )
     stage.status = "running"
     stage.worker_id = worker_id
     stage.started_at = now
