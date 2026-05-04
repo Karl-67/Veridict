@@ -431,6 +431,7 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
   const [contractId, setContractId]     = React.useState(selectedContractId);
   const [retrying, setRetrying]         = React.useState(false);
   const [retryError, setRetryError]     = React.useState(null);
+  const [cancelling, setCancelling]     = React.useState(false);
 
   React.useEffect(() => {
     if (!processingRunId) return;
@@ -445,9 +446,11 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
         if (run.blocked_reason) setBlockedReason(run.blocked_reason);
         if (run.contract_id) setContractId(run.contract_id);
         const success = ["awaiting_human_review", "finalized"].includes(run.state);
-        const terminal = ["failed", "blocked"].includes(run.state);
+        const terminal = ["failed", "blocked", "cancelled"].includes(run.state);
         if (success) {
           setTimeout(() => { if (active) navigate("contract_detail", run.contract_id ?? selectedContractId); }, 800);
+        } else if (run.state === "cancelled") {
+          setTimeout(() => { if (active) navigate("dashboard"); }, 800);
         } else if (!terminal) {
           setTimeout(poll, 3000);
         }
@@ -496,6 +499,17 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
     } catch (err) {
       setRetryError(err.message || "Retry failed — please try again.");
       setRetrying(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!processingRunId) return;
+    setCancelling(true);
+    try {
+      await window.verdictApi.cancelRun(processingRunId);
+      navigate("dashboard");
+    } catch {
+      setCancelling(false);
     }
   }
 
@@ -598,12 +612,18 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
             </button>
           </div>
         ) : (
-          <div>
-            <p style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 12 }}>This may take a few minutes depending on document length.</p>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+            <p style={{ fontSize: 12, color: "var(--text-3)", marginBottom: 4 }}>This may take a few minutes depending on document length.</p>
             <button onClick={() => navigate("dashboard")} style={{ fontSize: 13, color: "var(--text-3)", textDecoration: "underline", textUnderlineOffset: 3, border: "none", background: "none", cursor: "pointer", transition: "color 0.12s" }}
               onMouseEnter={e => e.currentTarget.style.color = "var(--text-2)"}
               onMouseLeave={e => e.currentTarget.style.color = "var(--text-3)"}>
               Run in background — go to dashboard
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={cancelling}
+              style={{ fontSize: 12, color: cancelling ? "var(--text-3)" : "var(--risk-high)", background: "none", border: "none", cursor: cancelling ? "not-allowed" : "pointer", opacity: cancelling ? 0.5 : 1, transition: "opacity 0.15s" }}>
+              {cancelling ? "Cancelling…" : "Cancel review"}
             </button>
           </div>
         )}

@@ -325,6 +325,14 @@ async function retryRun(runId) {
   return readJson(res, "Retry failed");
 }
 
+async function cancelRun(runId) {
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return readJson(res, "Cancel failed");
+}
+
 async function submitHumanReview(runId, action, reason = "") {
   const user = currentUser();
   const res = await apiFetch(`${API_BASE}/runs/${runId}/human-review`, {
@@ -529,6 +537,7 @@ window.verdictApi = {
   getRunFindings,
   getHarveyFindings,
   retryRun,
+  cancelRun,
   submitHumanReview,
   updateProfile,
   getRunFileUrl,

@@ -136,6 +136,24 @@ async def post_human_review(
     return await submit_human_review(db, run_id, payload)
 
 
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
+    from app.backend.db.models import StageExecutionRecord
+    run = await assert_run_access(db, run_id, token)
+    if run.status not in ("created", "processing"):
+        raise HTTPException(status_code=409, detail="Only active runs can be cancelled")
+    run.status = "cancelled"
+    stages_result = await db.execute(
+        select(StageExecutionRecord).where(StageExecutionRecord.run_id == run_id)
+    )
+    for stage in stages_result.scalars().all():
+        if stage.status in ("pending", "retrying"):
+            stage.status = "cancelled"
+            stage.lease_expires_at = None
+    await db.commit()
+    return {"run_id": run_id, "state": "cancelled"}
+
+
 @router.post("/runs/{run_id}/retry")
 async def retry_run(run_id: str, db: DbSession, token: dict = Depends(require_auth)):
     from app.backend.db.models import StageExecutionRecord
