@@ -14,6 +14,7 @@ import logging
 import time
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI, APIStatusError, APITimeoutError, APIConnectionError
 
 from app.backend.providers.base import (
@@ -143,6 +144,7 @@ class OpenRouterProvider(StructuredLLMProvider):
             api_key=api_key,
             base_url=base_url,
             default_headers=extra_headers,
+            timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0),
         )
         self._model_name = model_name
         self._temperature = temperature

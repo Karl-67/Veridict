@@ -171,9 +171,7 @@ def _kira_provider(settings: Settings):
         return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
-            # Enable chain-of-thought reasoning via Gemma-4's jinja chat template.
-            # Requires llama.cpp started with --jinja; ignored gracefully if unsupported.
-            extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+            max_output_tokens=16384,
         )
     return _provider(settings)
 
@@ -417,7 +415,7 @@ async def _run_kira_review_block(
     base_provider = _provider(settings)
     try:
         worker = KiraWorker(kira_provider)
-        panel = [KiraPanelReviewer(base_provider, i) for i in (1, 2, 3)]
+        panel = [KiraPanelReviewer(kira_provider, i) for i in (1, 2, 3)]
 
         current_findings = await worker.analyze(clause_index, compliance_context)
         best_findings = list(current_findings)  # keep best non-empty result across iterations
