@@ -7,87 +7,44 @@
 # and works on all llama.cpp versions.
 #
 # Usage (from /workspace after SSH'ing in):
-#   nohup bash scripts/start_models.sh > /workspace/startup.log 2>&1 &
+#   nohup bash /workspace/start_models.sh > /workspace/startup.log 2>&1 &
 #   tail -f /workspace/startup.log
-
-set -euo pipefail
 
 LLAMA=/workspace/llama.cpp/build/bin/llama-server
 HARVEY=/workspace/harvey_q4km.gguf
 KIRA=/workspace/kira_q4km.gguf
-TEMPLATE=/workspace/no_think.jinja
+NO_THINK=/workspace/no_think.jinja
 
-# ── write the no-think chat template ─────────────────────────────────────────
-# Standard Gemma-4 template with thinking tokens removed entirely.
-# The GGUF-embedded template enables thinking by default; this file overrides it.
-cat > "$TEMPLATE" << 'JINJA'
-{{ bos_token }}
-{%- for message in messages %}
-    {%- if message['role'] == 'system' %}
-        {{- '<start_of_turn>user\n' + message['content'] | trim + '<end_of_turn>\n' }}
-    {%- elif message['role'] == 'user' %}
-        {{- '<start_of_turn>user\n' + message['content'] | trim + '<end_of_turn>\n' }}
-    {%- elif message['role'] == 'assistant' %}
-        {{- '<start_of_turn>model\n' + message['content'] | trim + '<end_of_turn>\n' }}
-    {%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<start_of_turn>model\n' }}
-{%- endif %}
-JINJA
-
-echo "[start_models] wrote no-think template to $TEMPLATE"
-
-# ── helpers ───────────────────────────────────────────────────────────────────
 wait_ready() {
   local port=$1 label=$2
   echo "[start_models] waiting for $label on :$port ..."
-  for i in $(seq 1 120); do
+  local i
+  for i in {1..120}; do
     if curl -sf "http://localhost:$port/health" >/dev/null 2>&1; then
-      echo "[start_models] $label is ready"
-      return 0
+      echo "[start_models] $label ready"; return 0
     fi
     sleep 5
   done
-  echo "[start_models] ERROR: $label did not become healthy on :$port after 10 min" >&2
-  return 1
+  echo "ERROR: $label not healthy on :$port" >&2; return 1
 }
 
-# ── start servers ─────────────────────────────────────────────────────────────
-echo "[start_models] starting Harvey primary on :8000"
-nohup "$LLAMA" \
-  --model "$HARVEY" \
-  --port 8000 \
-  --host 0.0.0.0 \
-  --ctx-size 8192 \
-  --n-predict -1 \
-  --chat-template-file "$TEMPLATE" \
-  > /workspace/harvey_server.log 2>&1 &
+# Route port 8001 → Kira on 8002 (RunPod nginx.conf defaults 8001 → 8000)
+rm -f /etc/nginx/conf.d/kira_proxy.conf
+sed -i "/listen 8001/,/proxy_pass/ s|proxy_pass http://localhost:[0-9]*;|proxy_pass http://localhost:8002;|" /etc/nginx/nginx.conf
+nginx -t && (nginx -s reload 2>/dev/null || nginx)
 
-wait_ready 8000 "Harvey primary"
+pkill -f llama-server 2>/dev/null || true
+sleep 2
 
-echo "[start_models] starting Kira on :8002 (nginx proxies :8001 -> :8002)"
-nohup "$LLAMA" \
-  --model "$KIRA" \
-  --port 8002 \
-  --host 0.0.0.0 \
-  --ctx-size 8192 \
-  --n-predict -1 \
-  --chat-template-file "$TEMPLATE" \
-  > /workspace/kira_server.log 2>&1 &
+echo "[start_models] launching all three servers in parallel"
+nohup "$LLAMA" --model "$HARVEY" --port 8000 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_server.log 2>&1 &
+nohup "$LLAMA" --model "$KIRA"   --port 8002 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/kira_server.log 2>&1 &
+nohup "$LLAMA" --model "$HARVEY" --port 8080 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_secondary_server.log 2>&1 &
 
-wait_ready 8002 "Kira"
+echo "[start_models] waiting for all three in parallel..."
+wait_ready 8000 "Harvey primary" &
+wait_ready 8002 "Kira"           &
+wait_ready 8080 "Harvey secondary" &
+wait
 
-echo "[start_models] starting Harvey secondary on :8080"
-nohup "$LLAMA" \
-  --model "$HARVEY" \
-  --port 8080 \
-  --host 0.0.0.0 \
-  --ctx-size 8192 \
-  --n-predict -1 \
-  --chat-template-file "$TEMPLATE" \
-  > /workspace/harvey_secondary_server.log 2>&1 &
-
-wait_ready 8080 "Harvey secondary"
-
-echo "[start_models] all three servers are up — thinking disabled via $TEMPLATE"
+echo "[start_models] all servers up"
