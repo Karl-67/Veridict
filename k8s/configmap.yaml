@@ -5,10 +5,10 @@ metadata:
   namespace: verdict
 data:
   LLM_PROVIDER: "vllm"
-  VLLM_BASE_URL: "https://eya7qusi8yuns7-8000.proxy.runpod.net/v1"
-  VLLM_BASE_URL_2: "https://eya7qusi8yuns7-8080.proxy.runpod.net/v1"
+  VLLM_BASE_URL: "https://js16ghc1rvuc2u-8000.proxy.runpod.net/v1"
+  VLLM_BASE_URL_2: "https://js16ghc1rvuc2u-8080.proxy.runpod.net/v1"
   VLLM_BASE_MODEL: "unsloth/gemma-4-26B-A4B-it"
-  KIRA_MODEL_URL: "https://eya7qusi8yuns7-8001.proxy.runpod.net/v1"
+  KIRA_MODEL_URL: "https://js16ghc1rvuc2u-8001.proxy.runpod.net/v1"
   KIRA_MODEL_NAME: "kira"
 
   # RAG / embeddings
