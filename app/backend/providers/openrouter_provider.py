@@ -302,16 +302,21 @@ class OpenRouterProvider(StructuredLLMProvider):
 
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
     """Parse JSON from the model response, stripping markdown fences and repairing if needed."""
+    import re as _re
     cleaned = raw_text.strip()
-    # Strip Gemma-4 chain-of-thought thinking block (<think>...</think>) before parsing.
-    # When enable_thinking=True the model prepends a reasoning trace; we only want the JSON part.
-    if cleaned.startswith("<think>"):
-        import re as _re
+    # Strip Gemma-4 built-in thinking block (<think>...</think>).
+    if "<think>" in cleaned:
         cleaned = _re.sub(r"<think>.*?</think>", "", cleaned, flags=_re.DOTALL).strip()
+    # Strip Harvey fine-tune reasoning tokens (<thought>...</thought> and <channel|> prefix).
+    # Harvey was trained to prepend <thought>...</thought> before its answer and then
+    # emit <channel|> as an answer-start marker — neither belongs in the JSON payload.
+    if "<thought>" in cleaned:
+        cleaned = _re.sub(r"<thought>.*?</thought>", "", cleaned, flags=_re.DOTALL).strip()
+    if cleaned.startswith("<channel|>"):
+        cleaned = cleaned[len("<channel|>"):].strip()
     # Detect an HTML error page (e.g. nginx 405 when a POST hits the wrong backend).
     # Raise immediately with a human-readable message instead of storing raw HTML as failure text.
     if cleaned.startswith("<"):
-        import re as _re
         title_match = _re.search(r"<title>([^<]{1,80})</title>", cleaned, _re.IGNORECASE)
         title = title_match.group(1).strip() if title_match else "HTML response"
         # 405/502/503 HTML pages from RunPod proxy mean llama.cpp crashed and is restarting.
