@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -14,8 +15,8 @@ logger = logging.getLogger(__name__)
 _FAILURE_LOG = Path("logs/failures.jsonl")
 
 
-def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_count: int) -> None:
-    """Append one JSON line to logs/failures.jsonl for every permanent stage failure."""
+def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_count: int, is_retry: bool = False) -> None:
+    """Append one JSON line to logs/failures.jsonl for every stage failure."""
     try:
         _FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
         entry = {
@@ -24,9 +25,16 @@ def _write_failure_log(run_id: str, stage_name: str, error_detail: str, retry_co
             "stage": stage_name,
             "error": error_detail,
             "retry_count": retry_count,
+            "final": not is_retry,
         }
         with _FAILURE_LOG.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
+        logger.error(
+            "STAGE_%s run_id=%s stage=%s retry=%d error=%s",
+            "RETRY" if is_retry else "FAILED",
+            run_id, stage_name, retry_count,
+            error_detail[:500],
+        )
     except Exception as exc:
         logger.warning("Failed to write failure log: %s", exc)
 
@@ -137,6 +145,7 @@ def retry_stage(session: Session, stage: StageExecutionRecord, error_detail: str
     stage.status = "retrying"
     stage.failure_reason = error_detail
     stage.lease_expires_at = None
+    _write_failure_log(stage.run_id, stage.stage_name, error_detail, stage.retry_count, is_retry=True)
     append_run_event(session, stage.run_id, "stage_retrying", {"stage_name": stage.stage_name, "error": error_detail})
     session.commit()
 
@@ -692,4 +701,10 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
     except (MissingLineageError, MissingComplianceScopeError) as exc:
         mark_run_blocked(session, run, getattr(exc, "blocked_reason", str(exc)))
     except Exception as exc:
-        retry_stage(session, stage, str(exc))
+        tb = traceback.format_exc()
+        logger.exception(
+            "stage_failed run_id=%s stage=%s retry=%d",
+            stage.run_id, stage.stage_name, stage.retry_count,
+        )
+        error_detail = f"{type(exc).__name__}: {exc}\n\n{tb}"
+        retry_stage(session, stage, error_detail)
