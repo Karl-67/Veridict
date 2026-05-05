@@ -127,7 +127,9 @@ def advance_stage(session: Session, stage: StageExecutionRecord, structured_outp
     stage.finished_at = datetime.utcnow()
     stage.structured_output = structured_output
     if stage.started_at:
-        duration = (stage.finished_at - stage.started_at).total_seconds()
+        finished = stage.finished_at.replace(tzinfo=None)
+        started = stage.started_at.replace(tzinfo=None)
+        duration = (finished - started).total_seconds()
         stage_duration_seconds.labels(stage=stage.stage_name).observe(duration)
     append_run_event(session, stage.run_id, "stage_completed", {"stage_name": stage.stage_name})
     if stage.stage_name == "awaiting_human_review":
