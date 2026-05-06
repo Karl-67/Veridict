@@ -37,9 +37,10 @@ pkill -f llama-server 2>/dev/null || true
 sleep 2
 
 echo "[start_models] launching all three servers in parallel"
-nohup "$LLAMA" --model "$HARVEY" --port 8000 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_server.log 2>&1 &
-nohup "$LLAMA" --model "$KIRA"   --port 8002 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/kira_server.log 2>&1 &
-nohup "$LLAMA" --model "$HARVEY" --port 8080 --host 0.0.0.0 --ctx-size 16384 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_secondary_server.log 2>&1 &
+# All servers use 32768 ctx — prompts can exceed 9k tokens and output needs the remaining headroom.
+nohup "$LLAMA" --model "$HARVEY" --port 8000 --host 0.0.0.0 --ctx-size 32768 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_server.log 2>&1 &
+nohup "$LLAMA" --model "$KIRA"   --port 8002 --host 0.0.0.0 --ctx-size 32768 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/kira_server.log 2>&1 &
+nohup "$LLAMA" --model "$HARVEY" --port 8080 --host 0.0.0.0 --ctx-size 32768 --n-predict -1 --chat-template-file "$NO_THINK" > /workspace/harvey_secondary_server.log 2>&1 &
 
 echo "[start_models] waiting for all three in parallel..."
 wait_ready 8000 "Harvey primary" &
