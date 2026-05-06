@@ -394,6 +394,12 @@ def _repair_json(cleaned: str, raw_text: str, first_exc: Exception) -> dict:
     """Multi-strategy JSON repair for malformed model output."""
     import re as _re
 
+    # Pre-process: remove rogue bare-integer tokens that the model emits inside arrays.
+    # Seen pattern: }\n0\n  ] — a standalone 0 between a closing } and the array end.
+    cleaned = _re.sub(r'\}\s*\d+\s*(?=[,\]\}])', '}', cleaned)
+    # Also strip bare integers that appear as standalone array elements after a comma.
+    cleaned = _re.sub(r',\s*\d+\s*(?=[,\]])', '', cleaned)
+
     # Strategy 1: json_repair in string mode — more reliable than return_objects=True
     # because it always returns a string we can inspect before loading.
     try:
@@ -444,6 +450,32 @@ def _repair_json(cleaned: str, raw_text: str, first_exc: Exception) -> dict:
             return {"findings": valid}
     except Exception:
         pass
+
+    # Strategy 4: panel-reviewer reconstruction for finding_id/concern schema.
+    # KiraPanelReviewer outputs {decision, feedback, finding_concerns:[{finding_id,concern}]}.
+    # When array elements are missing { } wrappers, regex-extract pairs directly.
+    if '"finding_id"' in raw_text:
+        try:
+            decision_m = _re.search(r'"decision"\s*:\s*"([^"]*)"', cleaned)
+            feedback_m = _re.search(r'"feedback"\s*:\s*"(.*?)"(?=\s*[,}])', cleaned, _re.DOTALL)
+            pairs = _re.findall(
+                r'"finding_id"\s*:\s*"([^"]*)"\s*,\s*"concern"\s*:\s*"([^"]*)"',
+                cleaned, _re.DOTALL,
+            )
+            if decision_m and pairs:
+                concerns = [{"finding_id": fid, "concern": concern} for fid, concern in pairs]
+                result = {
+                    "decision": decision_m.group(1),
+                    "feedback": feedback_m.group(1).strip() if feedback_m else "",
+                    "finding_concerns": concerns,
+                }
+                logger.warning(
+                    "Strategy 4 reconstructed panel decision (%s) with %d finding_concerns",
+                    result["decision"], len(concerns),
+                )
+                return result
+        except Exception:
+            pass
 
     # All strategies failed — log head and tail for diagnosis.
     head = raw_text[:400].replace("\n", "\\n")

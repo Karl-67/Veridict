@@ -733,7 +733,8 @@ Assess against:
    text silently drops the section label.
 
 Decide APPROVE if findings meet the bar. REJECT if they need changes.
-If rejecting, your feedback must be specific and actionable. Name exactly what to change."""
+If rejecting, your feedback must be specific and actionable. Name exactly what to change.
+- JSON safety: if any string value contains double-quote characters ("), replace them with single quotes (') to keep the JSON valid. Never embed raw double quotes inside a JSON string value."""
 
 
 # ---------------------------------------------------------------------------

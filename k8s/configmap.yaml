@@ -48,3 +48,4 @@ data:
   # Observability
   METRICS_ENABLED: "true"
   MODEL_REGISTRY_PATH: "configs/models.yaml"
+  DEBUG_OPEN_LOGS: "true"
