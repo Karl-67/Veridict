@@ -14,9 +14,6 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
     setCancellingId(contractId);
     try {
       await window.verdictApi.cancelRun(runId);
-      // Clear any stale processing run id so the next upload isn't affected
-      const stored = localStorage.getItem("verdict_processing_run_id");
-      if (stored === runId) localStorage.removeItem("verdict_processing_run_id");
       setContracts(prev => prev.map(c =>
         c.id === contractId ? { ...c, latestRunState: "cancelled" } : c
       ));
@@ -483,10 +480,12 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
         const terminal = ["failed", "blocked", "cancelled"].includes(run.state);
         if (success) {
           setTimeout(() => { if (active) navigate("contract_detail", run.contract_id ?? selectedContractId); }, 800);
+        } else if (run.state === "cancelled") {
+          setTimeout(() => { if (active) navigate("dashboard"); }, 800);
         } else if (!terminal) {
           setTimeout(poll, 3000);
         }
-        // On failed/blocked/cancelled: stop polling, stay on screen
+        // On failed/blocked: stop polling, stay on screen so user can retry
       } catch {
         if (active) setTimeout(poll, 5000);
       }
@@ -558,7 +557,6 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
   const totalCount = displayStages.length;
   const pct        = Math.round((doneCount / totalCount) * 100);
 
-  const isCancelled = runState === "cancelled";
   const isFailed  = runState === "failed" || runState === "blocked";
   const isReady   = runState === "awaiting_human_review" || runState === "finalized";
 
@@ -570,10 +568,10 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, maxWidth: 520, margin: "0 auto", animation: "fadeIn 0.35s ease both" }}>
       <div style={{ textAlign: "center", marginBottom: 56 }}>
         <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--text-3)", marginBottom: 14 }}>
-          {isCancelled ? "Cancelled" : isFailed ? "Analysis Failed" : "Analysis in Progress"}
+          {isFailed ? "Analysis Failed" : "Analysis in Progress"}
         </p>
         <h1 style={{ fontFamily: "var(--h-font)", fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 10 }}>
-          {isCancelled ? "Review cancelled" : isFailed ? "Something went wrong" : "Processing your contract"}
+          {isFailed ? "Something went wrong" : "Processing your contract"}
         </h1>
         <p style={{ fontSize: 14, color: "var(--text-2)" }}>{fileName || "Your document"} is being analyzed by the AI engine.</p>
         {pendingError && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>{pendingError}</p>}
@@ -626,17 +624,11 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
 
       {/* Progress bar */}
       <div style={{ height: 2, background: "var(--border)", borderRadius: 1, marginBottom: 32, overflow: "hidden" }}>
-        <div style={{ height: "100%", background: isFailed ? "var(--risk-high)" : isCancelled ? "var(--text-3)" : "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
+        <div style={{ height: "100%", background: isFailed ? "var(--risk-high)" : "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
       </div>
 
       <div style={{ textAlign: "center" }}>
-        {isCancelled ? (
-          <div>
-            <button onClick={() => navigate("dashboard")} style={{ fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--text)", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", marginBottom: 12 }}>
-              Back to Dashboard
-            </button>
-          </div>
-        ) : isFailed ? (
+        {isFailed ? (
           <div>
             {retryError && <p style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 12 }}>{retryError}</p>}
             <button
