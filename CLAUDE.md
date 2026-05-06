@@ -56,12 +56,12 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **Namespace:** `verdict`
 
 **LLM inference:** RunPod via llama.cpp + GGUF models (NOT vLLM)
-- Pod ID: `js16ghc1rvuc2u`
-- SSH (direct TCP): `ssh root@213.173.102.5 -p 16179 -i ~/.ssh/id_ed25519` — key passphrase: `student1`
-- SSH (RunPod gateway): `ssh js16ghc1rvuc2u-64410f17@ssh.runpod.io -i ~/.ssh/id_ed25519`
-- Harvey endpoint: `https://js16ghc1rvuc2u-8000.proxy.runpod.net/v1`
-- Kira endpoint: `https://js16ghc1rvuc2u-8001.proxy.runpod.net/v1` (nginx 8001→8002)
-- Harvey secondary: `https://js16ghc1rvuc2u-8080.proxy.runpod.net/v1`
+- Pod ID: `8lq123pws2o7do`
+- SSH (direct TCP): `ssh root@213.173.105.5 -p 30196 -i ~/.ssh/id_ed25519` — key passphrase: `student1`
+- SSH (RunPod gateway): `ssh 8lq123pws2o7do-64410ec3@ssh.runpod.io -i ~/.ssh/id_ed25519`
+- Harvey endpoint: `https://8lq123pws2o7do-8000.proxy.runpod.net/v1`
+- Kira endpoint: `https://8lq123pws2o7do-8001.proxy.runpod.net/v1` (nginx 8001→8002)
+- Harvey secondary: `https://8lq123pws2o7do-8080.proxy.runpod.net/v1`
 - Models: `/workspace/harvey_q4km.gguf` (Harvey), `/workspace/kira_q4km.gguf` (Kira) — Q4_K_M GGUF
 - llama.cpp binary: `/workspace/llama.cpp/build/bin/llama-server`
 - Kira training data still at: `/workspace/kira_gemma4_training/`
@@ -69,7 +69,7 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **To start all servers on RunPod:**
 ```bash
 # SSH in via gateway (direct TCP may refuse banner exchange)
-ssh js16ghc1rvuc2u-64410f17@ssh.runpod.io -i ~/.ssh/id_ed25519
+ssh 8lq123pws2o7do-64410ec3@ssh.runpod.io -i ~/.ssh/id_ed25519
 
 # Run startup script (starts Harvey primary, waits, then Kira, then Harvey secondary)
 nohup bash /workspace/start_models.sh > /workspace/startup.log 2>&1 &
@@ -80,7 +80,7 @@ tail -f /workspace/harvey_server.log
 tail -f /workspace/kira_server.log
 
 # Test
-curl https://js16ghc1rvuc2u-8000.proxy.runpod.net/v1/models
+curl https://8lq123pws2o7do-8000.proxy.runpod.net/v1/models
 ```
 
 **RunPod environment notes:**

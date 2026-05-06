@@ -353,6 +353,9 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
         except Exception:
             parsed = None
         if not isinstance(parsed, dict):
+            # Log the first 500 chars of the raw response so we can diagnose what the model returned.
+            preview = raw_text[:500].replace("\n", "\\n")
+            logger.error("Model returned non-JSON response (len=%d): %s", len(raw_text), preview)
             raise InvalidSchemaOutputError(
                 f"Model response is not valid JSON and could not be repaired.", raw_response=raw_text
             )

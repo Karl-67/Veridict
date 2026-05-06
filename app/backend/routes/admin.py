@@ -3,14 +3,17 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 from app.backend.db.models import (
     OrgInviteRecord,
     OrganizationRecord,
+    RunRecord,
+    StageExecutionRecord,
     UserRecord,
     WorkspaceMemberRecord,
     WorkspaceRecord,
@@ -109,6 +112,102 @@ def _user_out(u: UserRecord) -> UserOut:
         locked=u.locked_at is not None,
         created_at=u.created_at.isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline diagnostics — accessible by org admins via curl
+# ---------------------------------------------------------------------------
+
+class StageFailureOut(BaseModel):
+    run_id: str
+    stage_name: str
+    status: str
+    retry_count: int
+    max_retries: int
+    failure_reason: str | None
+    worker_id: str | None
+    started_at: str | None
+    finished_at: str | None
+    run_status: str
+
+
+@router.get("/pipeline-failures", response_model=list[StageFailureOut])
+async def get_pipeline_failures(
+    db: DbSession,
+    _admin: Any = Depends(require_org_admin),
+    limit: int = Query(50, ge=1, le=500),
+    include_retrying: bool = Query(True),
+):
+    """Return recent failed (and optionally retrying) stages with their error details.
+
+    curl example:
+        curl -H "Authorization: Bearer <token>" \\
+             https://<host>/api/admin/pipeline-failures?limit=20
+    """
+    statuses = ["failed"]
+    if include_retrying:
+        statuses.append("retrying")
+
+    rows = db.scalars(
+        select(StageExecutionRecord)
+        .join(RunRecord, RunRecord.id == StageExecutionRecord.run_id)
+        .where(StageExecutionRecord.status.in_(statuses))
+        .order_by(desc(StageExecutionRecord.finished_at))
+        .limit(limit)
+    ).all()
+
+    return [
+        StageFailureOut(
+            run_id=r.run_id,
+            stage_name=r.stage_name,
+            status=r.status,
+            retry_count=r.retry_count,
+            max_retries=r.max_retries,
+            failure_reason=r.failure_reason,
+            worker_id=r.worker_id,
+            started_at=r.started_at.isoformat() if r.started_at else None,
+            finished_at=r.finished_at.isoformat() if r.finished_at else None,
+            run_status=r.run.status,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/pipeline-failures/unauthenticated", response_model=list[StageFailureOut])
+async def get_pipeline_failures_open(
+    db: DbSession,
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Same as /pipeline-failures but requires no auth — only available when DEBUG_OPEN_LOGS=true env var is set.
+
+    Intended for development and SSH-less debugging sessions.
+    """
+    import os
+    if os.getenv("DEBUG_OPEN_LOGS", "").lower() not in ("true", "1", "yes"):
+        raise HTTPException(status_code=403, detail="Set DEBUG_OPEN_LOGS=true to enable unauthenticated log access")
+
+    rows = db.scalars(
+        select(StageExecutionRecord)
+        .where(StageExecutionRecord.status.in_(["failed", "retrying"]))
+        .order_by(desc(StageExecutionRecord.finished_at))
+        .limit(limit)
+    ).all()
+
+    return [
+        StageFailureOut(
+            run_id=r.run_id,
+            stage_name=r.stage_name,
+            status=r.status,
+            retry_count=r.retry_count,
+            max_retries=r.max_retries,
+            failure_reason=r.failure_reason,
+            worker_id=r.worker_id,
+            started_at=r.started_at.isoformat() if r.started_at else None,
+            finished_at=r.finished_at.isoformat() if r.finished_at else None,
+            run_status=r.run.status if hasattr(r, "run") and r.run else "unknown",
+        )
+        for r in rows
+    ]
 
 
 def _clean_workspace_name(name: str) -> str:
