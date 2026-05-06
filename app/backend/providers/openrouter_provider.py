@@ -266,7 +266,29 @@ class OpenRouterProvider(StructuredLLMProvider):
                 self.on_response_captured(raw_request, raw_response)
                 raise classified from exc
 
-            parsed = _parse_json_response(raw_text)
+            try:
+                parsed = _parse_json_response(raw_text)
+            except InvalidSchemaOutputError as parse_exc:
+                # Bad JSON from the model is transient — a retry almost always returns
+                # a valid response. Treat it like a transient error so the retry loop
+                # runs again rather than immediately failing the stage.
+                latency = time.monotonic() - t_start
+                raw_response = RawProviderResponse(
+                    raw_text=raw_text,
+                    parsed_output=None,
+                    finish_reason=finish_reason,
+                    usage=usage,
+                    latency_seconds=latency,
+                )
+                self.on_response_captured(raw_request, raw_response)
+                if attempt < self._max_retries:
+                    logger.warning(
+                        "Invalid JSON from model (attempt %d/%d), retrying — %s",
+                        attempt + 1, self._max_retries + 1, parse_exc,
+                    )
+                    last_exc = parse_exc
+                    continue
+                raise
             raw_response = RawProviderResponse(
                 raw_text=raw_text,
                 parsed_output=parsed,
