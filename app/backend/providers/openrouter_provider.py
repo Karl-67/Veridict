@@ -381,29 +381,80 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
         raise InvalidSchemaOutputError("Model returned an empty response.", raw_response=raw_text)
     try:
         parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # Try json-repair for truncated/malformed model output (common with small local models)
-        try:
-            from json_repair import repair_json
-            repaired = repair_json(cleaned, return_objects=True)
-            if isinstance(repaired, dict):
-                logger.debug("json_repair recovered malformed model output")
-                return repaired
-            parsed = repaired
-        except Exception:
-            parsed = None
-        if not isinstance(parsed, dict):
-            # Log the first 500 chars of the raw response so we can diagnose what the model returned.
-            preview = raw_text[:500].replace("\n", "\\n")
-            logger.error("Model returned non-JSON response (len=%d): %s", len(raw_text), preview)
-            raise InvalidSchemaOutputError(
-                f"Model response is not valid JSON and could not be repaired.", raw_response=raw_text
-            )
+    except json.JSONDecodeError as first_exc:
+        parsed = _repair_json(cleaned, raw_text, first_exc)
     if not isinstance(parsed, dict):
         raise InvalidSchemaOutputError(
             f"Expected a JSON object, got {type(parsed).__name__}.", raw_response=raw_text
         )
     return parsed
+
+
+def _repair_json(cleaned: str, raw_text: str, first_exc: Exception) -> dict:
+    """Multi-strategy JSON repair for malformed model output."""
+    import re as _re
+
+    # Strategy 1: json_repair in string mode — more reliable than return_objects=True
+    # because it always returns a string we can inspect before loading.
+    try:
+        from json_repair import repair_json
+        repaired_str = repair_json(cleaned)
+        if repaired_str and repaired_str.strip() not in ("", "null", "[]", "{}"):
+            try:
+                repaired = json.loads(repaired_str)
+                if isinstance(repaired, dict):
+                    logger.info("json_repair (string mode) recovered malformed model output")
+                    return repaired
+            except json.JSONDecodeError:
+                pass
+    except Exception as repair_exc:
+        logger.debug("json_repair raised: %s", repair_exc)
+
+    # Strategy 2: strip unescaped quotes inside string values.
+    # Kira's fine-tune sometimes writes  "key": "value with "quotes" inside"
+    # which breaks standard parsers. Replace inner double-quotes with single quotes.
+    try:
+        def _fix_inner_quotes(m: "_re.Match") -> str:
+            key, val = m.group(1), m.group(2)
+            # Replace any unescaped " inside the value with '
+            fixed = _re.sub(r'(?<!\\)"', "'", val)
+            return f'"{key}": "{fixed}"'
+        fixed = _re.sub(r'"(\w+)":\s*"(.*?)"(?=\s*[,}\]])', _fix_inner_quotes, cleaned, flags=_re.DOTALL)
+        if fixed != cleaned:
+            repaired = json.loads(fixed)
+            if isinstance(repaired, dict):
+                logger.info("Inner-quote sanitizer recovered malformed model output")
+                return repaired
+    except Exception:
+        pass
+
+    # Strategy 3: extract the findings array via regex and rebuild the envelope.
+    # Handles cases where the outer structure is broken but individual objects are intact.
+    try:
+        obj_pattern = _re.compile(r'\{[^{}]*"clause_uid"\s*:\s*"[^"]*"[^{}]*\}', _re.DOTALL)
+        objects = obj_pattern.findall(cleaned)
+        valid = []
+        for obj in objects:
+            try:
+                valid.append(json.loads(obj))
+            except json.JSONDecodeError:
+                pass
+        if valid:
+            logger.warning("Regex extractor rescued %d/%d findings from malformed JSON", len(valid), len(objects))
+            return {"findings": valid}
+    except Exception:
+        pass
+
+    # All strategies failed — log head and tail for diagnosis.
+    head = raw_text[:400].replace("\n", "\\n")
+    tail = raw_text[-200:].replace("\n", "\\n")
+    logger.error(
+        "All JSON repair strategies failed (len=%d, err=%s)\n  HEAD: %s\n  TAIL: %s",
+        len(raw_text), first_exc, head, tail,
+    )
+    raise InvalidSchemaOutputError(
+        "Model response is not valid JSON and could not be repaired.", raw_response=raw_text
+    )
 
 
 def build_openrouter_provider(
