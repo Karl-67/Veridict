@@ -18,7 +18,7 @@ while true; do
       --host 0.0.0.0 \
       --ctx-size 32768 \
       --n-predict -1 \
-      --parallel 2 \
+      --parallel 1 \
       --chat-template-file "$NO_THINK" \
       >> /workspace/kira_server.log 2>&1 &
     echo "[watchdog $(date '+%Y-%m-%d %H:%M:%S')] Kira restarted (pid $!), waiting 60s for load"
