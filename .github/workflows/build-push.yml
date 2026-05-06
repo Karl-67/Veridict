@@ -251,31 +251,16 @@ jobs:
       - name: Smoke test — API health check
         id: smoke
         run: |
-          # Wait for any terminating pods to fully disappear before port-forwarding
-          echo "Waiting for terminating api pods to clear..."
-          for i in $(seq 1 20); do
-            TERM=$(kubectl get pods -n verdict -l app=verdict-api --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.deletionTimestamp}' 2>/dev/null | tr ' ' '\n' | grep -c . || true)
-            [ "$TERM" = "0" ] && break
-            echo "  $TERM pod(s) still terminating, waiting 3s..."
-            sleep 3
-          done
-
+          kubectl port-forward service/verdict-api 8080:8000 -n verdict &
+          PF_PID=$!
           STATUS="000"
-          PF_PID=""
-          for i in $(seq 1 15); do
-            # (Re)start port-forward if it isn't running
-            if [ -z "$PF_PID" ] || ! kill -0 "$PF_PID" 2>/dev/null; then
-              kill "$PF_PID" 2>/dev/null || true
-              kubectl port-forward service/verdict-api 8080:8000 -n verdict &
-              PF_PID=$!
-              sleep 3
-            fi
+          for i in $(seq 1 12); do
+            sleep 5
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
             echo "Attempt $i: HTTP $STATUS"
             [ "$STATUS" = "200" ] && break
-            sleep 5
           done
-          kill "$PF_PID" 2>/dev/null || true
+          kill $PF_PID 2>/dev/null || true
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP $STATUS from /api/health"
           [ "$STATUS" = "200" ]
