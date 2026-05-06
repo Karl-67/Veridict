@@ -658,6 +658,9 @@ Mandatory rules:
 - Set uncertainty=true only when missing context prevents confident classification or
   drafting. Do not use uncertainty as a hedge.
 - Set unresolved_by_consensus=false.
+- JSON safety: if any string value contains double-quote characters ("), replace them
+  with single quotes (') to keep the JSON valid. Never embed raw double quotes inside
+  a JSON string value.
 
 Severity:
 - critical: existential exposure — unlimited liability, loss of core IP/data rights,
@@ -701,7 +704,8 @@ MANDATORY:
 - Cite at least one verbatim quote from the clause in contract_evidence per finding.
 - No RAG chunk_ids or external corpus references.
 - Set unresolved_by_consensus=false.
-- Return strict JSON only."""
+- Return strict JSON only.
+- JSON safety: replace any double-quote characters (") inside string values with single quotes (')."""
 
 _KIRA_PANEL_REVIEWER = """\
 [KIRA PANEL REVIEWER]
