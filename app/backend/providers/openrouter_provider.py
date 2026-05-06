@@ -314,6 +314,13 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
         cleaned = _re.sub(r"<thought>.*?</thought>", "", cleaned, flags=_re.DOTALL).strip()
     if cleaned.startswith("<channel|>"):
         cleaned = cleaned[len("<channel|>"):].strip()
+    # If response still starts with "<" after stripping, Harvey may have emitted an unclosed
+    # <thought> block or other tag. Try to rescue by finding where the JSON object starts.
+    if cleaned.startswith("<") and not _re.match(r"<(html|!DOCTYPE|head|body)", cleaned, _re.I):
+        json_start = next((i for i, c in enumerate(cleaned) if c in "{["), -1)
+        if json_start != -1:
+            logger.warning("Stripping unexpected leading tokens before JSON (offset %d): %.120s", json_start, cleaned[:json_start])
+            cleaned = cleaned[json_start:].strip()
     # Detect an HTML error page (e.g. nginx 405 when a POST hits the wrong backend).
     # Raise immediately with a human-readable message instead of storing raw HTML as failure text.
     if cleaned.startswith("<"):
@@ -326,10 +333,12 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
             raise TransientProviderError(
                 f"Model server temporarily unavailable ({title}) — will retry.",
             )
-        raise NonRetryableProviderError(
-            f"Model endpoint returned an HTML error page ({title}). "
-            "Check that VLLM_BASE_URL / KIRA_MODEL_URL point to the OpenAI-compatible "
-            "/v1 API base, not a browser UI or root URL.",
+        # Unknown < prefix — treat as transient so the retry loop tries again rather than
+        # permanently failing the stage. Log the raw content for diagnosis.
+        preview = cleaned[:300].replace("\n", "\\n")
+        logger.error("Unexpected non-JSON response starting with '<' (len=%d): %s", len(cleaned), preview)
+        raise TransientProviderError(
+            f"Model returned unexpected non-JSON content starting with '<' ({title}) — will retry.",
         )
     if cleaned.startswith("```"):
         first_newline = cleaned.find("\n")
