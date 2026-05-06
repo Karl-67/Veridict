@@ -31,6 +31,11 @@ wait_ready() {
 # Route port 8001 → Kira on 8002 (RunPod nginx.conf defaults 8001 → 8000)
 rm -f /etc/nginx/conf.d/kira_proxy.conf
 sed -i "/listen 8001/,/proxy_pass/ s|proxy_pass http://localhost:[0-9]*;|proxy_pass http://localhost:8002;|" /etc/nginx/nginx.conf
+# Extend nginx timeouts for port 8001 so Kira isn't killed by the 60s RunPod proxy timeout.
+# proxy_ignore_client_abort keeps the backend connection alive even when the upstream proxy
+# drops the frontend connection after its own 60s timeout.
+grep -q "proxy_read_timeout" /etc/nginx/nginx.conf || \
+  sed -i "s|proxy_pass http://localhost:8002;|proxy_pass http://localhost:8002;\n        proxy_read_timeout 600s;\n        proxy_send_timeout 600s;\n        proxy_ignore_client_abort on;|" /etc/nginx/nginx.conf
 nginx -t && (nginx -s reload 2>/dev/null || nginx)
 
 pkill -f llama-server 2>/dev/null || true
