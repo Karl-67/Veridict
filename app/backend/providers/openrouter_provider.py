@@ -307,13 +307,22 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
     # Strip Gemma-4 built-in thinking block (<think>...</think>).
     if "<think>" in cleaned:
         cleaned = _re.sub(r"<think>.*?</think>", "", cleaned, flags=_re.DOTALL).strip()
-    # Strip Harvey fine-tune reasoning tokens (<thought>...</thought> and <channel|> prefix).
-    # Harvey was trained to prepend <thought>...</thought> before its answer and then
-    # emit <channel|> as an answer-start marker — neither belongs in the JSON payload.
+    # Strip Harvey fine-tune reasoning tokens.
+    # Harvey emits several variants before the JSON answer:
+    #   <thought>...</thought>          — closed reasoning block
+    #   <|channel>_thought\n<channel|>  — tokeniser artifact + answer marker
+    #   <|channel>thought\n<channel|>   — same without underscore
+    #   <channel|>                      — bare answer-start marker
+    # Strategy: strip everything up to and including the last <channel|> occurrence,
+    # then fall back to <thought>...</thought> removal for any remaining blocks.
+    if "<channel|>" in cleaned:
+        last_marker = cleaned.rfind("<channel|>")
+        cleaned = cleaned[last_marker + len("<channel|>"):].strip()
     if "<thought>" in cleaned:
         cleaned = _re.sub(r"<thought>.*?</thought>", "", cleaned, flags=_re.DOTALL).strip()
-    if cleaned.startswith("<channel|>"):
-        cleaned = cleaned[len("<channel|>"):].strip()
+    # Strip any residual <|channel>... tokens (Harvey tokeniser artifacts).
+    if cleaned.startswith("<|"):
+        cleaned = _re.sub(r"^<\|[^>]*>\s*", "", cleaned).strip()
     # If response still starts with "<" after stripping, Harvey may have emitted an unclosed
     # <thought> block or other tag. Try to rescue by finding where the JSON object starts.
     if cleaned.startswith("<") and not _re.match(r"<(html|!DOCTYPE|head|body)", cleaned, _re.I):
