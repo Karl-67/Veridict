@@ -46,9 +46,12 @@ Requires Ollama running locally.
 
 ---
 
-## GCP Production Deployment (updated 2026-05-03)
+## GCP Production Deployment (updated 2026-05-06)
 
 Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inference moved off-cluster to RunPod.
+
+**Web app (production):** `http://136.110.220.144`
+**Pipeline failures log:** `http://136.110.220.144/api/admin/pipeline-failures/unauthenticated` (requires `DEBUG_OPEN_LOGS=true` in configmap)
 
 **GCP project:** `verdict-ai-prod`  
 **Registry:** `us-central1-docker.pkg.dev/verdict-ai-prod/verdict/`  
