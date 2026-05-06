@@ -132,7 +132,7 @@ def advance_stage(session: Session, stage: StageExecutionRecord, structured_outp
         duration = (finished - started).total_seconds()
         stage_duration_seconds.labels(stage=stage.stage_name).observe(duration)
     append_run_event(session, stage.run_id, "stage_completed", {"stage_name": stage.stage_name})
-    if stage.stage_name == "awaiting_human_review" and stage.run.status != "cancelled":
+    if stage.stage_name == "awaiting_human_review":
         stage.run.status = "awaiting_human_review"
         append_run_event(session, stage.run_id, "awaiting_human_review", {"stage_name": stage.stage_name})
     session.commit()
@@ -156,8 +156,7 @@ def mark_stage_failed(session: Session, stage: StageExecutionRecord, error_detai
     stage.status = "failed"
     stage.failure_reason = error_detail
     stage.finished_at = datetime.utcnow()
-    if stage.run.status != "cancelled":
-        stage.run.status = "failed"
+    stage.run.status = "failed"
     runs_total.labels(status="failed").inc()
     append_run_event(session, stage.run_id, "stage_failed", {"stage_name": stage.stage_name, "error": error_detail})
     _write_failure_log(stage.run_id, stage.stage_name, error_detail, stage.retry_count)

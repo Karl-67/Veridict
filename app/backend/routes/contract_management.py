@@ -71,7 +71,6 @@ class ContractSummary(BaseModel):
     latest_label: str | None
     latest_risk: str | None
     latest_run_state: str | None
-    latest_run_id: str | None
     version_count: int
     created_at: str
     updated_at: str
@@ -171,7 +170,6 @@ async def _build_summary(db: DbSession, c: ContractRecord) -> ContractSummary:
         latest_label=latest.label if latest else None,
         latest_risk=risk,
         latest_run_state=latest_run.status if latest_run else None,
-        latest_run_id=latest_run.id if latest_run else None,
         version_count=len(versions),
         created_at=c.created_at.isoformat(),
         updated_at=c.updated_at.isoformat(),
@@ -209,7 +207,6 @@ async def create_contract(
         latest_label=None,
         latest_risk=None,
         latest_run_state=None,
-        latest_run_id=None,
         version_count=0,
         created_at=contract.created_at.isoformat(),
         updated_at=contract.updated_at.isoformat(),

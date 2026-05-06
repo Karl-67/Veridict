@@ -98,7 +98,6 @@ const TERMINAL_STATES = new Set([
   "failed",
   "awaiting_human_review",
   "under_review",
-  "cancelled",
 ]);
 
 /**

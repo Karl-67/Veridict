@@ -61,7 +61,6 @@ RunState = Literal[
     "rejected",
     "blocked",
     "failed",
-    "cancelled",
 ]
 
 EventType = Literal[

@@ -98,7 +98,6 @@ function stateLabel(state) {
     failed:                 { text: "Failed",          color: "var(--risk-high)" },
     blocked:                { text: "Blocked",         color: "var(--risk-high)" },
     rejected:               { text: "Rejected",        color: "var(--risk-high)" },
-    cancelled:              { text: "Cancelled",       color: "var(--text-3)" },
   };
   return map[state] ?? { text: state, color: "var(--text-2)" };
 }

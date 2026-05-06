@@ -6,23 +6,6 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
   const [contracts, setContracts] = React.useState([]);
   const [workspaces, setWorkspaces] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const [cancellingId, setCancellingId] = React.useState(null);
-
-  async function handleCancelRun(e, contractId, runId) {
-    e.stopPropagation();
-    if (!runId || cancellingId) return;
-    setCancellingId(contractId);
-    try {
-      await window.verdictApi.cancelRun(runId);
-      setContracts(prev => prev.map(c =>
-        c.id === contractId ? { ...c, latestRunState: "cancelled" } : c
-      ));
-    } catch {
-      // ignore — user can retry
-    } finally {
-      setCancellingId(null);
-    }
-  }
 
   React.useEffect(() => {
     let active = true;
@@ -190,22 +173,8 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
             <div style={{ display: "flex", alignItems: "center" }}>
               <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>{timeAgo(c.updatedAt)}</span>
             </div>
-            {/* Cancel or Arrow */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
-              {isProc && c.latestRunId ? (
-                <button
-                  onClick={e => handleCancelRun(e, c.id, c.latestRunId)}
-                  disabled={cancellingId === c.id}
-                  title="Cancel processing"
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: cancellingId === c.id ? "not-allowed" : "pointer", color: "var(--risk-high)", opacity: cancellingId === c.id ? 0.4 : 1, transition: "opacity 0.15s, background 0.12s", padding: 0 }}
-                  onMouseEnter={e => { if (cancellingId !== c.id) e.currentTarget.style.background = "rgba(200,50,50,0.08)"; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "none"; }}>
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
-                </button>
-              ) : (
-                <span style={{ color: "var(--text-3)" }}><IconArrowRight /></span>
-              )}
-            </div>
+            {/* Arrow */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", color: "var(--text-3)" }}><IconArrowRight /></div>
           </div>
         );
       })}
