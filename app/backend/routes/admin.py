@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import desc, select
+from sqlalchemy.orm import contains_eager
 
 from app.backend.db.models import (
     OrgInviteRecord,
@@ -148,13 +149,15 @@ async def get_pipeline_failures(
     if include_retrying:
         statuses.append("retrying")
 
-    rows = db.scalars(
+    result = await db.execute(
         select(StageExecutionRecord)
         .join(RunRecord, RunRecord.id == StageExecutionRecord.run_id)
+        .options(contains_eager(StageExecutionRecord.run))
         .where(StageExecutionRecord.status.in_(statuses))
         .order_by(desc(StageExecutionRecord.finished_at))
         .limit(limit)
-    ).all()
+    )
+    rows = result.scalars().all()
 
     return [
         StageFailureOut(
@@ -186,13 +189,15 @@ async def get_pipeline_failures_open(
     if os.getenv("DEBUG_OPEN_LOGS", "").lower() not in ("true", "1", "yes"):
         raise HTTPException(status_code=403, detail="Set DEBUG_OPEN_LOGS=true to enable unauthenticated log access")
 
-    rows = db.scalars(
+    result = await db.execute(
         select(StageExecutionRecord)
         .join(RunRecord, RunRecord.id == StageExecutionRecord.run_id)
+        .options(contains_eager(StageExecutionRecord.run))
         .where(StageExecutionRecord.status.in_(["failed", "retrying"]))
         .order_by(desc(StageExecutionRecord.finished_at))
         .limit(limit)
-    ).all()
+    )
+    rows = result.scalars().all()
 
     return [
         StageFailureOut(
