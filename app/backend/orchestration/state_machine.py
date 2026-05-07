@@ -199,14 +199,14 @@ def _provider(settings: Settings):
     )
 
 
-def _kira_provider(settings: Settings):
+def _kira_provider(settings: Settings, max_output_tokens: int = 24576):
     """Returns a provider for Kira. Uses the fine-tuned cloud endpoint when configured."""
     if settings.kira_model_url:
         from app.backend.providers.openrouter_provider import build_vllm_provider
         return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
-            max_output_tokens=24576,
+            max_output_tokens=max_output_tokens,
         )
     return _provider(settings)
 
@@ -653,7 +653,7 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 findings=final_findings,
                 raw_response_id=None,
             )
-            validator = KiraValidatorAgent(_kira_provider(settings))
+            validator = KiraValidatorAgent(_kira_provider(settings, max_output_tokens=2048))
             validated = asyncio.run(
                 validator.validate(
                     [aggregate_output],
