@@ -612,6 +612,7 @@ function App() {
           if (!selectedContractId || !file) return;
           setFileName(file.name);
           setPendingError(null);
+          setProcessingRunId("__pending__");
           navigate("processing");
           try {
             const result = await window.verdictApi.addContractVersion(selectedContractId, file);
@@ -625,6 +626,7 @@ function App() {
         {screen === "new_contract"     && <NewContractScreen {...screenProps} onSubmit={async (name, file) => {
           setFileName(file?.name ?? name + ".pdf");
           setPendingError(null);
+          setProcessingRunId("__pending__");
           navigate("processing");
           try {
             const workspaces = await window.verdictApi.listWorkspaces();

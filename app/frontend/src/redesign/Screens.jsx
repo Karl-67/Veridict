@@ -465,7 +465,7 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
   const [cancelling, setCancelling]     = React.useState(false);
 
   React.useEffect(() => {
-    if (!processingRunId) return;
+    if (!processingRunId || processingRunId === "__pending__") return;
     let active = true;
 
     async function poll() {

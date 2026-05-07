@@ -240,6 +240,31 @@ class OpenRouterProvider(StructuredLLMProvider):
                 raise
             except Exception as exc:
                 latency = time.monotonic() - t_start
+                # llama-server grammar validation occasionally returns HTTP 500 but
+                # embeds the fully-generated model output in the error message body.
+                # Detect and rescue this case instead of wasting a retry.
+                if isinstance(exc, APIStatusError) and exc.status_code == 500:
+                    body = exc.body if isinstance(exc.body, dict) else {}
+                    err_msg = body.get("error", {}).get("message", "")
+                    if "Failed to parse input at pos" in err_msg and ": {" in err_msg:
+                        extracted = err_msg[err_msg.index(": {") + 2:]
+                        try:
+                            parsed = _parse_json_response(extracted)
+                            logger.warning(
+                                "Rescued llama-server grammar-500: extracted valid JSON from error body "
+                                "(model=%s attempt=%d)", self._model_name, attempt + 1,
+                            )
+                            raw_response = RawProviderResponse(
+                                raw_text=extracted,
+                                parsed_output=parsed,
+                                finish_reason="stop",
+                                usage=None,
+                                latency_seconds=latency,
+                            )
+                            self.on_response_captured(raw_request, raw_response)
+                            return parsed
+                        except Exception:
+                            pass  # fall through to normal error handling
                 classified = _classify_openai_error(exc)
                 last_exc = classified
                 raw_response = RawProviderResponse(
