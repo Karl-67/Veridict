@@ -59,12 +59,12 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **Namespace:** `verdict`
 
 **LLM inference:** RunPod via llama.cpp + GGUF models (NOT vLLM)
-- Pod ID: `p7us4r4opnajd3`
-- SSH (direct TCP): `ssh root@213.173.102.5 -p 15955 -i ~/.ssh/id_ed25519` — key passphrase: `student1`
-- SSH (RunPod gateway): `ssh p7us4r4opnajd3-64410f17@ssh.runpod.io -i ~/.ssh/id_ed25519`
-- Harvey endpoint: `https://p7us4r4opnajd3-8000.proxy.runpod.net/v1`
-- Kira endpoint: `https://p7us4r4opnajd3-8001.proxy.runpod.net/v1` (nginx 8001→8002 proxy; Kira llama-server on :8002)
-- Harvey secondary: `https://p7us4r4opnajd3-8080.proxy.runpod.net/v1`
+- Pod ID: `adhqos4ehqb4k7`
+- SSH (direct TCP): `ssh root@213.173.105.4 -p 30092 -i ~/.ssh/id_ed25519` — key passphrase: `student1`
+- SSH (RunPod gateway): `ssh adhqos4ehqb4k7-64410eb0@ssh.runpod.io -i ~/.ssh/id_ed25519`
+- Harvey endpoint: `https://adhqos4ehqb4k7-8000.proxy.runpod.net/v1`
+- Kira endpoint: `https://adhqos4ehqb4k7-8001.proxy.runpod.net/v1` (nginx 8001→8002 proxy; Kira llama-server on :8002)
+- Harvey secondary: `https://adhqos4ehqb4k7-8080.proxy.runpod.net/v1`
 - Models: `/workspace/harvey_q4km.gguf` (Harvey), `/workspace/kira_q4km.gguf` (Kira) — Q4_K_M GGUF
 - llama.cpp binary: `/workspace/llama.cpp/build/bin/llama-server`
 - Kira training data still at: `/workspace/kira_gemma4_training/`
@@ -72,7 +72,7 @@ Infrastructure fully migrated from Azure (ACR + AKS) to GCP (GAR + GKE). LLM inf
 **To start all servers on RunPod:**
 ```bash
 # SSH in via gateway (direct TCP may refuse banner exchange)
-ssh p7us4r4opnajd3-64410f17@ssh.runpod.io -i ~/.ssh/id_ed25519
+ssh adhqos4ehqb4k7-64410eb0@ssh.runpod.io -i ~/.ssh/id_ed25519
 
 # Run startup script (starts Harvey primary, waits, then Kira, then Harvey secondary)
 nohup bash /workspace/start_models.sh > /workspace/startup.log 2>&1 &
@@ -83,7 +83,7 @@ tail -f /workspace/harvey_server.log
 tail -f /workspace/kira_server.log
 
 # Test
-curl https://p7us4r4opnajd3-8000.proxy.runpod.net/v1/models
+curl https://adhqos4ehqb4k7-8000.proxy.runpod.net/v1/models
 ```
 
 **RunPod environment notes:**
