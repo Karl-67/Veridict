@@ -226,6 +226,7 @@ function mapContract(c) {
     versionCount: c.version_count,
     latestLabel: c.latest_label ?? "-",
     latestRunState: c.latest_run_state,
+    latestRunId: c.latest_run_id ?? null,
     latestRisk: c.latest_risk,
     updatedAt: c.updated_at,
     workspace: c.workspace_name ?? "Workspace",

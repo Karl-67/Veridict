@@ -188,6 +188,7 @@ async def get_pipeline_failures_open(
 
     rows = db.scalars(
         select(StageExecutionRecord)
+        .join(RunRecord, RunRecord.id == StageExecutionRecord.run_id)
         .where(StageExecutionRecord.status.in_(["failed", "retrying"]))
         .order_by(desc(StageExecutionRecord.finished_at))
         .limit(limit)
@@ -204,7 +205,7 @@ async def get_pipeline_failures_open(
             worker_id=r.worker_id,
             started_at=r.started_at.isoformat() if r.started_at else None,
             finished_at=r.finished_at.isoformat() if r.finished_at else None,
-            run_status=r.run.status if hasattr(r, "run") and r.run else "unknown",
+            run_status=r.run.status,
         )
         for r in rows
     ]

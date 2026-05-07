@@ -28,7 +28,8 @@ export type RunState =
   | "finalized"
   | "rejected"
   | "blocked"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type StageState =
   | "pending"

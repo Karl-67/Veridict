@@ -6,6 +6,23 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
   const [contracts, setContracts] = React.useState([]);
   const [workspaces, setWorkspaces] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  const [cancellingId, setCancellingId] = React.useState(null);
+
+  async function handleCancelRun(e, contractId, runId) {
+    e.stopPropagation();
+    if (!runId || cancellingId) return;
+    setCancellingId(contractId);
+    try {
+      await window.verdictApi.cancelRun(runId);
+      setContracts(prev => prev.map(c =>
+        c.id === contractId ? { ...c, latestRunState: "cancelled" } : c
+      ));
+    } catch {
+      // ignore — user can retry
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   React.useEffect(() => {
     let active = true;
@@ -173,8 +190,22 @@ function DashboardScreen({ navigate, workspaceFilter, onWorkspaceFilterChange, o
             <div style={{ display: "flex", alignItems: "center" }}>
               <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>{timeAgo(c.updatedAt)}</span>
             </div>
-            {/* Arrow */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", color: "var(--text-3)" }}><IconArrowRight /></div>
+            {/* Cancel or Arrow */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+              {isProc && c.latestRunId ? (
+                <button
+                  onClick={e => handleCancelRun(e, c.id, c.latestRunId)}
+                  disabled={cancellingId === c.id}
+                  title="Cancel processing"
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: 4, border: "1px solid var(--border)", background: "none", cursor: cancellingId === c.id ? "not-allowed" : "pointer", color: "var(--risk-high)", opacity: cancellingId === c.id ? 0.4 : 1, transition: "opacity 0.15s, background 0.12s", padding: 0 }}
+                  onMouseEnter={e => { if (cancellingId !== c.id) e.currentTarget.style.background = "rgba(200,50,50,0.08)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = "none"; }}>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+                </button>
+              ) : (
+                <span style={{ color: "var(--text-3)" }}><IconArrowRight /></span>
+              )}
+            </div>
           </div>
         );
       })}
@@ -449,12 +480,10 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
         const terminal = ["failed", "blocked", "cancelled"].includes(run.state);
         if (success) {
           setTimeout(() => { if (active) navigate("contract_detail", run.contract_id ?? selectedContractId); }, 800);
-        } else if (run.state === "cancelled") {
-          setTimeout(() => { if (active) navigate("dashboard"); }, 800);
         } else if (!terminal) {
           setTimeout(poll, 3000);
         }
-        // On failed/blocked: stop polling, stay on screen so user can retry
+        // On failed/blocked/cancelled: stop polling, stay on screen
       } catch {
         if (active) setTimeout(poll, 5000);
       }
@@ -507,7 +536,7 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
     setCancelling(true);
     try {
       await window.verdictApi.cancelRun(processingRunId);
-      navigate("dashboard");
+      setRunState("cancelled");
     } catch {
       setCancelling(false);
     }
@@ -526,6 +555,7 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
   const totalCount = displayStages.length;
   const pct        = Math.round((doneCount / totalCount) * 100);
 
+  const isCancelled = runState === "cancelled";
   const isFailed  = runState === "failed" || runState === "blocked";
   const isReady   = runState === "awaiting_human_review" || runState === "finalized";
 
@@ -537,10 +567,10 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
     <div style={{ paddingTop: "var(--density-pad)", paddingBottom: 80, maxWidth: 520, margin: "0 auto", animation: "fadeIn 0.35s ease both" }}>
       <div style={{ textAlign: "center", marginBottom: 56 }}>
         <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.14em", color: "var(--text-3)", marginBottom: 14 }}>
-          {isFailed ? "Analysis Failed" : "Analysis in Progress"}
+          {isCancelled ? "Cancelled" : isFailed ? "Analysis Failed" : "Analysis in Progress"}
         </p>
         <h1 style={{ fontFamily: "var(--h-font)", fontSize: 34, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--text)", marginBottom: 10 }}>
-          {isFailed ? "Something went wrong" : "Processing your contract"}
+          {isCancelled ? "Review cancelled" : isFailed ? "Something went wrong" : "Processing your contract"}
         </h1>
         <p style={{ fontSize: 14, color: "var(--text-2)" }}>{fileName || "Your document"} is being analyzed by the AI engine.</p>
         {pendingError && <p style={{ marginTop: 14, fontSize: 13, color: "var(--risk-high)" }}>{pendingError}</p>}
@@ -593,11 +623,17 @@ function ProcessingScreen({ navigate, fileName, pendingError, processingRunId, s
 
       {/* Progress bar */}
       <div style={{ height: 2, background: "var(--border)", borderRadius: 1, marginBottom: 32, overflow: "hidden" }}>
-        <div style={{ height: "100%", background: isFailed ? "var(--risk-high)" : "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
+        <div style={{ height: "100%", background: isFailed ? "var(--risk-high)" : isCancelled ? "var(--text-3)" : "var(--accent)", borderRadius: 1, width: `${pct}%`, transition: "width 1s ease" }} />
       </div>
 
       <div style={{ textAlign: "center" }}>
-        {isFailed ? (
+        {isCancelled ? (
+          <div>
+            <button onClick={() => navigate("dashboard")} style={{ fontSize: 13, fontWeight: 600, color: "#fff", background: "var(--text)", border: "none", borderRadius: 8, padding: "10px 24px", cursor: "pointer", marginBottom: 12 }}>
+              Back to Dashboard
+            </button>
+          </div>
+        ) : isFailed ? (
           <div>
             {retryError && <p style={{ fontSize: 12, color: "var(--risk-high)", marginBottom: 12 }}>{retryError}</p>}
             <button
