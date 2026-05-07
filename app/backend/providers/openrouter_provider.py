@@ -235,6 +235,21 @@ class OpenRouterProvider(StructuredLLMProvider):
                         "candidates_token_count": response.usage.completion_tokens,
                         "total_token_count": response.usage.total_tokens,
                     }
+                if finish_reason == "length":
+                    latency = time.monotonic() - t_start
+                    raw_response = RawProviderResponse(
+                        raw_text=raw_text,
+                        parsed_output=None,
+                        finish_reason=finish_reason,
+                        usage=usage,
+                        latency_seconds=latency,
+                    )
+                    self.on_response_captured(raw_request, raw_response)
+                    raise NonRetryableProviderError(
+                        f"Model output truncated (finish_reason='length', "
+                        f"max_output_tokens={self._max_output_tokens}). "
+                        "Increase max_output_tokens or reduce prompt size."
+                    )
 
             except (RateLimitError, TransientProviderError, NonRetryableProviderError):
                 raise
