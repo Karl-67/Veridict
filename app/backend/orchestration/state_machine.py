@@ -188,6 +188,7 @@ def _provider(settings: Settings):
         return build_vllm_provider(
             base_url=settings.vllm_base_url,
             model_name=settings.vllm_base_model,
+            max_output_tokens=16384,
             # Do not cap to max_stage_retries — vLLM/llama.cpp servers restart slowly
             # (2-5 min on RunPod); the provider needs its own higher retry count.
         )
@@ -205,7 +206,7 @@ def _kira_provider(settings: Settings):
         return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
-            max_output_tokens=16384,
+            max_output_tokens=24576,
         )
     return _provider(settings)
 
@@ -349,6 +350,7 @@ async def _run_harvey_review_block(
         provider2 = _bvp(
             base_url=settings.vllm_base_url_2,
             model_name=settings.vllm_base_model,
+            max_output_tokens=16384,
         )
     try:
         out1 = out2 = out3 = None
