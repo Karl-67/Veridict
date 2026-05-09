@@ -111,6 +111,10 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
     }
   }
 
+  const hasActiveRuns = entries.some(
+    (e) => e.state === "processing" || e.state === "created"
+  );
+
   useEffect(() => {
     setLoading(true);
     listHistory()
@@ -118,6 +122,14 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!hasActiveRuns) return;
+    const id = setInterval(() => {
+      listHistory().then(setEntries).catch(console.error);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [hasActiveRuns]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return entries;

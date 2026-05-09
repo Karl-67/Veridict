@@ -104,6 +104,10 @@ export default function ContractsDashboard({
   const isAdmin = workspaces.some((w) => w.role === "org_admin");
   const effectiveWsId = activeWorkspaceId;
 
+  const hasActiveRuns = contracts.some(
+    (c) => c.latest_run_state === "processing" || c.latest_run_state === "created"
+  );
+
   useEffect(() => {
     setLoading(true);
     listContracts(effectiveWsId ?? undefined)
@@ -111,6 +115,16 @@ export default function ContractsDashboard({
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [effectiveWsId]);
+
+  useEffect(() => {
+    if (!hasActiveRuns) return;
+    const id = setInterval(() => {
+      listContracts(effectiveWsId ?? undefined)
+        .then(setContracts)
+        .catch(console.error);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [hasActiveRuns, effectiveWsId]);
 
   const awaitingReview = contracts.filter((c) => c.latest_run_state === "awaiting_human_review").length;
   const finalized = contracts.filter((c) => c.latest_run_state === "finalized").length;
