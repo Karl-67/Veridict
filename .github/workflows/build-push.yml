@@ -264,16 +264,21 @@ jobs:
       - name: Smoke test — API health check
         id: smoke
         run: |
-          kubectl port-forward service/verdict-api 8080:8000 -n verdict &
-          PF_PID=$!
+          LB_IP=$(kubectl get service verdict-api -n verdict -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          if [ -z "$LB_IP" ]; then
+            LB_IP=$(kubectl get ingress verdict -n verdict -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+          fi
           STATUS="000"
-          for i in $(seq 1 12); do
+          for i in $(seq 1 24); do
             sleep 5
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
+            if [ -n "$LB_IP" ]; then
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$LB_IP/api/health || echo "000")
+            else
+              STATUS=$(kubectl run smoke-$i --image=curlimages/curl --restart=Never --rm -i --timeout=10s -n verdict -- curl -s -o /dev/null -w "%{http_code}" http://verdict-api.verdict.svc.cluster.local:8000/api/health 2>/dev/null || echo "000")
+            fi
             echo "Attempt $i: HTTP $STATUS"
             [ "$STATUS" = "200" ] && break
           done
-          kill $PF_PID 2>/dev/null || true
           echo "status=$STATUS" >> $GITHUB_OUTPUT
           echo "HTTP $STATUS from /api/health"
           [ "$STATUS" = "200" ]
