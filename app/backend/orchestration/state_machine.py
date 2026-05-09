@@ -122,7 +122,29 @@ def claim_next_stage(session: Session, settings: Settings, worker_id: str) -> St
     return stage
 
 
+def _is_run_cancelled(session: Session, run_id: str) -> bool:
+    """Fresh DB read — avoids acting on stale in-memory run state."""
+    result = session.execute(select(RunRecord.status).where(RunRecord.id == run_id))
+    return result.scalar_one_or_none() == "cancelled"
+
+
+def _abort_if_cancelled(session: Session, stage: StageExecutionRecord) -> bool:
+    """Mark stage cancelled and return True if the run was cancelled while we were busy."""
+    if not _is_run_cancelled(session, stage.run_id):
+        return False
+    stage.status = "cancelled"
+    stage.finished_at = datetime.utcnow()
+    session.commit()
+    logger.info("Stage cancelled mid-flight run_id=%s stage=%s", stage.run_id, stage.stage_name)
+    return True
+
+
 def advance_stage(session: Session, stage: StageExecutionRecord, structured_output: dict | None = None) -> None:
+    if _is_run_cancelled(session, stage.run_id):
+        stage.status = "cancelled"
+        stage.finished_at = datetime.utcnow()
+        session.commit()
+        return
     stage.status = "completed"
     stage.finished_at = datetime.utcnow()
     stage.structured_output = structured_output
@@ -519,6 +541,12 @@ def _check_parser_confidence(session: Session, run_id: str) -> tuple[bool, str]:
 
 def execute_stage(session: Session, stage: StageExecutionRecord, settings: Settings) -> None:
     run = stage.run
+    # Check right away — run may have been cancelled between claim and execution.
+    if _is_run_cancelled(session, run.id):
+        stage.status = "cancelled"
+        stage.finished_at = datetime.utcnow()
+        session.commit()
+        return
     try:
         if stage.stage_name == "create_run":
             advance_stage(session, stage, {"run_id": run.id})
@@ -614,9 +642,13 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 "playbook_rules": harvey_context.get("playbook_rules", []),
             }
             rag_chunks = _load_rag_chunks_from_trace(session, harvey_context)
+            if _abort_if_cancelled(session, stage):
+                return
             result = asyncio.run(
                 _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number)
             )
+            if _abort_if_cancelled(session, stage):
+                return
             from app.backend.models.schemas import Finding as _HarveyFinding
             aggregated = result.get("aggregated_findings", [])
             for finding_dict in aggregated:
@@ -641,9 +673,13 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
                 )
             except MissingComplianceScopeError:
                 compliance_context = {"jurisdiction": run.jurisdiction or "", "regime": run.regime or "", "internal_rules": [], "external_rules": []}
+            if _abort_if_cancelled(session, stage):
+                return
             kira_result = asyncio.run(
                 _run_kira_review_block(clause_index, compliance_context, settings)
             )
+            if _abort_if_cancelled(session, stage):
+                return
 
             # Deserialise final findings and run the hallucination validator
             from app.backend.models.schemas import Finding as _Finding
@@ -689,7 +725,11 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             kira_validated = kira_block.get("validated_output", {})
             kira_findings_raw = kira_validated.get("validated_findings", [])
 
+            if _abort_if_cancelled(session, stage):
+                return
             merged = asyncio.run(_run_admin_merge(harvey_findings_raw, kira_findings_raw, settings))
+            if _abort_if_cancelled(session, stage):
+                return
             for finding in merged.merged_findings:
                 session.add(_to_finding_record(stage, finding))
             advance_stage(session, stage, merged.model_dump(mode="json"))
