@@ -9,9 +9,9 @@ data:
   # VLLM_API_KEY is injected at deploy time from the RUNPOD_API_KEY GitHub secret.
   VLLM_BASE_URL: "https://api.runpod.ai/v2/vk8tji6dujwj35/openai/v1"
   VLLM_BASE_URL_2: ""
-  VLLM_BASE_MODEL: "unsloth/gemma-4-26B-A4B-it"
+  VLLM_BASE_MODEL: "harvey_q4km"
   KIRA_MODEL_URL: "https://api.runpod.ai/v2/xueffdgu1fz9jo/openai/v1"
-  KIRA_MODEL_NAME: "kira"
+  KIRA_MODEL_NAME: "kira_q4km"
   VLLM_API_KEY: "__RUNPOD_API_KEY__"
 
   # RAG / embeddings
