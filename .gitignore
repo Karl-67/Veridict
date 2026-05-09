@@ -1,6 +1,9 @@
 # Deployment secrets — never commit
 .deployment_secrets.txt
 
+# Local project instructions — may contain credentials, kept off git
+CLAUDE.md
+
 # Data — large uploads and runtime files excluded
 /data
 # ...except curated eval assets which must be versioned

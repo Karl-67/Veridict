@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     vllm_base_url: str = Field("", alias="VLLM_BASE_URL")
     vllm_base_url_2: str = Field("", alias="VLLM_BASE_URL_2")
     vllm_base_model: str = Field("google/gemma-4-26B-A4B-it", alias="VLLM_BASE_MODEL")
+    # API key sent in Authorization header. "vllm" works for local llama.cpp (ignored).
+    # Set to your RunPod API key when using RunPod Serverless endpoints.
+    vllm_api_key: str = Field("vllm", alias="VLLM_API_KEY")
 
     # Gemini / LLM provider (kept for backwards compat — no longer used)
     gemini_api_key: str = Field("", alias="GEMINI_API_KEY")

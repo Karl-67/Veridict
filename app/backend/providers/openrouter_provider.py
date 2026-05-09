@@ -580,6 +580,7 @@ def build_vllm_provider(
     max_output_tokens: int = 8192,
     max_retries: int = 8,
     extra_body: dict[str, Any] | None = None,
+    api_key: str = "vllm",
 ) -> OpenRouterProvider:
     """Build a provider pointing at a cluster-internal vLLM/llama.cpp server (OpenAI-compatible API).
 
@@ -603,7 +604,7 @@ def build_vllm_provider(
     if extra_body:
         body.update(extra_body)
     return OpenRouterProvider(
-        api_key="vllm",
+        api_key=api_key,
         base_url=base_url,
         model_name=model_name,
         temperature=temperature,

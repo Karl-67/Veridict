@@ -5,11 +5,14 @@ metadata:
   namespace: verdict
 data:
   LLM_PROVIDER: "vllm"
-  VLLM_BASE_URL: "https://adhqos4ehqb4k7-8000.proxy.runpod.net/v1"
-  VLLM_BASE_URL_2: "https://adhqos4ehqb4k7-8080.proxy.runpod.net/v1"
+  # RunPod Serverless endpoints — replace <harvey-endpoint-id> and <kira-endpoint-id>
+  # with the IDs from the RunPod UI after creating the endpoints.
+  VLLM_BASE_URL: "https://api.runpod.ai/v2/vk8tji6dujwj35/openai/v1"
+  VLLM_BASE_URL_2: ""
   VLLM_BASE_MODEL: "unsloth/gemma-4-26B-A4B-it"
-  KIRA_MODEL_URL: "https://adhqos4ehqb4k7-8001.proxy.runpod.net/v1"
+  KIRA_MODEL_URL: "https://api.runpod.ai/v2/xueffdgu1fz9jo/openai/v1"
   KIRA_MODEL_NAME: "kira"
+  VLLM_API_KEY: "__RUNPOD_API_KEY__"
 
   # RAG / embeddings
   EMBEDDING_PROVIDER: "local"

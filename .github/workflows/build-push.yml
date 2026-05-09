@@ -216,7 +216,9 @@ jobs:
         run: kubectl delete pods --field-selector=status.phase=Failed -n verdict --ignore-not-found
 
       - name: Apply Kubernetes manifests
-        run: kubectl apply -k k8s/
+        run: |
+          sed -i "s|__RUNPOD_API_KEY__|${{ secrets.RUNPOD_API_KEY }}|g" k8s/configmap.yaml
+          kubectl apply -k k8s/
 
       - name: Wait for rollouts in parallel
         run: |
