@@ -33,8 +33,9 @@ fi
 PORT="${PORT:-8000}"
 PARALLEL="${PARALLEL:-4}"
 CTX="${CTX_SIZE:-32768}"
+GPU_LAYERS="${N_GPU_LAYERS:--1}"
 
-echo "llama-server: volume=$VOLUME model=$MODEL port=$PORT parallel=$PARALLEL ctx=$CTX"
+echo "llama-server: volume=$VOLUME model=$MODEL port=$PORT parallel=$PARALLEL ctx=$CTX gpu_layers=$GPU_LAYERS"
 
 if [ ! -f "$MODEL" ]; then
     echo "ERROR: model file not found: $MODEL"
@@ -49,6 +50,7 @@ ARGS=(
     --ctx-size "$CTX"
     --n-predict -1
     --parallel "$PARALLEL"
+    --n-gpu-layers "$GPU_LAYERS"
 )
 
 [ -f "$NO_THINK" ] && ARGS+=(--chat-template-file "$NO_THINK")
