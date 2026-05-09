@@ -5,8 +5,8 @@ metadata:
   namespace: verdict
 data:
   LLM_PROVIDER: "vllm"
-  # RunPod Serverless endpoints — replace <harvey-endpoint-id> and <kira-endpoint-id>
-  # with the IDs from the RunPod UI after creating the endpoints.
+  # RunPod Serverless endpoints (Harvey: vk8tji6dujwj35, Kira: xueffdgu1fz9jo)
+  # VLLM_API_KEY is injected at deploy time from the RUNPOD_API_KEY GitHub secret.
   VLLM_BASE_URL: "https://api.runpod.ai/v2/vk8tji6dujwj35/openai/v1"
   VLLM_BASE_URL_2: ""
   VLLM_BASE_MODEL: "unsloth/gemma-4-26B-A4B-it"

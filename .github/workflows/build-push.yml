@@ -16,10 +16,11 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      api:      ${{ steps.filter.outputs.api }}
-      worker:   ${{ steps.filter.outputs.worker }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      tests:    ${{ steps.filter.outputs.tests }}
+      api:       ${{ steps.filter.outputs.api }}
+      worker:    ${{ steps.filter.outputs.worker }}
+      frontend:  ${{ steps.filter.outputs.frontend }}
+      tests:     ${{ steps.filter.outputs.tests }}
+      configmap: ${{ steps.filter.outputs.configmap }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -40,6 +41,8 @@ jobs:
               - 'k8s/frontend.yaml'
             tests:
               - 'app/backend/**'
+            configmap:
+              - 'k8s/configmap.yaml'
 
   # ── Tests (only when backend changes) ───────────────────────────────────
   test:
@@ -183,7 +186,7 @@ jobs:
       (needs.build-api.result == 'success' || needs.build-api.result == 'skipped') &&
       (needs.build-worker.result == 'success' || needs.build-worker.result == 'skipped') &&
       (needs.build-frontend.result == 'success' || needs.build-frontend.result == 'skipped') &&
-      (needs.build-api.result == 'success' || needs.build-worker.result == 'success' || needs.build-frontend.result == 'success')
+      (needs.build-api.result == 'success' || needs.build-worker.result == 'success' || needs.build-frontend.result == 'success' || needs.changes.outputs.configmap == 'true')
     permissions:
       contents: read
     steps:
@@ -219,6 +222,14 @@ jobs:
         run: |
           sed -i "s|__RUNPOD_API_KEY__|${{ secrets.RUNPOD_API_KEY }}|g" k8s/configmap.yaml
           kubectl apply -k k8s/
+
+      - name: Restart deployments to pick up updated configmap
+        if: needs.changes.outputs.configmap == 'true' && needs.changes.outputs.worker != 'true' && needs.changes.outputs.api != 'true'
+        run: |
+          kubectl rollout restart deployment/verdict-worker deployment/verdict-api -n verdict
+          kubectl rollout status deployment/verdict-worker -n verdict --timeout=5m &
+          kubectl rollout status deployment/verdict-api -n verdict --timeout=5m &
+          wait
 
       - name: Wait for rollouts in parallel
         run: |
