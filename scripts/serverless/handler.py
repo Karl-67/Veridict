@@ -122,14 +122,16 @@ def _start_server():
         if os.path.exists(no_think):
             cmd += ["--chat-template-file", no_think]
 
-        # Add llama.cpp build lib dir to LD_LIBRARY_PATH so shared libs resolve
+        # Shared libs (.so) are in build/bin alongside the binary — add to LD_LIBRARY_PATH
         env = os.environ.copy()
-        lib_dir = f"{_volume}/llama.cpp/build/lib"
-        if os.path.exists(lib_dir):
-            env["LD_LIBRARY_PATH"] = lib_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+        bin_dir = f"{_volume}/llama.cpp/build/bin"
+        extra_dirs = [bin_dir, f"{_volume}/llama.cpp/build/lib", f"{_volume}/llama.cpp/build/lib64"]
+        ld_extra = ":".join(d for d in extra_dirs if os.path.exists(d))
+        if ld_extra:
+            env["LD_LIBRARY_PATH"] = ld_extra + ":" + env.get("LD_LIBRARY_PATH", "")
             print(f"[worker] LD_LIBRARY_PATH={env['LD_LIBRARY_PATH']!r}")
         else:
-            print(f"[worker] WARNING: lib dir not found at {lib_dir!r}")
+            print(f"[worker] WARNING: no lib dirs found under {_volume}/llama.cpp/build/")
 
         print(f"[worker] Starting: {' '.join(cmd)}")
         log_fh = open(log, "w")
