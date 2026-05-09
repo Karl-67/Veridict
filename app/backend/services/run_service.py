@@ -36,6 +36,9 @@ from app.backend.models.schemas import (
 )
 
 # Active stage topology for new runs.
+# harvey_review_block and kira_review_block share order=7 so they can be claimed
+# and executed in parallel. admin_merge waits for both to be completed via the
+# predecessor check in claim_next_stage (stage_order < 8 must all be completed).
 STAGE_SEQUENCE: list[str] = [
     "create_run",
     "ingest_pdf",
@@ -50,7 +53,19 @@ STAGE_SEQUENCE: list[str] = [
     "finalized",
 ]
 
-_STAGE_ORDER: dict[str, int] = {stage_name: index for index, stage_name in enumerate(STAGE_SEQUENCE, start=1)}
+_STAGE_ORDER: dict[str, int] = {
+    "create_run": 1,
+    "ingest_pdf": 2,
+    "parse_ocr_normalize": 3,
+    "clause_index": 4,
+    "harvey_context_load": 5,
+    "kira_context_load": 6,
+    "harvey_review_block": 7,
+    "kira_review_block": 7,   # parallel with harvey
+    "admin_merge": 8,
+    "awaiting_human_review": 9,
+    "finalized": 10,
+}
 
 # Stages that exist only in legacy runs and must never be re-enqueued.
 _LEGACY_STAGES = frozenset({"final_review_block"})

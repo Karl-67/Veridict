@@ -324,7 +324,7 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                             >
                               {relative}
                             </span>
-                            {(entry.state === "processing" || entry.state === "created" || entry.state === "pending") ? (
+                            {(entry.state === "processing" || entry.state === "created") ? (
                               <button
                                 onClick={(e) => handleCancel(e, entry.run_id)}
                                 disabled={cancellingId === entry.run_id}

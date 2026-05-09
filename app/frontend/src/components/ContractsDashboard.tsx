@@ -355,7 +355,7 @@ export default function ContractsDashboard({
                 </div>
 
                 <div className="flex items-center justify-end">
-                  {(c.latest_run_state === "processing" || c.latest_run_state === "created" || c.latest_run_state === "pending") && c.latest_run_id ? (
+                  {(c.latest_run_state === "processing" || c.latest_run_state === "created") && c.latest_run_id ? (
                     <button
                       onClick={(e) => handleCancel(e, c.latest_run_id!)}
                       disabled={cancellingId === c.latest_run_id}

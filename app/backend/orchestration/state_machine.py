@@ -644,19 +644,32 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
             rag_chunks = _load_rag_chunks_from_trace(session, harvey_context)
             if _abort_if_cancelled(session, stage):
                 return
-            result = asyncio.run(
-                _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number)
-            )
-            if _abort_if_cancelled(session, stage):
-                return
-            from app.backend.models.schemas import Finding as _HarveyFinding
-            aggregated = result.get("aggregated_findings", [])
-            for finding_dict in aggregated:
-                finding_obj = _HarveyFinding.model_validate(finding_dict) if isinstance(finding_dict, dict) else finding_dict
-                session.add(_to_finding_record(stage, finding_obj))
-                finding_severity_total.labels(severity=finding_obj.severity, branch="harvey").inc()
-            findings_per_run.labels(branch="harvey").observe(len(aggregated))
-            advance_stage(session, stage, result)
+            harvey_timeout = float(os.environ.get("HARVEY_TIMEOUT_SECONDS", "600"))
+            try:
+                result = asyncio.run(
+                    asyncio.wait_for(
+                        _run_harvey_review_block(clause_index, policy_context, rag_chunks, settings, stage.round_number),
+                        timeout=harvey_timeout,
+                    )
+                )
+                if _abort_if_cancelled(session, stage):
+                    return
+                from app.backend.models.schemas import Finding as _HarveyFinding
+                aggregated = result.get("aggregated_findings", [])
+                for finding_dict in aggregated:
+                    finding_obj = _HarveyFinding.model_validate(finding_dict) if isinstance(finding_dict, dict) else finding_dict
+                    session.add(_to_finding_record(stage, finding_obj))
+                    finding_severity_total.labels(severity=finding_obj.severity, branch="harvey").inc()
+                findings_per_run.labels(branch="harvey").observe(len(aggregated))
+                advance_stage(session, stage, result)
+            except asyncio.TimeoutError:
+                _write_failure_log(stage.run_id, "harvey_review_block", f"Timed out after {harvey_timeout}s", stage.retry_count)
+                logger.error("harvey_soft_fail run_id=%s: timed out after %.0fs — advancing with empty findings", stage.run_id, harvey_timeout)
+                advance_stage(session, stage, {"aggregated_findings": [], "vote": {"passed": False, "error": "timeout"}, "soft_failed": True})
+            except Exception as exc:
+                _write_failure_log(stage.run_id, "harvey_review_block", str(exc), stage.retry_count)
+                logger.error("harvey_soft_fail run_id=%s: %s — advancing with empty findings so Kira can proceed", stage.run_id, exc)
+                advance_stage(session, stage, {"aggregated_findings": [], "vote": {"passed": False, "error": str(exc)}, "soft_failed": True})
             return
 
         if stage.stage_name == "kira_review_block":
