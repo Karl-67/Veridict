@@ -355,12 +355,12 @@ export default function ContractsDashboard({
                 </div>
 
                 <div className="flex items-center justify-end">
-                  {(c.latest_run_state === "processing" || c.latest_run_state === "created") && c.latest_run_id ? (
+                  {(c.latest_run_state === "processing" || c.latest_run_state === "created" || c.latest_run_state === "pending") && c.latest_run_id ? (
                     <button
                       onClick={(e) => handleCancel(e, c.latest_run_id!)}
                       disabled={cancellingId === c.latest_run_id}
                       title="Cancel analysis"
-                      className="opacity-0 group-hover:opacity-100 transition-opacity rounded-lg p-0.5 text-text-secondary/40 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default"
+                      className="rounded-lg p-0.5 text-text-secondary/40 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default transition-colors"
                     >
                       {cancellingId === c.latest_run_id
                         ? <Loader2 className="h-4 w-4 animate-spin" />

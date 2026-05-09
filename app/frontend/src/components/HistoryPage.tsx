@@ -324,12 +324,12 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                             >
                               {relative}
                             </span>
-                            {entry.state === "processing" || entry.state === "created" ? (
+                            {(entry.state === "processing" || entry.state === "created" || entry.state === "pending") ? (
                               <button
                                 onClick={(e) => handleCancel(e, entry.run_id)}
                                 disabled={cancellingId === entry.run_id}
                                 title="Cancel analysis"
-                                className="opacity-0 group-hover:opacity-100 transition-opacity rounded-lg p-0.5 text-text-secondary/30 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default"
+                                className="rounded-lg p-0.5 text-text-secondary/40 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default transition-colors"
                               >
                                 {cancellingId === entry.run_id
                                   ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
