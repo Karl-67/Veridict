@@ -122,9 +122,18 @@ def _start_server():
         if os.path.exists(no_think):
             cmd += ["--chat-template-file", no_think]
 
+        # Add llama.cpp build lib dir to LD_LIBRARY_PATH so shared libs resolve
+        env = os.environ.copy()
+        lib_dir = f"{_volume}/llama.cpp/build/lib"
+        if os.path.exists(lib_dir):
+            env["LD_LIBRARY_PATH"] = lib_dir + ":" + env.get("LD_LIBRARY_PATH", "")
+            print(f"[worker] LD_LIBRARY_PATH={env['LD_LIBRARY_PATH']!r}")
+        else:
+            print(f"[worker] WARNING: lib dir not found at {lib_dir!r}")
+
         print(f"[worker] Starting: {' '.join(cmd)}")
         log_fh = open(log, "w")
-        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT, env=env)
         print(f"[worker] pid={proc.pid}, polling /health ...")
 
         for i in range(180):  # 15 min max
