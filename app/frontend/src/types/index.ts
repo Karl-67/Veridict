@@ -321,6 +321,7 @@ export interface ContractSummary {
   latest_label: string | null;
   latest_risk: string | null;
   latest_run_state: string | null;
+  latest_run_id: string | null;
   version_count: number;
   created_at: string;
   updated_at: string;

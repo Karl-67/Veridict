@@ -157,6 +157,18 @@ export function getRunFileUrl(runId: string): string {
   return withAuthQuery(`${API_BASE}/runs/${runId}/file`);
 }
 
+export async function cancelRun(runId: string): Promise<{ run_id: string; state: string }> {
+  const response = await fetch(`${API_BASE}/runs/${runId}/cancel`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: "Cancel failed" }));
+    throw new Error(error.detail || "Cancel failed");
+  }
+  return response.json();
+}
+
 export async function retryRun(runId: string): Promise<{ run_id: string; state: string }> {
   const response = await fetch(`${API_BASE}/runs/${runId}/retry`, {
     method: "POST",

@@ -2,9 +2,9 @@ import { useEffect, useState, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   Clock, ShieldAlert, ShieldCheck, AlertTriangle,
-  CheckCircle2, XCircle, Loader2, ChevronRight, Activity,
+  CheckCircle2, XCircle, Loader2, ChevronRight, Activity, X,
 } from "lucide-react";
-import { listHistory } from "@/lib/api";
+import { listHistory, cancelRun } from "@/lib/api";
 import type { HistoryEntry } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -91,9 +91,25 @@ function dateGroup(iso: string): string {
 }
 
 export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
-  const [entries, setEntries]   = useState<HistoryEntry[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [filter, setFilter]     = useState<FilterState>("all");
+  const [entries, setEntries]     = useState<HistoryEntry[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [filter, setFilter]       = useState<FilterState>("all");
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  async function handleCancel(e: React.MouseEvent, runId: string) {
+    e.stopPropagation();
+    setCancellingId(runId);
+    try {
+      await cancelRun(runId);
+      setEntries((prev) =>
+        prev.map((en) => en.run_id === runId ? { ...en, state: "cancelled" as const } : en)
+      );
+    } catch (err) {
+      console.error("Cancel failed:", err);
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -240,7 +256,7 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                         initial={{ opacity: 0, x: -6 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: i * 0.03, duration: 0.2 }}
-                        className="relative"
+                        className="relative group"
                       >
                         {/* Timeline dot */}
                         <div className={cn(
@@ -248,10 +264,13 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                           dotColor
                         )} />
 
-                        <button
+                        <div
+                          role="button"
+                          tabIndex={0}
                           onClick={() => onOpenContract(entry.contract_id)}
+                          onKeyDown={(e) => e.key === "Enter" && onOpenContract(entry.contract_id)}
                           className={cn(
-                            "group w-full flex items-center gap-5 rounded-xl px-4 py-3.5 text-left transition-all duration-150 cursor-pointer",
+                            "w-full flex items-center gap-5 rounded-xl px-4 py-3.5 text-left transition-all duration-150 cursor-pointer",
                             needsAction
                               ? "hover:bg-accent/5"
                               : "hover:bg-surface/50"
@@ -285,7 +304,7 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                             </div>
                           </div>
 
-                          {/* Timestamp + chevron */}
+                          {/* Timestamp + chevron/cancel */}
                           <div className="flex items-center gap-2 shrink-0">
                             <span
                               className="text-xs text-text-secondary/35 tabular-nums"
@@ -293,9 +312,22 @@ export default function HistoryPage({ onOpenContract }: HistoryPageProps) {
                             >
                               {relative}
                             </span>
-                            <ChevronRight className="h-3.5 w-3.5 text-text-secondary/15 group-hover:text-text-secondary/40 transition-colors" />
+                            {entry.state === "processing" || entry.state === "created" ? (
+                              <button
+                                onClick={(e) => handleCancel(e, entry.run_id)}
+                                disabled={cancellingId === entry.run_id}
+                                title="Cancel analysis"
+                                className="opacity-0 group-hover:opacity-100 transition-opacity rounded-lg p-0.5 text-text-secondary/30 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default"
+                              >
+                                {cancellingId === entry.run_id
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <X className="h-3.5 w-3.5" />}
+                              </button>
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5 text-text-secondary/15 group-hover:text-text-secondary/40 transition-colors" />
+                            )}
                           </div>
-                        </button>
+                        </div>
                       </motion.div>
                     );
                   })}

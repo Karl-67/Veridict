@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   FileText, ChevronRight, Plus, Clock, AlertTriangle,
-  ShieldCheck, ShieldAlert, Loader2, FolderOpen, CircleDot, CheckCircle2,
+  ShieldCheck, ShieldAlert, Loader2, FolderOpen, CircleDot, CheckCircle2, X,
 } from "lucide-react";
-import { listContracts } from "@/lib/api";
+import { listContracts, cancelRun } from "@/lib/api";
 import type { ContractSummary, Workspace } from "@/types";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -82,6 +82,24 @@ export default function ContractsDashboard({
   const { user } = useAuth();
   const [contracts, setContracts] = useState<ContractSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+
+  async function handleCancel(e: React.MouseEvent, runId: string) {
+    e.stopPropagation();
+    setCancellingId(runId);
+    try {
+      await cancelRun(runId);
+      setContracts((prev) =>
+        prev.map((c) =>
+          c.latest_run_id === runId ? { ...c, latest_run_state: "cancelled" } : c
+        )
+      );
+    } catch (err) {
+      console.error("Cancel failed:", err);
+    } finally {
+      setCancellingId(null);
+    }
+  }
 
   const isAdmin = workspaces.some((w) => w.role === "org_admin");
   const effectiveWsId = activeWorkspaceId;
@@ -255,7 +273,7 @@ export default function ContractsDashboard({
                 transition={{ delay: i * 0.04, duration: 0.25 }}
                 onClick={() => onOpenContract(c)}
                 className={cn(
-                  "grid grid-cols-[1fr_80px_160px_120px_120px_40px] gap-4 py-4 border-b border-border/60 last:border-0 transition-colors cursor-pointer -mx-3 px-3 rounded-xl",
+                  "group grid grid-cols-[1fr_80px_160px_120px_120px_40px] gap-4 py-4 border-b border-border/60 last:border-0 transition-colors cursor-pointer -mx-3 px-3 rounded-xl",
                   needsAction
                     ? "hover:bg-accent/5"
                     : "hover:bg-drop-zone/20"
@@ -323,7 +341,20 @@ export default function ContractsDashboard({
                 </div>
 
                 <div className="flex items-center justify-end">
-                  <ChevronRight className="h-4 w-4 text-text-secondary/30" />
+                  {(c.latest_run_state === "processing" || c.latest_run_state === "created") && c.latest_run_id ? (
+                    <button
+                      onClick={(e) => handleCancel(e, c.latest_run_id!)}
+                      disabled={cancellingId === c.latest_run_id}
+                      title="Cancel analysis"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity rounded-lg p-0.5 text-text-secondary/40 hover:text-risk-high hover:bg-risk-high/10 cursor-pointer disabled:cursor-default"
+                    >
+                      {cancellingId === c.latest_run_id
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <X className="h-4 w-4" />}
+                    </button>
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-text-secondary/30" />
+                  )}
                 </div>
               </motion.div>
             );
