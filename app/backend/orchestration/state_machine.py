@@ -207,13 +207,19 @@ def _provider(settings: Settings):
             max_retries=settings.max_stage_retries,
         )
     if settings.llm_provider == "vllm":
+        from app.backend.providers.runpod_provider import build_runpod_provider, extract_endpoint_id
+        if extract_endpoint_id(settings.vllm_base_url):
+            return build_runpod_provider(
+                endpoint_url=settings.vllm_base_url,
+                api_key=settings.vllm_api_key,
+                model_name=settings.vllm_base_model,
+                max_output_tokens=16384,
+            )
         return build_vllm_provider(
             base_url=settings.vllm_base_url,
             model_name=settings.vllm_base_model,
             max_output_tokens=16384,
             api_key=settings.vllm_api_key,
-            # Do not cap to max_stage_retries — vLLM/llama.cpp servers restart slowly
-            # (2-5 min on RunPod); the provider needs its own higher retry count.
         )
     return build_openrouter_provider(
         api_key=settings.openrouter_api_key,
@@ -225,7 +231,15 @@ def _provider(settings: Settings):
 def _kira_provider(settings: Settings, max_output_tokens: int = 24576):
     """Returns a provider for Kira. Uses the fine-tuned cloud endpoint when configured."""
     if settings.kira_model_url:
+        from app.backend.providers.runpod_provider import build_runpod_provider, extract_endpoint_id
         from app.backend.providers.openrouter_provider import build_vllm_provider
+        if extract_endpoint_id(settings.kira_model_url):
+            return build_runpod_provider(
+                endpoint_url=settings.kira_model_url,
+                api_key=settings.vllm_api_key,
+                model_name=settings.kira_model_name,
+                max_output_tokens=max_output_tokens,
+            )
         return build_vllm_provider(
             base_url=settings.kira_model_url,
             model_name=settings.kira_model_name,
@@ -370,13 +384,22 @@ async def _run_harvey_review_block(
     # so the two servers share the load.
     provider2 = None
     if settings.llm_provider == "vllm" and settings.vllm_base_url_2:
+        from app.backend.providers.runpod_provider import build_runpod_provider, extract_endpoint_id
         from app.backend.providers.openrouter_provider import build_vllm_provider as _bvp
-        provider2 = _bvp(
-            base_url=settings.vllm_base_url_2,
-            model_name=settings.vllm_base_model,
-            max_output_tokens=16384,
-            api_key=settings.vllm_api_key,
-        )
+        if extract_endpoint_id(settings.vllm_base_url_2):
+            provider2 = build_runpod_provider(
+                endpoint_url=settings.vllm_base_url_2,
+                api_key=settings.vllm_api_key,
+                model_name=settings.vllm_base_model,
+                max_output_tokens=16384,
+            )
+        else:
+            provider2 = _bvp(
+                base_url=settings.vllm_base_url_2,
+                model_name=settings.vllm_base_model,
+                max_output_tokens=16384,
+                api_key=settings.vllm_api_key,
+            )
     try:
         out1 = out2 = out3 = None
         vote_result: dict = {"passed": False, "attempts": 0, "approvals": 0}

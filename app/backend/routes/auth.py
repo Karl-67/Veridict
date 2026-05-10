@@ -1,11 +1,15 @@
+import asyncio
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, HTTPException, Request, Response, status
 from app.backend.core.limiter import limiter
 from pydantic import BaseModel
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.backend.db.models import OrgInviteRecord, OrganizationRecord, PolicyVersionRecord, UserRecord, WorkspaceMemberRecord, WorkspaceRecord
 from app.backend.db.session import DbSession
@@ -280,9 +284,30 @@ async def register_from_invite(request: Request, body: RegisterFromInviteRequest
     return _build_auth_response(user, create_access_token(user), invite.org.name)
 
 
+async def _fire_runpod_warmup() -> None:
+    """Submit minimal warmup jobs to RunPod endpoints so the model is loaded before use."""
+    try:
+        from app.backend.core.config import get_settings
+        from app.backend.providers.runpod_provider import extract_endpoint_id, warmup_endpoint
+        settings = get_settings()
+        if settings.llm_provider != "vllm":
+            return
+        jobs = []
+        harvey_id = extract_endpoint_id(settings.vllm_base_url)
+        if harvey_id:
+            jobs.append((harvey_id, settings.vllm_api_key, settings.vllm_base_model))
+        kira_id = extract_endpoint_id(settings.kira_model_url) if settings.kira_model_url else None
+        if kira_id:
+            jobs.append((kira_id, settings.vllm_api_key, settings.kira_model_name))
+        if jobs:
+            await asyncio.gather(*[warmup_endpoint(eid, key, model) for eid, key, model in jobs])
+    except Exception as exc:
+        logger.warning("RunPod warmup background task failed: %s", exc)
+
+
 @router.post("/login", response_model=AuthResponse)
 @limiter.limit("10/minute")
-async def login(request: Request, body: LoginRequest, response: Response, db: DbSession) -> AuthResponse:
+async def login(request: Request, body: LoginRequest, response: Response, db: DbSession, background_tasks: BackgroundTasks) -> AuthResponse:
     user = (await db.execute(select(UserRecord).where(UserRecord.email == body.email.lower().strip()))).scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -305,6 +330,7 @@ async def login(request: Request, body: LoginRequest, response: Response, db: Db
 
     refresh = await create_refresh_token(db, user.id)
     _set_refresh_cookie(response, refresh)
+    background_tasks.add_task(_fire_runpod_warmup)
     return _build_auth_response(user, create_access_token(user), org_name)
 
 
