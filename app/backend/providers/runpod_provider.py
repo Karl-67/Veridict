@@ -73,8 +73,9 @@ class RunPodJobProvider(StructuredLLMProvider):
         self._max_retries = max_retries
         self._job_timeout = job_timeout_seconds
         self._poll_interval = poll_interval_seconds
+        self._run_url = f"{_RUNPOD_API_BASE}/{endpoint_id}/run"
+        self._status_base = f"{_RUNPOD_API_BASE}/{endpoint_id}/status"
         self._client = httpx.AsyncClient(
-            base_url=_RUNPOD_API_BASE,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=15.0),
         )
@@ -220,7 +221,7 @@ class RunPodJobProvider(StructuredLLMProvider):
         raise last_exc
 
     async def _submit_job(self, job_input: dict) -> str:
-        resp = await self._client.post(f"/{self._endpoint_id}/run", json={"input": job_input})
+        resp = await self._client.post(self._run_url, json={"input": job_input})
         resp.raise_for_status()
         return resp.json()["id"]
 
@@ -233,7 +234,7 @@ class RunPodJobProvider(StructuredLLMProvider):
                     f"after {self._job_timeout:.0f}s"
                 )
 
-            resp = await self._client.get(f"/{self._endpoint_id}/status/{job_id}")
+            resp = await self._client.get(f"{self._status_base}/{job_id}")
             resp.raise_for_status()
             data = resp.json()
             status = data.get("status", "")
@@ -257,7 +258,6 @@ async def warmup_endpoint(endpoint_id: str, api_key: str, model_name: str) -> No
     by the time they upload a contract.
     """
     client = httpx.AsyncClient(
-        base_url=_RUNPOD_API_BASE,
         headers={"Authorization": f"Bearer {api_key}"},
         timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0),
     )
@@ -268,7 +268,8 @@ async def warmup_endpoint(endpoint_id: str, api_key: str, model_name: str) -> No
             "max_tokens": 1,
             "temperature": 0,
         }
-        resp = await client.post(f"/{endpoint_id}/run", json={"input": warmup_input})
+        run_url = f"{_RUNPOD_API_BASE}/{endpoint_id}/run"
+        resp = await client.post(run_url, json={"input": warmup_input})
         if resp.is_success:
             job_id = resp.json().get("id", "?")
             logger.info("RunPod warmup submitted: endpoint=%s job=%s model=%s", endpoint_id, job_id, model_name)
