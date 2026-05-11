@@ -62,7 +62,7 @@ from app.backend.agents.validator import KiraValidatorAgent
 from app.backend.db.models import RagChunk
 from app.backend.core.config import Settings
 from app.backend.db.models import FindingRecord, ParsedClauseRecord, RunRecord, StageExecutionRecord
-from app.backend.models.schemas import BranchReviewOutput, ReviewBlockResult
+from app.backend.models.schemas import AdminMergeOutput, BranchReviewOutput, ReviewBlockResult
 from app.backend.services.compliance_repository import MissingComplianceScopeError, resolve_applicable_corpora
 from app.backend.services.event_stream import append_run_event
 from app.backend.services.parser import build_clause_index, parse_pdf_to_canonical_document
@@ -764,7 +764,22 @@ def execute_stage(session: Session, stage: StageExecutionRecord, settings: Setti
 
             if _abort_if_cancelled(session, stage):
                 return
-            merged = asyncio.run(_run_admin_merge(harvey_findings_raw, kira_findings_raw, settings))
+            admin_timeout = float(os.environ.get("ADMIN_TIMEOUT_SECONDS", "600"))
+            try:
+                merged = asyncio.run(
+                    asyncio.wait_for(
+                        _run_admin_merge(harvey_findings_raw, kira_findings_raw, settings),
+                        timeout=admin_timeout,
+                    )
+                )
+            except asyncio.TimeoutError:
+                _write_failure_log(stage.run_id, "admin_merge", f"Timed out after {admin_timeout}s", stage.retry_count)
+                logger.error("admin_soft_fail run_id=%s: timed out after %.0fs — advancing with empty merge", stage.run_id, admin_timeout)
+                merged = AdminMergeOutput(merged_findings=[], clause_verdicts=[], deduplication_log=[{"source": "admin_soft_fail", "reason": "timeout"}])
+            except Exception as exc:
+                _write_failure_log(stage.run_id, "admin_merge", str(exc), stage.retry_count)
+                logger.error("admin_soft_fail run_id=%s: %s — advancing with empty merge", stage.run_id, exc)
+                merged = AdminMergeOutput(merged_findings=[], clause_verdicts=[], deduplication_log=[{"source": "admin_soft_fail", "reason": str(exc)}])
             if _abort_if_cancelled(session, stage):
                 return
             for finding in merged.merged_findings:
