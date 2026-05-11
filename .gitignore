@@ -58,3 +58,6 @@ logs_backup/
 
 # Claude Code session data
 .claude/
+
+# Session working notes — may contain keys/credentials
+SESSION_NOTES.md
