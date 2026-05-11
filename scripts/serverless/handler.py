@@ -93,7 +93,7 @@ def _start_server():
         llama   = f"{_volume}/llama.cpp/build/bin/llama-server"
         no_think = f"{_volume}/no_think.jinja"
         port     = int(os.environ.get("PORT",        "8000"))
-        parallel = int(os.environ.get("PARALLEL",    "4"))
+        parallel = int(os.environ.get("PARALLEL",    "1"))
         ctx      = int(os.environ.get("CTX_SIZE",    "32768"))
         n_gpu    = int(os.environ.get("N_GPU_LAYERS", "-1"))
         log      = "/tmp/llama_worker.log"
