@@ -1,11 +1,10 @@
 """
-Temporarily set workersMin=1 for Harvey and Kira RunPod endpoints,
-hold for 20 minutes, then reset to 0.
+Wake Harvey and Kira RunPod workers by submitting ping jobs,
+then poll until both are IN_PROGRESS (model loaded), and hold
+for 20 minutes before exiting.
 
 Usage:
     RUNPOD_API_KEY=rpa_... python scripts/warmup_runpod.py
-
-Or set the key directly in this file (do not commit).
 """
 
 import os
@@ -22,76 +21,108 @@ ENDPOINTS = {
     "verdict-kira":   "xueffdgu1fz9jo",
 }
 
-GRAPHQL_URL = "https://api.runpod.io/graphql"
+MODEL_NAMES = {
+    "verdict-harvey": "harvey_q4km",
+    "verdict-kira":   "kira_q4km",
+}
+
+BASE_URL = "https://api.runpod.ai/v2"
 WARM_MINUTES = 20
 
-MUTATION = """
-mutation SetWorkers($id: String!, $min: Int!) {
-  saveEndpoint(input: { id: $id, workersMin: $min }) {
-    id
-    workersMin
-  }
-}
-"""
+
+def _headers():
+    return {
+        "Authorization": f"Bearer {RUNPOD_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
 
-def set_workers_min(endpoint_id: str, endpoint_name: str, min_workers: int) -> bool:
-    resp = requests.post(
-        GRAPHQL_URL,
-        headers={
-            "Authorization": f"Bearer {RUNPOD_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={"query": MUTATION, "variables": {"id": endpoint_id, "min": min_workers}},
-        timeout=30,
-    )
+def ping_endpoint(name: str, endpoint_id: str) -> str | None:
+    """Submit a minimal 1-token job to wake the worker. Returns job_id or None."""
+    payload = {
+        "input": {
+            "messages": [{"role": "user", "content": "ping"}],
+            "model": MODEL_NAMES[name],
+            "max_tokens": 1,
+        }
+    }
+    resp = requests.post(f"{BASE_URL}/{endpoint_id}/run", headers=_headers(), json=payload, timeout=30)
     if resp.status_code != 200:
-        print(f"  ERROR {endpoint_name}: HTTP {resp.status_code} — {resp.text[:200]}")
-        return False
-
+        print(f"  ERROR {name}: HTTP {resp.status_code} — {resp.text[:200]}")
+        return None
     data = resp.json()
-    if "errors" in data:
-        print(f"  ERROR {endpoint_name}: {data['errors']}")
-        return False
-
-    result = data.get("data", {}).get("saveEndpoint", {})
-    print(f"  {endpoint_name} ({endpoint_id}): workersMin → {result.get('workersMin')}")
-    return True
+    job_id = data.get("id")
+    status = data.get("status")
+    print(f"  {name}: job {job_id} -> {status}")
+    return job_id
 
 
-def set_all(min_workers: int, label: str) -> None:
-    print(f"\n[{label}] Setting workersMin={min_workers} for all endpoints...")
-    for name, eid in ENDPOINTS.items():
-        set_workers_min(eid, name, min_workers)
+def poll_job(endpoint_id: str, job_id: str) -> str:
+    resp = requests.get(f"{BASE_URL}/{endpoint_id}/status/{job_id}", headers=_headers(), timeout=15)
+    if resp.status_code != 200:
+        return "UNKNOWN"
+    return resp.json().get("status", "UNKNOWN")
+
+
+def wait_until_warm(jobs: dict[str, tuple[str, str]], timeout_seconds: int = 300) -> None:
+    """Poll jobs until all are IN_PROGRESS or COMPLETED (model loaded)."""
+    warm = set()
+    deadline = time.time() + timeout_seconds
+    tick = 0
+    while time.time() < deadline:
+        time.sleep(5)
+        tick += 1
+        for name, (eid, job_id) in jobs.items():
+            if name in warm:
+                continue
+            status = poll_job(eid, job_id)
+            if status in ("IN_PROGRESS", "COMPLETED"):
+                print(f"  OK {name} warm (job status: {status})")
+                warm.add(name)
+        if len(warm) == len(jobs):
+            print("\nAll workers warm.")
+            return
+        if tick % 6 == 0:
+            remaining = int(deadline - time.time())
+            print(f"  Waiting for workers... {remaining}s left. Warm so far: {warm or 'none'}")
+    print(f"\nWarning: not all workers confirmed warm after {timeout_seconds}s. Proceeding anyway.")
+    print(f"  Warm: {warm}, Pending: {set(jobs) - warm}")
 
 
 def countdown(minutes: int) -> None:
-    total_seconds = minutes * 60
-    interval = 60
+    total = minutes * 60
     elapsed = 0
-    while elapsed < total_seconds:
-        remaining = total_seconds - elapsed
-        mins, secs = divmod(remaining, 60)
-        print(f"  {mins:02d}:{secs:02d} remaining — workers warm", flush=True)
-        sleep_time = min(interval, remaining)
-        time.sleep(sleep_time)
-        elapsed += sleep_time
+    while elapsed < total:
+        remaining = total - elapsed
+        m, s = divmod(remaining, 60)
+        print(f"  {m:02d}:{s:02d} remaining — workers warm", flush=True)
+        sleep = min(60, remaining)
+        time.sleep(sleep)
+        elapsed += sleep
 
 
 if __name__ == "__main__":
     print("RunPod warmup script")
     print(f"Endpoints: {list(ENDPOINTS.keys())}")
-    print(f"Warm window: {WARM_MINUTES} minutes")
+    print(f"Warm window: {WARM_MINUTES} minutes\n")
 
-    set_all(1, "WARM UP")
+    print("[1/3] Submitting ping jobs...")
+    jobs: dict[str, tuple[str, str]] = {}
+    for name, eid in ENDPOINTS.items():
+        job_id = ping_endpoint(name, eid)
+        if job_id:
+            jobs[name] = (eid, job_id)
 
-    print(f"\nWorkers warm. You have {WARM_MINUTES} minutes to test.")
-    print("Press Ctrl+C at any time to reset workers immediately.\n")
+    if not jobs:
+        sys.exit("ERROR: failed to submit any ping jobs. Check RUNPOD_API_KEY.")
 
+    print(f"\n[2/3] Waiting for workers to load model (up to 5 min)...")
+    wait_until_warm(jobs, timeout_seconds=300)
+
+    print(f"\n[3/3] Holding warm for {WARM_MINUTES} minutes. Press Ctrl+C to exit early.\n")
     try:
         countdown(WARM_MINUTES)
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        print("\nInterrupted.")
 
-    set_all(0, "COOL DOWN")
-    print("\nDone. Workers reset to workersMin=0.")
+    print("\nDone. Workers will idle-timeout naturally (workersMin=0).")
